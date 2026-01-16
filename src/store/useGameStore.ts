@@ -532,7 +532,6 @@ export const useGameStore = create<GameStore>((set, get) => {
     const state = get();
     if (!state || !state.isHost) return;
     const connections = state.connections;
-    debugLog('broadcast message', message.type, { players: Object.keys(connections).length });
     Object.values(connections).forEach((conn) => {
       if (conn && conn.open) {
         try {

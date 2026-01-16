@@ -61,6 +61,51 @@ const Board = () => {
     };
   };
 
+  const getHandArea = (ownerId: string) => {
+    if (!boardRef.current || players.length === 0 || !showHand) return null;
+    const rect = boardRef.current.getBoundingClientRect();
+    const playerIndex = players.findIndex((p) => p.id === ownerId);
+    if (playerIndex === -1) return null;
+
+    // Calcular área da hand similar ao Hand component
+    const HAND_CARD_WIDTH = 120;
+    const HAND_CARD_HEIGHT = 168;
+    const HAND_CARD_LEFT_SPACING = 120;
+    const maxRenderCards = 9;
+    
+    const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === ownerId);
+    const totalCards = playerHandCards.length;
+    
+    if (totalCards === 0) {
+      const handHeight = HAND_CARD_HEIGHT + 20;
+      const handY = rect.height - handHeight;
+      return {
+        x: 0,
+        y: handY,
+        width: rect.width,
+        height: handHeight,
+      };
+    }
+    
+    const visibleCardsCount = Math.min(maxRenderCards, totalCards);
+    const handWidth = (visibleCardsCount * HAND_CARD_LEFT_SPACING) + 40;
+    const handX = (rect.width - handWidth) / 2;
+    
+    const curveHeight = 8;
+    const HOVER_LIFT_PX = 10;
+    const baseHandHeight = HAND_CARD_HEIGHT + curveHeight + HOVER_LIFT_PX + 10;
+    const marginY = baseHandHeight * 0.1;
+    const handHeight = baseHandHeight + (marginY * 2);
+    const handY = rect.height - handHeight;
+
+    return {
+      x: handX,
+      y: handY,
+      width: handWidth,
+      height: handHeight,
+    };
+  };
+
   const getLibraryPosition = (ownerId: string) => {
     const area = getPlayerArea(ownerId);
     if (!area) return null;
@@ -174,11 +219,53 @@ const Board = () => {
       moveCard(dragging.id, { x: clampedX, y: clampedY });
     };
 
-    const stopDrag = () => {
+    const stopDrag = (event?: PointerEvent) => {
       if (!dragging) {
         setDragging(null);
         setCardMoved(false);
         return;
+      }
+      
+      // Verificar se a carta foi soltada na área da hand
+      if (event && showHand && cardMoved && boardRef.current) {
+        const currentBoard = useGameStore.getState().board;
+        const draggedCard = currentBoard.find((c) => c.id === dragging.id);
+        
+        // Se a carta está no battlefield e pertence ao jogador atual
+        if (draggedCard && draggedCard.zone === 'battlefield' && draggedCard.ownerId === playerId) {
+          const rect = boardRef.current.getBoundingClientRect();
+          const cursorX = event.clientX - rect.left;
+          const cursorY = event.clientY - rect.top;
+          
+          const handArea = getHandArea(playerId);
+          if (handArea) {
+            // Verificar se o cursor está dentro da área da hand
+            const isInHandArea = 
+              cursorX >= handArea.x && 
+              cursorX <= handArea.x + handArea.width &&
+              cursorY >= handArea.y && 
+              cursorY <= handArea.y + handArea.height;
+            
+            if (isInHandArea) {
+              // Mudar a zona da carta de battlefield para hand
+              // A posição será { x: 0, y: 0 } pois a hand gerencia as posições
+              changeCardZone(draggedCard.id, 'hand', { x: 0, y: 0 });
+              
+              // Limpar o estado de drag imediatamente
+              setDragging(null);
+              setCardMoved(false);
+              
+              // Aguardar um frame para garantir que o estado foi atualizado antes de processar qualquer outro evento
+              requestAnimationFrame(() => {
+                // Forçar limpeza adicional após mudança de zona
+                setDragging(null);
+                setCardMoved(false);
+              });
+              
+              return;
+            }
+          }
+        }
       }
       
       // Salvar se houve movimento antes de limpar o estado
@@ -186,26 +273,26 @@ const Board = () => {
       
       // Limpar o estado de drag imediatamente
       setDragging(null);
-      // Manter cardMoved por um tempo curto para prevenir que o click execute
+      // Manter cardMoved por um tempo maior para prevenir que o click execute após o drag
       if (wasMoved) {
-        // Usar setTimeout para limpar após um delay curto, permitindo que o click seja bloqueado
+        // Usar setTimeout para limpar após um delay maior, garantindo que o click seja bloqueado
         setTimeout(() => {
           setCardMoved(false);
-        }, 100);
+        }, 300);
       } else {
         setCardMoved(false);
       }
     };
 
     window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', stopDrag);
+    window.addEventListener('pointerup', (e) => stopDrag(e));
     return () => {
       window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', stopDrag);
+      window.removeEventListener('pointerup', (e) => stopDrag(e));
       // NÃO limpar o estado aqui - isso causa problemas quando o useEffect é recriado
       // O estado será limpo naturalmente quando o drag terminar
     };
-  }, [dragging, moveCard, players, playerId, changeCardZone, cardMoved]);
+  }, [dragging, moveCard, players, playerId, changeCardZone, cardMoved, showHand, board, getHandArea]);
 
   const startDrag = (card: CardOnBoard, event: ReactPointerEvent) => {
     // Só pode mover suas próprias cartas
@@ -214,11 +301,8 @@ const Board = () => {
     event.preventDefault();
     if (!boardRef.current) return;
     
-    console.log('[Board] startDrag - Carta:', card.id, 'zone:', card.zone);
-    
     // Se a carta está na hand, não iniciar drag aqui (deixar o Hand component gerenciar)
     if (card.zone === 'hand' && showHand) {
-      console.log('[Board] startDrag - Carta está na hand, ignorando startDrag do Board');
       return;
     }
     
@@ -282,6 +366,28 @@ const Board = () => {
     // IMPORTANTE: Se ainda há um estado de drag ativo, não processar o clique
     // Isso previne que cartas sejam teleportadas após mudança de zone
     if (dragging) {
+      event.preventDefault();
+      event.stopPropagation();
+      return;
+    }
+    
+    // IMPORTANTE: Se há um drag da hand ativo (mesmo que não seja este card), não processar clique
+    // Isso previne teleporte após mudança de zona
+    if (showHand && (dragStartedFromHand || dragStartedFromHandRef.current)) {
+      event.preventDefault();
+      event.stopPropagation();
+      // Limpar flags imediatamente
+      setDragStartedFromHand(false);
+      dragStartedFromHandRef.current = false;
+      handCardPlacedRef.current = false;
+      return;
+    }
+    
+    // IMPORTANTE: Se a carta acabou de mudar de zona (não está mais na zone esperada), não processar clique
+    // Isso previne teleporte após mudança de zona do battlefield para hand
+    const currentBoard = useGameStore.getState().board;
+    const currentCard = currentBoard.find((c) => c.id === card.id);
+    if (currentCard && currentCard.zone !== card.zone) {
       event.preventDefault();
       event.stopPropagation();
       return;
