@@ -214,6 +214,14 @@ const Board = () => {
     event.preventDefault();
     if (!boardRef.current) return;
     
+    console.log('[Board] startDrag - Carta:', card.id, 'zone:', card.zone);
+    
+    // Se a carta está na hand, não iniciar drag aqui (deixar o Hand component gerenciar)
+    if (card.zone === 'hand' && showHand) {
+      console.log('[Board] startDrag - Carta está na hand, ignorando startDrag do Board');
+      return;
+    }
+    
     // Limpar qualquer estado de drag anterior antes de iniciar um novo
     // Isso previne que cartas fiquem "conectadas"
     if (dragging) {
@@ -224,6 +232,7 @@ const Board = () => {
     // Garantir que a flag de drag da hand está desativada para cartas do battlefield (apenas se hand estiver visível)
     if (card.zone === 'battlefield' && showHand) {
       setDragStartedFromHand(false);
+      dragStartedFromHandRef.current = false;
       handCardPlacedRef.current = true; // Prevenir qualquer lógica de colocação
     }
     
