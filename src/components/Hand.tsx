@@ -357,7 +357,10 @@ const Hand = ({
           setHoveredHandCard(null);
           setInitialHoverIndex(null);
           setOriginalHandOrder(null);
-          setHandCardMoved(false);
+          // Manter handCardMoved por um tempo para impedir cliques após o movimento
+          setTimeout(() => {
+            setHandCardMoved(false);
+          }, 300);
           setDragStartedFromHand(false);
           dragStartedFromHandRef.current = false;
           handCardPlacedRef.current = false;
@@ -649,6 +652,7 @@ const Hand = ({
                             }
                           }}
                           onClick={(event) => {
+                            // Impedir clique se moveu recentemente ou está arrastando
                             if (handCardMoved || draggingHandCard === card.id) {
                               event.preventDefault();
                               event.stopPropagation();

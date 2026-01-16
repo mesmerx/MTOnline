@@ -41,6 +41,7 @@ const Board = () => {
   const libraryDragUpdateRef = useRef<number>(0);
   const handCardPlacedRef = useRef<boolean>(false); // Prevenir múltiplas colocações
   const dragStartedFromHandRef = useRef<boolean>(false); // Ref para compartilhar com Hand
+  const cardMovedTimeoutRef = useRef<number | null>(null); // Ref para armazenar o timeout do cardMoved
   const THROTTLE_MS = 8; // ~120fps para melhor responsividade durante drag
   
   const battlefieldCards = board.filter((c) => c.zone === 'battlefield');
@@ -271,13 +272,22 @@ const Board = () => {
       // Salvar se houve movimento antes de limpar o estado
       const wasMoved = cardMoved;
       
+      // Limpar qualquer timeout anterior
+      if (cardMovedTimeoutRef.current !== null) {
+        clearTimeout(cardMovedTimeoutRef.current);
+        cardMovedTimeoutRef.current = null;
+      }
+      
       // Limpar o estado de drag imediatamente
       setDragging(null);
       // Manter cardMoved por um tempo maior para prevenir que o click execute após o drag
       if (wasMoved) {
+        // Garantir que cardMoved está true antes de criar o timeout
+        setCardMoved(true);
         // Usar setTimeout para limpar após um delay maior, garantindo que o click seja bloqueado
-        setTimeout(() => {
+        cardMovedTimeoutRef.current = window.setTimeout(() => {
           setCardMoved(false);
+          cardMovedTimeoutRef.current = null;
         }, 300);
       } else {
         setCardMoved(false);
@@ -355,19 +365,20 @@ const Board = () => {
 
   // Handler para clique esquerdo nas cartas
   const handleCardClick = (card: CardOnBoard, event: React.MouseEvent) => {
-    // Se moveu, não foi um clique - foi um drag, então não fazer tap
-    if (cardMoved) {
-      event.preventDefault();
-      event.stopPropagation();
-      // Não limpar cardMoved aqui - será limpo pelo timeout no stopDrag
-      return;
-    }
-    
     // IMPORTANTE: Se ainda há um estado de drag ativo, não processar o clique
     // Isso previne que cartas sejam teleportadas após mudança de zone
     if (dragging) {
       event.preventDefault();
       event.stopPropagation();
+      return;
+    }
+    
+    // Se moveu, não foi um clique - foi um drag, então não fazer tap
+    // Verificar cardMoved DEPOIS de verificar dragging para garantir que o estado está correto
+    if (cardMoved) {
+      event.preventDefault();
+      event.stopPropagation();
+      // Não limpar cardMoved aqui - será limpo pelo timeout no stopDrag
       return;
     }
     
