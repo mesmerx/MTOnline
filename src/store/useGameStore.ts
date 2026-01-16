@@ -50,7 +50,8 @@ type CardAction =
   | { kind: 'remove'; id: string }
   | { kind: 'addToLibrary'; card: CardOnBoard }
   | { kind: 'replaceLibrary'; cards: CardOnBoard[]; playerId: string }
-  | { kind: 'drawFromLibrary'; playerId: string };
+  | { kind: 'drawFromLibrary'; playerId: string }
+  | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand'; position: Point };
 
 type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string }
@@ -247,6 +248,7 @@ interface GameStore {
   moveLibrary: (playerId: string, position: Point) => void;
   toggleTap: (cardId: string) => void;
   removeCard: (cardId: string) => void;
+  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand', position: Point) => void;
   reorderHandCard: (cardId: string, newIndex: number) => void;
   resetBoard: () => void;
 }
@@ -344,6 +346,51 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
     }
     case 'toggleTap':
       return board.map((card) => (card.id === action.id ? { ...card, tapped: !card.tapped } : card));
+    case 'changeZone': {
+      const changedCard = board.find((c) => c.id === action.id);
+      if (!changedCard) return board;
+      
+      let newBoard = board.map((card) => {
+        if (card.id === action.id) {
+          const updatedCard = {
+            ...card,
+            zone: action.zone,
+            position: action.position,
+          };
+          
+          // Se mudou para battlefield, remover handIndex
+          if (action.zone === 'battlefield') {
+            const { handIndex, ...rest } = updatedCard;
+            return rest;
+          }
+          
+          // Se mudou para hand, pode precisar de handIndex
+          if (action.zone === 'hand') {
+            const handCards = board.filter((c) => c.zone === 'hand' && c.ownerId === card.ownerId && c.id !== card.id);
+            const maxHandIndex = handCards.reduce((max, c) => Math.max(max, c.handIndex ?? -1), -1);
+            return {
+              ...updatedCard,
+              handIndex: maxHandIndex + 1,
+            };
+          }
+          
+          return updatedCard;
+        }
+        return card;
+      });
+      
+      // Se mudou de hand para outra zone, recalcular posições das cartas restantes na mão
+      if (changedCard.zone === 'hand' && action.zone !== 'hand') {
+        newBoard = recalculateHandPositions(newBoard, changedCard.ownerId);
+      }
+      
+      // Se mudou para hand, recalcular posições
+      if (action.zone === 'hand') {
+        newBoard = recalculateHandPositions(newBoard, changedCard.ownerId);
+      }
+      
+      return newBoard;
+    }
     case 'remove': {
       const removedCard = board.find((c) => c.id === action.id);
       newBoard = board.filter((card) => card.id !== action.id);
@@ -1202,6 +1249,9 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
     removeCard: (cardId: string) => {
       requestAction({ kind: 'remove', id: cardId });
+    },
+    changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand', position: Point) => {
+      requestAction({ kind: 'changeZone', id: cardId, zone, position });
     },
     reorderHandCard: (cardId: string, newIndex: number) => {
       const state = get();

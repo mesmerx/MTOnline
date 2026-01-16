@@ -625,6 +625,15 @@ button:disabled {
   background: transparent;
   pointer-events: none;
   z-index: 15;
+  overflow: visible;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
+}
+
+.hand-area .hand-nav-button {
+  pointer-events: auto;
 }
 
 .hand-area.current-player-hand {
@@ -641,12 +650,20 @@ button:disabled {
   display: flex;
   justify-content: center;
   align-items: center;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 .hand-card-wrapper {
   position: absolute;
   transition: transform 0.2s ease, z-index 0.3s;
   cursor: grab;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 .hand-card-wrapper.sliding {
@@ -760,6 +777,10 @@ button:disabled {
   transform-origin: center;
   transition: transform 0.2s;
   z-index: 10;
+  user-select: none;
+  -webkit-user-select: none;
+  -moz-user-select: none;
+  -ms-user-select: none;
 }
 
 .card-token img {
