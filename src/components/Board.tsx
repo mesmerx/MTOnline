@@ -431,7 +431,6 @@ const Board = () => {
     const cemeteryPos = getCemeteryPosition();
     if (cemeteryPos) {
       const CEMETERY_CARD_WIDTH = 100;
-      const CEMETERY_CARD_HEIGHT = 140;
       const CEMETERY_STACK_WIDTH = 120; // Área maior do stack
       const CEMETERY_STACK_HEIGHT = 160;
       
@@ -1473,7 +1472,6 @@ const Board = () => {
           getPlayerArea={getPlayerArea}
           getLibraryPosition={getLibraryPosition}
           ownerName={ownerName}
-          onLibraryClick={handleLibraryClick}
           onLibraryContextMenu={(card, e) => {
             setContextMenu({
               x: e.clientX,
@@ -1483,7 +1481,6 @@ const Board = () => {
           }}
           startLibraryDrag={startLibraryDrag}
           draggingLibrary={draggingLibrary}
-          libraryMoved={libraryMoved}
           startDrag={startDrag}
         />
         
@@ -1504,7 +1501,6 @@ const Board = () => {
           startDrag={startDrag}
           startCemeteryDrag={startCemeteryDrag}
           draggingCemetery={draggingCemetery}
-          cemeteryMoved={cemeteryMoved}
         />
         
         {battlefieldCards.map((card) => {

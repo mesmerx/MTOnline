@@ -4,11 +4,6 @@ import { useGameStore } from '../store/useGameStore';
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
-interface User {
-  id: number;
-  username: string;
-}
-
 const Login = () => {
   const [username, setUsername] = useState('');
   const [password, setPassword] = useState('');

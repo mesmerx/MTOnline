@@ -1,4 +1,3 @@
-import { useEffect, useRef, useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { CardOnBoard } from '../store/useGameStore';
 import CardToken from './CardToken';
@@ -19,7 +18,6 @@ interface CemeteryProps {
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   startCemeteryDrag: (event: ReactPointerEvent) => void;
   draggingCemetery: { offsetX: number; offsetY: number; startX: number; startY: number } | null;
-  cemeteryMoved: boolean;
 }
 
 const Cemetery = ({
@@ -33,7 +31,6 @@ const Cemetery = ({
   startDrag,
   startCemeteryDrag,
   draggingCemetery,
-  cemeteryMoved,
 }: CemeteryProps) => {
   if (!boardRef.current || players.length === 0) return null;
 

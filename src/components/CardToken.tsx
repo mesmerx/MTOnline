@@ -8,7 +8,7 @@ interface CardTokenProps {
   onDoubleClick?: (event: React.MouseEvent) => void;
   onClick?: (event: React.MouseEvent) => void;
   onContextMenu?: (event: React.MouseEvent) => void;
-  ownerName: string;
+  ownerName?: string;
   width?: number;
   height?: number;
   showBack?: boolean;
@@ -23,7 +23,7 @@ const CardToken = ({
   onDoubleClick,
   onClick,
   onContextMenu,
-  ownerName,
+  ownerName: _ownerName,
   width = 150,
   height = 210,
   showBack = false,

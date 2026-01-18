@@ -15,11 +15,9 @@ interface LibraryProps {
   getPlayerArea: (ownerId: string) => { x: number; y: number; width: number; height: number } | null;
   getLibraryPosition: (ownerId: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
-  onLibraryClick: (playerId: string) => void;
   onLibraryContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startLibraryDrag: (playerId: string, event: ReactPointerEvent) => void;
   draggingLibrary: { playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
-  libraryMoved: boolean;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
 }
 
@@ -31,11 +29,9 @@ const Library = ({
   getPlayerArea,
   getLibraryPosition,
   ownerName,
-  onLibraryClick,
   onLibraryContextMenu,
   startLibraryDrag,
   draggingLibrary,
-  libraryMoved,
   startDrag,
 }: LibraryProps) => {
   if (!boardRef.current || players.length === 0) return null;

@@ -1,5 +1,4 @@
 import { useEffect, useRef } from 'react';
-import classNames from 'classnames';
 
 interface MenuModalProps {
   isOpen: boolean;

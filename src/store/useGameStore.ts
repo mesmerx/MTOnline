@@ -320,7 +320,6 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       }
       return newBoard;
     case 'move': {
-      const movedCard = board.find((c) => c.id === action.id);
       newBoard = board.map((card) => (card.id === action.id ? { ...card, position: action.position } : card));
       
       // Se moveu uma carta que estava na mão, NÃO recalcular posições durante o drag
