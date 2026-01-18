@@ -24,7 +24,7 @@ const Login = () => {
     setLoading(true);
 
     try {
-      const endpoint = isRegistering ? '/api/register' : '/api/login';
+      const endpoint = isRegistering ? '/register' : '/login';
       const response = await fetch(`${API_URL}${endpoint}`, {
         method: 'POST',
         headers: {
@@ -52,7 +52,7 @@ const Login = () => {
 
   const handleLogout = async () => {
     try {
-      await fetch(`${API_URL}/api/logout`, {
+      await fetch(`${API_URL}/logout`, {
         method: 'POST',
         credentials: 'include',
       });

@@ -14,6 +14,8 @@ const allowedOrigins = [
   `http://${clientHost}:${clientPort}`,
   `http://localhost:${clientPort}`,
   `http://127.0.0.1:${clientPort}`,
+  'https://mto.mesmer.tv',
+  'http://mto.mesmer.tv',
 ];
 
 // Remover duplicatas
@@ -42,7 +44,7 @@ app.use(express.json());
 app.use(cookieParser());
 
 // Health check endpoint
-app.get('/api/health', (req, res) => {
+app.get('/health', (req, res) => {
   res.json({ status: 'ok', timestamp: new Date().toISOString() });
 });
 
@@ -80,7 +82,7 @@ const hashPassword = (password) => {
 };
 
 // Rotas de autenticação
-app.post('/api/register', (req, res) => {
+app.post('/register', (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -125,7 +127,7 @@ app.post('/api/register', (req, res) => {
   }
 });
 
-app.post('/api/login', (req, res) => {
+app.post('/login', (req, res) => {
   const { username, password } = req.body;
 
   if (!username || !password) {
@@ -152,13 +154,13 @@ app.post('/api/login', (req, res) => {
   res.json({ user });
 });
 
-app.post('/api/logout', requireAuth, (req, res) => {
+app.post('/logout', requireAuth, (req, res) => {
   db.prepare('UPDATE users SET session_id = NULL WHERE id = ?').run(req.user.id);
   res.clearCookie('sessionId');
   res.json({ success: true });
 });
 
-app.get('/api/me', optionalAuth, (req, res) => {
+app.get('/me', optionalAuth, (req, res) => {
   if (req.user) {
     res.json({ user: req.user });
   } else {
@@ -167,7 +169,7 @@ app.get('/api/me', optionalAuth, (req, res) => {
 });
 
 // Rotas de decks
-app.get('/api/decks', requireAuth, (req, res) => {
+app.get('/decks', requireAuth, (req, res) => {
   const decks = db.prepare(`
     SELECT id, name, raw_text, entries, is_public, created_at
     FROM decks
@@ -186,7 +188,7 @@ app.get('/api/decks', requireAuth, (req, res) => {
 });
 
 // Listar decks públicos (não requer autenticação)
-app.get('/api/decks/public', (req, res) => {
+app.get('/decks/public', (req, res) => {
   const limit = Math.min(Number(req.query.limit) || 50, 100);
   const offset = Number(req.query.offset) || 0;
 
@@ -209,7 +211,7 @@ app.get('/api/decks/public', (req, res) => {
   })));
 });
 
-app.post('/api/decks', requireAuth, (req, res) => {
+app.post('/decks', requireAuth, (req, res) => {
   const { name, entries, rawText, isPublic } = req.body;
 
   if (!name || !entries || !rawText) {
@@ -235,7 +237,7 @@ app.post('/api/decks', requireAuth, (req, res) => {
   });
 });
 
-app.delete('/api/decks/:id', requireAuth, (req, res) => {
+app.delete('/decks/:id', requireAuth, (req, res) => {
   const { id } = req.params;
 
   const result = db.prepare(`

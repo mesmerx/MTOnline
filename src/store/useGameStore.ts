@@ -1062,7 +1062,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     checkAuth: async () => {
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
       try {
-        const response = await fetch(`${API_URL}/api/me`, {
+        const response = await fetch(`${API_URL}/me`, {
           credentials: 'include',
         });
         if (response.ok) {
@@ -1094,7 +1094,7 @@ export const useGameStore = create<GameStore>((set, get) => {
 
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
       try {
-        const response = await fetch(`${API_URL}/api/decks`, {
+        const response = await fetch(`${API_URL}/decks`, {
           credentials: 'include',
         });
         if (response.ok) {
@@ -1125,7 +1125,7 @@ export const useGameStore = create<GameStore>((set, get) => {
 
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
       try {
-        const response = await fetch(`${API_URL}/api/decks`, {
+        const response = await fetch(`${API_URL}/decks`, {
           method: 'POST',
           headers: {
             'Content-Type': 'application/json',
@@ -1158,7 +1158,7 @@ export const useGameStore = create<GameStore>((set, get) => {
 
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
       try {
-        const response = await fetch(`${API_URL}/api/decks/${deckId}`, {
+        const response = await fetch(`${API_URL}/decks/${deckId}`, {
           method: 'DELETE',
           credentials: 'include',
         });
@@ -1178,7 +1178,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     loadPublicDecks: async () => {
       const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
       try {
-        const response = await fetch(`${API_URL}/api/decks/public`);
+        const response = await fetch(`${API_URL}/decks/public`);
         if (response.ok) {
           const decks = await response.json();
           set({ publicDecks: decks });
