@@ -16,6 +16,8 @@ const allowedOrigins = [
   `http://127.0.0.1:${clientPort}`,
   'https://mto.mesmer.tv',
   'http://mto.mesmer.tv',
+  'https://www.mto.mesmer.tv',
+  'http://www.mto.mesmer.tv',
 ];
 
 // Remover duplicatas
