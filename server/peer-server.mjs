@@ -1,16 +1,17 @@
 import { PeerServer } from 'peer';
 
-const port = Number(process.env.PEER_PORT ?? process.env.PORT ?? 9000);
+const port = Number(process.env.PEER_PORT ?? process.env.PORT ?? 9910);
 const host = process.env.PEER_HOST ?? '0.0.0.0';
 const path = process.env.PEER_PATH ?? '/peerjs';
 const allowDiscovery = process.env.PEER_ALLOW_DISCOVERY === 'true';
 
 const server = PeerServer({
-  port,
   host,
+  port,
+  secure: false,
   path,
-  proxied: process.env.PEER_PROXIED === 'true',
-  allow_discovery: allowDiscovery,
+  proxied: true,
+  allow_discovery: true,
 });
 
 server.on('connection', (client) => {

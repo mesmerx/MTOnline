@@ -132,9 +132,8 @@ const resolvePeerEndpoint = (): Omit<PeerJSOption, 'config'> => {
 
   return {
     host,
-    port: Number(rawPort),
-    path,
-    secure,
+    path: '/peerjs',
+    secure:true,
   };
 };
 
