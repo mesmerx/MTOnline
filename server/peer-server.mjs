@@ -1,3 +1,4 @@
+import 'dotenv/config';
 import { PeerServer } from 'peer';
 
 const port = Number(process.env.PEER_PORT ?? process.env.PORT ?? 9910);

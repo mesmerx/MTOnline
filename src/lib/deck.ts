@@ -14,6 +14,8 @@ export interface SavedDeck {
   createdAt: string;
   entries: DeckEntry[];
   rawText: string;
+  isPublic?: boolean;
+  author?: string;
 }
 
 const STORAGE_KEY = 'mtonline.decks';

@@ -11,10 +11,15 @@ const DeckManager = () => {
   const [entries, setEntries] = useState<DeckEntry[]>([]);
   const [error, setError] = useState<string>();
   const [busyCard, setBusyCard] = useState<string>();
+  const [isPublic, setIsPublic] = useState(false);
+  const [showPublicDecks, setShowPublicDecks] = useState(false);
 
   const saveDeckDefinition = useGameStore((state) => state.saveDeckDefinition);
   const deleteDeckDefinition = useGameStore((state) => state.deleteDeckDefinition);
   const savedDecks = useGameStore((state) => state.savedDecks);
+  const publicDecks = useGameStore((state) => state.publicDecks);
+  const loadPublicDecks = useGameStore((state) => state.loadPublicDecks);
+  const user = useGameStore((state) => state.user);
   const addCard = useGameStore((state) => state.addCardToBoard);
   const addCardToLibrary = useGameStore((state) => state.addCardToLibrary);
   const replaceLibrary = useGameStore((state) => state.replaceLibrary);
@@ -26,14 +31,27 @@ const DeckManager = () => {
     setError(nextEntries.length === 0 ? 'No valid cards found in list.' : undefined);
   };
 
-  const saveDeck = () => {
+  const saveDeck = async () => {
     if (entries.length === 0) {
       setError('Parse a deck list before saving.');
       return;
     }
-    const name = deckName.trim() || 'Untitled deck';
-    saveDeckDefinition(name, entries, deckText);
-    setDeckName('');
+    try {
+      const name = deckName.trim() || 'Untitled deck';
+      await saveDeckDefinition(name, entries, deckText, user ? isPublic : false);
+      setDeckName('');
+      setIsPublic(false);
+      setError(undefined);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to save deck');
+    }
+  };
+
+  const handleShowPublicDecks = () => {
+    if (!showPublicDecks) {
+      loadPublicDecks();
+    }
+    setShowPublicDecks(!showPublicDecks);
   };
 
   const loadDeck = (deckId: string) => {
@@ -114,6 +132,16 @@ const DeckManager = () => {
             value={deckName}
             onChange={(event) => setDeckName(event.target.value)}
           />
+          {user && (
+            <label className="checkbox-field" style={{ margin: 0 }}>
+              <input
+                type="checkbox"
+                checked={isPublic}
+                onChange={(e) => setIsPublic(e.target.checked)}
+              />
+              <span>Public</span>
+            </label>
+          )}
           <button type="button" className="primary" onClick={saveDeck} disabled={entries.length === 0}>
             Save deck
           </button>
@@ -155,9 +183,54 @@ const DeckManager = () => {
         </div>
       )}
 
+      <div style={{ marginTop: '1rem', borderTop: '1px solid #ccc', paddingTop: '1rem' }}>
+        <button
+          type="button"
+          className="ghost"
+          onClick={handleShowPublicDecks}
+          style={{ marginBottom: '0.5rem' }}
+        >
+          {showPublicDecks ? '▼' : '▶'} Public Decks
+        </button>
+        {showPublicDecks && (
+          <div className="public-decks">
+            {publicDecks.length === 0 ? (
+              <p className="muted">No public decks available.</p>
+            ) : (
+              <ul>
+                {publicDecks.map((deck: any) => (
+                  <li key={deck.id}>
+                    <div>
+                      <strong>{deck.name}</strong>
+                      {deck.author && <small className="muted"> by {deck.author}</small>}
+                      <small className="muted" style={{ display: 'block' }}>
+                        {new Date(deck.createdAt).toLocaleString()}
+                      </small>
+                    </div>
+                    <div className="button-row">
+                      <button
+                        type="button"
+                        onClick={() => {
+                          setDeckText(deck.rawText);
+                          setDeckName(deck.name);
+                          setEntries(deck.entries);
+                          setError(undefined);
+                        }}
+                      >
+                        Load
+                      </button>
+                    </div>
+                  </li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
+      </div>
+
       {savedDecks.length > 0 && (
-        <div className="saved-decks">
-          <h3>Saved decks</h3>
+        <div className="saved-decks" style={{ marginTop: '1rem', borderTop: '1px solid #ccc', paddingTop: '1rem' }}>
+          <h3>{user ? 'My Decks' : 'Local Decks'}</h3>
           <ul>
             {savedDecks.map((deck) => (
               <li key={deck.id}>
@@ -223,7 +296,17 @@ const DeckManager = () => {
                   >
                     {busyCard === 'loading deck' ? 'Loading...' : 'Load to Library'}
                   </button>
-                  <button type="button" className="ghost" onClick={() => deleteDeckDefinition(deck.id)}>
+                  <button 
+                    type="button" 
+                    className="ghost" 
+                    onClick={async () => {
+                      try {
+                        await deleteDeckDefinition(deck.id);
+                      } catch (err) {
+                        setError(err instanceof Error ? err.message : 'Failed to delete deck');
+                      }
+                    }}
+                  >
                     Delete
                   </button>
                 </div>

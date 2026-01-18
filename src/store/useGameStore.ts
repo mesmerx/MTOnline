@@ -2,8 +2,8 @@ import { create } from 'zustand';
 import Peer from 'peerjs';
 import type { DataConnection, PeerJSOption } from 'peerjs';
 import { randomId } from '../lib/id';
-import { deleteDeck, loadDecks, saveDeck } from '../lib/deck';
 import type { DeckEntry, SavedDeck } from '../lib/deck';
+import { loadDecks as loadLocalDecks, saveDeck as saveLocalDeck, deleteDeck as deleteLocalDeck } from '../lib/deck';
 import { debugLog } from '../lib/debug';
 
 export interface PlayerSummary {
@@ -27,7 +27,7 @@ export interface CardOnBoard {
   setName?: string;
   position: Point;
   tapped: boolean;
-  zone: 'battlefield' | 'library' | 'hand';
+  zone: 'battlefield' | 'library' | 'hand' | 'cemetery';
   stackIndex?: number; // Para cartas empilhadas no grimório
   handIndex?: number; // Para ordenar cartas na mão
 }
@@ -51,7 +51,8 @@ type CardAction =
   | { kind: 'addToLibrary'; card: CardOnBoard }
   | { kind: 'replaceLibrary'; cards: CardOnBoard[]; playerId: string }
   | { kind: 'drawFromLibrary'; playerId: string }
-  | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand'; position: Point };
+  | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand' | 'cemetery'; position: Point; libraryPlace?: 'top' | 'bottom' | 'random' }
+  | { kind: 'shuffleLibrary'; playerId: string };
 
 type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string }
@@ -88,6 +89,7 @@ const buildCoturnServers = (turnUrl: string, username?: string, credential?: str
 const parseIceServersFromEnv = (): RTCIceServer[] => {
   const env = import.meta.env;
   const defaultServers: RTCIceServer[] = [];
+  const internalIp = env.VITE_INTERNAL_IP;
 
   if (env.VITE_PEER_ICE_SERVERS) {
     try {
@@ -100,10 +102,13 @@ const parseIceServersFromEnv = (): RTCIceServer[] => {
             url.includes('127.0.0.1') || 
             url.includes('0.0.0.0') || 
             url.includes('localhost') ||
+            (internalIp && url.includes(internalIp)) ||
             url.includes('turn:127.0.0.1') ||
             url.includes('turn:0.0.0.0') ||
+            (internalIp && url.includes(`turn:${internalIp}`)) ||
             url.includes('stun:127.0.0.1') ||
-            url.includes('stun:0.0.0.0')
+            url.includes('stun:0.0.0.0') ||
+            (internalIp && url.includes(`stun:${internalIp}`))
           );
         });
       }
@@ -113,7 +118,12 @@ const parseIceServersFromEnv = (): RTCIceServer[] => {
   }
 
   const turnUrl = env.VITE_TURN_URL?.trim();
-  if (turnUrl && (turnUrl.startsWith('turn:127.0.0.1') || turnUrl.startsWith('turn:0.0.0.0') || turnUrl.includes('localhost'))) {
+  if (turnUrl && (
+    turnUrl.startsWith('turn:127.0.0.1') || 
+    turnUrl.startsWith('turn:0.0.0.0') || 
+    turnUrl.includes('localhost') ||
+    (internalIp && turnUrl.includes(internalIp))
+  )) {
     return [...defaultServers, ...buildCoturnServers(turnUrl, env.VITE_TURN_USERNAME, env.VITE_TURN_CREDENTIAL)];
   }
 
@@ -125,16 +135,23 @@ const resolvePeerEndpoint = (): Omit<PeerJSOption, 'config'> => {
   const env = import.meta.env;
   const defaultHost = hasWindow ? window.location.hostname : 'localhost';
   const isHttps = hasWindow ? window.location.protocol === 'https:' : false;
-  const rawPort = env.VITE_PEER_PORT ?? (isHttps ? '443' : '9000');
+  const rawPort = env.VITE_PEER_PORT ?? (isHttps ? '443' : '9910');
+  const port = Number(rawPort);
   const host = env.VITE_PEER_HOST || defaultHost;
   const secure = typeof env.VITE_PEER_SECURE === 'string' ? env.VITE_PEER_SECURE === 'true' : isHttps;
   const path = env.VITE_PEER_PATH || '/peerjs';
 
-  return {
+  const result: Omit<PeerJSOption, 'config'> = {
     host,
-    path: '/peerjs',
-    secure:true,
+    path,
+    secure,
   };
+
+  if (Number.isFinite(port)) {
+    result.port = port;
+  }
+
+  return result;
 };
 
 interface TurnConfig {
@@ -214,6 +231,11 @@ const saveSession = (state: Partial<GameStore>) => {
   }
 };
 
+interface User {
+  id: number;
+  username: string;
+}
+
 interface GameStore {
   playerId: string;
   playerName: string;
@@ -230,9 +252,14 @@ interface GameStore {
   peer?: Peer;
   connections: Record<string, DataConnection>;
   hostConnection?: DataConnection;
-  hydrateDecks: () => void;
-  saveDeckDefinition: (name: string, entries: DeckEntry[], rawText: string) => void;
-  deleteDeckDefinition: (deckId: string) => void;
+  user: User | null;
+  setUser: (user: User | null) => void;
+  checkAuth: () => Promise<void>;
+  hydrateDecks: () => Promise<void>;
+  saveDeckDefinition: (name: string, entries: DeckEntry[], rawText: string, isPublic?: boolean) => Promise<void>;
+  deleteDeckDefinition: (deckId: string) => Promise<void>;
+  publicDecks: SavedDeck[];
+  loadPublicDecks: () => Promise<void>;
   setTurnMode: (mode: TurnConfig['mode']) => void;
   updateTurnCredentials: (credentials: Partial<Omit<TurnConfig, 'mode'>>) => void;
   resetTurnConfig: () => void;
@@ -247,8 +274,9 @@ interface GameStore {
   moveLibrary: (playerId: string, position: Point) => void;
   toggleTap: (cardId: string) => void;
   removeCard: (cardId: string) => void;
-  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand', position: Point) => void;
+  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   reorderHandCard: (cardId: string, newIndex: number) => void;
+  shuffleLibrary: (playerId: string) => void;
   resetBoard: () => void;
 }
 
@@ -357,9 +385,9 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
             position: action.position,
           };
           
-          // Se mudou para battlefield, remover handIndex
+          // Se mudou para battlefield, remover handIndex e stackIndex
           if (action.zone === 'battlefield') {
-            const { handIndex, ...rest } = updatedCard;
+            const { handIndex, stackIndex, ...rest } = updatedCard as any;
             return rest;
           }
           
@@ -367,9 +395,83 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
           if (action.zone === 'hand') {
             const handCards = board.filter((c) => c.zone === 'hand' && c.ownerId === card.ownerId && c.id !== card.id);
             const maxHandIndex = handCards.reduce((max, c) => Math.max(max, c.handIndex ?? -1), -1);
+            const { stackIndex, ...rest } = updatedCard as any;
             return {
-              ...updatedCard,
+              ...rest,
               handIndex: maxHandIndex + 1,
+            };
+          }
+          
+          // Se mudou para cemetery, calcular stackIndex (sempre no topo)
+          if (action.zone === 'cemetery') {
+            const cemeteryCards = board.filter((c) => c.zone === 'cemetery' && c.ownerId === card.ownerId && c.id !== card.id);
+            const maxStackIndex = cemeteryCards.length > 0 
+              ? Math.max(...cemeteryCards.map((c) => c.stackIndex ?? 0))
+              : -1;
+            const stackIndex = maxStackIndex + 1;
+            
+            const { handIndex, ...rest } = updatedCard as any;
+            return {
+              ...rest,
+              stackIndex,
+            };
+          }
+          
+          // Se mudou para library, calcular stackIndex baseado na posição
+          if (action.zone === 'library') {
+            const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === card.ownerId && c.id !== card.id);
+            let stackIndex: number;
+            
+            if (action.libraryPlace === 'top') {
+              // Topo = maior índice
+              const maxStackIndex = libraryCards.length > 0 
+                ? Math.max(...libraryCards.map((c) => c.stackIndex ?? 0))
+                : -1;
+              stackIndex = maxStackIndex + 1;
+            } else if (action.libraryPlace === 'bottom') {
+              // Bottom = menor índice (0)
+              // Mover todas as outras cartas para cima
+              const minStackIndex = libraryCards.length > 0
+                ? Math.min(...libraryCards.map((c) => c.stackIndex ?? 0))
+                : 1;
+              stackIndex = minStackIndex - 1;
+              // Ajustar outras cartas se necessário
+              if (stackIndex < 0) {
+                newBoard = newBoard.map((c) => {
+                  if (c.zone === 'library' && c.ownerId === card.ownerId && c.id !== card.id) {
+                    return { ...c, stackIndex: (c.stackIndex ?? 0) + 1 };
+                  }
+                  return c;
+                });
+                stackIndex = 0;
+              }
+            } else if (action.libraryPlace === 'random') {
+              // Random = posição aleatória
+              const librarySize = libraryCards.length;
+              const randomIndex = Math.floor(Math.random() * (librarySize + 1));
+              stackIndex = randomIndex;
+              // Ajustar outras cartas se necessário
+              newBoard = newBoard.map((c) => {
+                if (c.zone === 'library' && c.ownerId === card.ownerId && c.id !== card.id) {
+                  const currentIndex = c.stackIndex ?? 0;
+                  if (currentIndex >= randomIndex) {
+                    return { ...c, stackIndex: currentIndex + 1 };
+                  }
+                }
+                return c;
+              });
+            } else {
+              // Padrão: adicionar no topo
+              const maxStackIndex = libraryCards.length > 0 
+                ? Math.max(...libraryCards.map((c) => c.stackIndex ?? 0))
+                : -1;
+              stackIndex = maxStackIndex + 1;
+            }
+            
+            const { handIndex, ...rest } = updatedCard as any;
+            return {
+              ...rest,
+              stackIndex,
             };
           }
           
@@ -484,6 +586,25 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       // Recalcular posições de todas as cartas na mão
       newBoard = recalculateHandPositions(newBoard, action.playerId);
       return newBoard;
+    }
+    case 'shuffleLibrary': {
+      const libraryCards = board
+        .filter((c) => c.zone === 'library' && c.ownerId === action.playerId)
+        .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
+      
+      if (libraryCards.length === 0) return board;
+      
+      // Embaralhar os stackIndex
+      const shuffled = [...libraryCards].sort(() => Math.random() - 0.5);
+      
+      // Atualizar stackIndex de cada carta mantendo suas posições
+      const updatedLibraryCards = shuffled.map((card, index) => ({
+        ...card,
+        stackIndex: libraryCards.length - 1 - index, // Inverter para manter ordem (maior índice = topo)
+      }));
+      
+      const otherCards = board.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerId));
+      return [...otherCards, ...updatedLibraryCards];
     }
     default:
       return board;
@@ -926,20 +1047,146 @@ export const useGameStore = create<GameStore>((set, get) => {
       status: savedSession.status === 'connected' ? 'idle' : savedSession.status, // Reset connected status
       isHost: savedSession.isHost,
     } : {}),
-    savedDecks: [],
+    savedDecks: loadLocalDecks(),
     turnConfig: loadTurnConfig(),
-    hydrateDecks: () => {
-      set({ savedDecks: loadDecks() });
+    user: null,
+    publicDecks: [],
+    setUser: (user: User | null) => {
+      set({ user });
+      if (user) {
+        get().hydrateDecks();
+      } else {
+        // Carregar decks locais quando não logado
+        set({ savedDecks: loadLocalDecks() });
+      }
     },
-    saveDeckDefinition: (name: string, entries: DeckEntry[], rawText: string) => {
-      set((state) => ({
-        savedDecks: saveDeck(name, entries, rawText, state.savedDecks),
-      }));
+    checkAuth: async () => {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      try {
+        const response = await fetch(`${API_URL}/api/me`, {
+          credentials: 'include',
+        });
+        if (response.ok) {
+          const data = await response.json();
+          set({ user: data.user });
+          get().hydrateDecks();
+        } else {
+          // Não autenticado é um estado normal, não um erro
+          set({ user: null, savedDecks: loadLocalDecks() });
+        }
+      } catch (error) {
+        // Silenciar erros de rede durante verificação de auth (servidor pode não estar rodando)
+        if (error instanceof TypeError && error.message.includes('fetch')) {
+          // Servidor não disponível, usar modo offline
+          set({ user: null, savedDecks: loadLocalDecks() });
+        } else {
+          console.error('Auth check failed:', error);
+          set({ user: null, savedDecks: loadLocalDecks() });
+        }
+      }
     },
-    deleteDeckDefinition: (deckId: string) => {
-      set((state) => ({
-        savedDecks: deleteDeck(deckId, state.savedDecks),
-      }));
+    hydrateDecks: async () => {
+      const state = get();
+      if (!state.user) {
+        // Usar localStorage quando não logado
+        set({ savedDecks: loadLocalDecks() });
+        return;
+      }
+
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      try {
+        const response = await fetch(`${API_URL}/api/decks`, {
+          credentials: 'include',
+        });
+        if (response.ok) {
+          const decks = await response.json();
+          set({ savedDecks: decks });
+        } else if (response.status === 401) {
+          // Não autenticado, voltar para modo local
+          set({ user: null, savedDecks: loadLocalDecks() });
+        }
+      } catch (error) {
+        // Silenciar erros de rede (servidor pode não estar disponível)
+        if (error instanceof TypeError && error.message.includes('fetch')) {
+          // Servidor não disponível, usar modo offline
+          set({ savedDecks: loadLocalDecks() });
+        } else {
+          console.error('Failed to load decks:', error);
+        }
+      }
+    },
+    saveDeckDefinition: async (name: string, entries: DeckEntry[], rawText: string, isPublic = false) => {
+      const state = get();
+      if (!state.user) {
+        // Salvar localmente quando não logado
+        const newDecks = saveLocalDeck(name, entries, rawText, state.savedDecks);
+        set({ savedDecks: newDecks });
+        return;
+      }
+
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      try {
+        const response = await fetch(`${API_URL}/api/decks`, {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          credentials: 'include',
+          body: JSON.stringify({ name, entries, rawText, isPublic }),
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to save deck');
+        }
+
+        const newDeck = await response.json();
+        set((s) => ({
+          savedDecks: [newDeck, ...s.savedDecks],
+        }));
+      } catch (error) {
+        console.error('Failed to save deck:', error);
+        throw error;
+      }
+    },
+    deleteDeckDefinition: async (deckId: string) => {
+      const state = get();
+      if (!state.user) {
+        // Deletar localmente quando não logado
+        const newDecks = deleteLocalDeck(deckId, state.savedDecks);
+        set({ savedDecks: newDecks });
+        return;
+      }
+
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      try {
+        const response = await fetch(`${API_URL}/api/decks/${deckId}`, {
+          method: 'DELETE',
+          credentials: 'include',
+        });
+
+        if (!response.ok) {
+          throw new Error('Failed to delete deck');
+        }
+
+        set((s) => ({
+          savedDecks: s.savedDecks.filter((deck) => deck.id !== deckId),
+        }));
+      } catch (error) {
+        console.error('Failed to delete deck:', error);
+        throw error;
+      }
+    },
+    loadPublicDecks: async () => {
+      const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+      try {
+        const response = await fetch(`${API_URL}/api/decks/public`);
+        if (response.ok) {
+          const decks = await response.json();
+          set({ publicDecks: decks });
+        }
+      } catch (error) {
+        console.error('Failed to load public decks:', error);
+      }
     },
     setTurnMode: (mode: TurnConfig['mode']) => {
       set((state) => {
@@ -1248,8 +1495,8 @@ export const useGameStore = create<GameStore>((set, get) => {
     removeCard: (cardId: string) => {
       requestAction({ kind: 'remove', id: cardId });
     },
-    changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand', position: Point) => {
-      requestAction({ kind: 'changeZone', id: cardId, zone, position });
+    changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => {
+      requestAction({ kind: 'changeZone', id: cardId, zone, position, libraryPlace });
     },
     reorderHandCard: (cardId: string, newIndex: number) => {
       const state = get();
@@ -1298,6 +1545,9 @@ export const useGameStore = create<GameStore>((set, get) => {
         // Para clientes, precisaríamos de uma nova ação, mas por enquanto só funciona para host
         // TODO: Implementar ação de reordenação para clientes
       }
+    },
+    shuffleLibrary: (playerId: string) => {
+      requestAction({ kind: 'shuffleLibrary', playerId });
     },
     resetBoard: () => {
       const state = get();

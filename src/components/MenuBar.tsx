@@ -3,6 +3,7 @@ import RoomPanel from './RoomPanel';
 import ConnectionSettings from './ConnectionSettings';
 import DeckManager from './DeckManager';
 import CardSearch from './CardSearch';
+import Login from './Login';
 import MenuModal from './MenuModal';
 import { useGameStore } from '../store/useGameStore';
 
@@ -152,6 +153,14 @@ const MenuBar = () => {
             </button>
             <button
               type="button"
+              className={openMenu === 'login' ? 'menu-button active' : 'menu-button'}
+              onClick={() => toggleMenu('login')}
+              title="Login / Account"
+            >
+              <span className="menu-icon">👤</span>
+            </button>
+            <button
+              type="button"
               className="menu-button"
               onClick={(e) => {
                 e.stopPropagation();
@@ -201,6 +210,15 @@ const MenuBar = () => {
         icon="🔍"
       >
         <CardSearch />
+      </MenuModal>
+
+      <MenuModal
+        isOpen={openMenu === 'login'}
+        onClose={() => setOpenMenu(null)}
+        title="Account"
+        icon="👤"
+      >
+        <Login />
       </MenuModal>
     </>
   );

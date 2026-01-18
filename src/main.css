@@ -637,6 +637,57 @@ button:disabled {
   border-radius: 0.5rem;
   font-size: 0.75rem;
   font-weight: 600;
+}
+
+.cemetery-stack {
+  position: absolute;
+  cursor: pointer;
+  z-index: 20;
+  user-select: none;
+  touch-action: none;
+  pointer-events: auto !important;
+  background: transparent;
+  min-width: 120px;
+  min-height: 160px;
+  width: 120px;
+  height: 160px;
+}
+
+.cemetery-stack.draggable {
+  cursor: grab;
+}
+
+.cemetery-stack.draggable:active {
+  cursor: grabbing;
+}
+
+.cemetery-stack > div {
+  pointer-events: none !important;
+}
+
+.cemetery-stack .cemetery-count {
+  position: absolute;
+  bottom: -25px;
+  left: 50%;
+  transform: translateX(-50%);
+  padding: 0.2rem 0.5rem;
+  background: rgba(15, 23, 42, 0.95);
+  border: 1px solid rgba(148, 163, 184, 0.3);
+  border-radius: 0.5rem;
+  font-size: 0.75rem;
+  font-weight: 600;
+  color: #f8fafc;
+  pointer-events: none !important;
+  z-index: 10;
+}
+
+.cemetery-stack .card-token {
+  position: absolute;
+  transition: transform 0.1s;
+}
+
+.cemetery-stack .card-token:not(:first-child) {
+  transform: translate(2px, 2px);
   color: #f8fafc;
   pointer-events: none;
   white-space: nowrap;
@@ -844,6 +895,15 @@ button:disabled {
   padding: 0.3rem;
   gap: 0.3rem;
   background: rgba(2, 8, 23, 0.7);
+}
+
+@keyframes pulse {
+  0%, 100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.5;
+  }
 }
 
 @media (max-width: 960px) {

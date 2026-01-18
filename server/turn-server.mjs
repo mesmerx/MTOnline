@@ -54,8 +54,8 @@ const minPort = numericEnv(process.env.TURN_MIN_PORT, 49152);
 const maxPort = numericEnv(process.env.TURN_MAX_PORT, 65535);
 const realm = process.env.TURN_REALM || 'mtonline.local';
 const authMech = process.env.TURN_AUTH_MECH || undefined;
-const username = process.env.TURN_USERNAME || process.env.VITE_TURN_USERNAME;
-const password = process.env.TURN_PASSWORD || process.env.VITE_TURN_CREDENTIAL;
+const username = process.env.TURN_USERNAME;
+const password = process.env.TURN_PASSWORD;
 const debugLevel = process.env.TURN_DEBUG_LEVEL || 'WARN';
 const externalIps = parseExternalIps(process.env.TURN_EXTERNAL_IPS);
 

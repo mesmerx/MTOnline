@@ -6,7 +6,7 @@ import { useGameStore } from './store/useGameStore';
 const App = () => {
   const status = useGameStore((state) => state?.status ?? 'idle');
   const error = useGameStore((state) => state?.error);
-  const hydrateDecks = useGameStore((state) => state?.hydrateDecks);
+  const checkAuth = useGameStore((state) => state?.checkAuth);
   const roomId = useGameStore((state) => state?.roomId ?? '');
   const roomPassword = useGameStore((state) => state?.roomPassword ?? '');
   const isHost = useGameStore((state) => state?.isHost ?? false);
@@ -16,10 +16,10 @@ const App = () => {
   const hasReconnected = useRef(false);
 
   useEffect(() => {
-    if (hydrateDecks) {
-      hydrateDecks();
+    if (checkAuth) {
+      checkAuth();
     }
-  }, [hydrateDecks]);
+  }, [checkAuth]);
 
   // Reconectar automaticamente após F5 se houver sessão salva
   useEffect(() => {
