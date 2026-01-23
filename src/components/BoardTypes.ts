@@ -23,7 +23,7 @@ export interface BoardViewProps {
   startLibraryDrag: (targetPlayerId: string, event: React.PointerEvent) => void;
   startCemeteryDrag: (targetPlayerId: string, event: React.PointerEvent) => void;
   changeCardZone: (cardId: string, newZone: 'battlefield' | 'hand' | 'library' | 'cemetery', position?: Point) => void;
-  detectZoneAtPosition: (x: number, y: number) => 'battlefield' | 'hand' | 'library' | 'cemetery' | null;
+  detectZoneAtPosition: (x: number, y: number) => { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | null; ownerId?: string };
   reorderHandCard: (cardId: string, newIndex: number) => void;
   dragStartedFromHandRef: RefObject<boolean>;
   handCardPlacedRef: RefObject<boolean>;
@@ -32,6 +32,9 @@ export interface BoardViewProps {
   getPlayerArea: (ownerId: string) => { x: number; y: number; width: number; height: number } | null;
   getLibraryPosition: (playerId: string) => Point | null;
   getCemeteryPosition: (playerId: string) => Point | null;
+  viewMode: 'unified' | 'individual' | 'separated';
+  convertMouseToSeparatedCoordinates?: (mouseX: number, mouseY: number, playerId: string, rect: DOMRect) => { x: number; y: number } | null;
+  convertMouseToUnifiedCoordinates?: (mouseX: number, mouseY: number, rect: DOMRect) => { x: number; y: number };
 }
 
 export const BASE_BOARD_WIDTH = 1920;

@@ -790,7 +790,6 @@ export const useGameStore = create<GameStore>((set, get) => {
       let newLibraryPositions = state.libraryPositions;
       
       if (action.kind === 'moveCemetery' && 'playerId' in action && 'position' in action) {
-        console.log('[Store] handleHostAction moveCemetery', { playerId: action.playerId, position: action.position });
         newCemeteryPositions = {
           ...state.cemeteryPositions,
           [action.playerId]: action.position,

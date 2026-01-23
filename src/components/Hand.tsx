@@ -41,6 +41,9 @@ interface HandProps {
   }>;
   addEventLog: (type: string, message: string, cardId?: string, cardName?: string, details?: Record<string, unknown>) => void;
   showDebugMode?: boolean;
+  viewMode?: 'unified' | 'individual' | 'separated';
+  convertMouseToSeparatedCoordinates?: (mouseX: number, mouseY: number, playerId: string, rect: DOMRect) => { x: number; y: number } | null;
+  convertMouseToUnifiedCoordinates?: (mouseX: number, mouseY: number, rect: DOMRect) => { x: number; y: number };
 }
 
 const Hand = ({
@@ -64,6 +67,9 @@ const Hand = ({
   handDragStateRef,
   addEventLog,
   showDebugMode = false,
+  viewMode = 'unified',
+  convertMouseToSeparatedCoordinates,
+  convertMouseToUnifiedCoordinates,
 }: HandProps) => {
   const [handCardMoved, setHandCardMoved] = useState(false);
   const [handScrollIndex, setHandScrollIndex] = useState(0);
@@ -252,9 +258,18 @@ const Hand = ({
       dragUpdateRef.current = now;
       
       const rect = boardRef.current!.getBoundingClientRect();
-      const cursorX = event.clientX - rect.left;
-      const cursorY = event.clientY - rect.top;
+      let cursorX = event.clientX - rect.left;
+      let cursorY = event.clientY - rect.top;
       
+      // Atualizar a posição visual da carta arrastada sempre (para seguir o mouse)
+      // Isso garante que a carta siga o mouse desde o início do drag
+      setDragPosition({ x: cursorX, y: cursorY });
+      
+      // Atualizar ref para debug
+      handDragStateRef.current.dragPosition = { x: cursorX, y: cursorY };
+      
+      // Para o cálculo de movimento, usar coordenadas relativas (não convertidas)
+      // Isso garante que o threshold funcione corretamente
       if (!handCardMoved && dragStartPosition) {
         const deltaX = Math.abs(cursorX - dragStartPosition.x);
         const deltaY = Math.abs(cursorY - dragStartPosition.y);
@@ -265,14 +280,10 @@ const Hand = ({
         }
       }
       
+      // Se ainda não moveu o suficiente, não processar reordenação
       if (!handCardMoved) {
         return;
       }
-      
-      setDragPosition({ x: cursorX, y: cursorY });
-      
-      // Atualizar ref para debug
-      handDragStateRef.current.dragPosition = { x: cursorX, y: cursorY };
       
       const handArea = getHandArea(playerId);
       if (!handArea) return;
@@ -508,16 +519,43 @@ const Hand = ({
       let dropCursorY: number | null = null;
       if (event && boardRef.current) {
         const rect = boardRef.current.getBoundingClientRect();
-        dropCursorX = event.clientX - rect.left;
-        dropCursorY = event.clientY - rect.top;
+        let relativeX = event.clientX - rect.left;
+        let relativeY = event.clientY - rect.top;
         
-        // Usar diretamente as coordenadas onde soltou
+        // Converter coordenadas para o espaço base (1920x1080) se necessário
+        if (viewMode === 'separated' && convertMouseToSeparatedCoordinates) {
+          const coords = convertMouseToSeparatedCoordinates(
+            event.clientX,
+            event.clientY,
+            playerId,
+            rect
+          );
+          if (coords) {
+            dropCursorX = coords.x;
+            dropCursorY = coords.y;
+          } else {
+            // Se não está na janela do player, usar coordenadas relativas
+            dropCursorX = relativeX;
+            dropCursorY = relativeY;
+          }
+        } else if ((viewMode === 'individual' || viewMode === 'unified') && convertMouseToUnifiedCoordinates) {
+          const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+          dropCursorX = coords.x;
+          dropCursorY = coords.y;
+        } else {
+          // Fallback: usar coordenadas relativas
+          dropCursorX = relativeX;
+          dropCursorY = relativeY;
+        }
+        
+        // Usar diretamente as coordenadas onde soltou (já convertidas para espaço base)
         dropPosition = {
           x: dropCursorX - CARD_WIDTH / 2,
           y: dropCursorY - CARD_HEIGHT / 2,
         };
       } else if (dragPosition && boardRef.current) {
         // Se não tem evento mas tem posição de drag, usar a última posição conhecida
+        // A posição já deve estar no espaço base se foi convertida durante o drag
         dropCursorX = dragPosition.x;
         dropCursorY = dragPosition.y;
         dropPosition = {
@@ -623,11 +661,38 @@ const Hand = ({
         // 6. NÃO HOUVE REORDENAÇÃO (crítico!)
         if (startedFromHand && handCardMoved && dropPosition && droppedOutsideHand && event && !actuallyReordered && boardRef.current) {
           const rect = boardRef.current.getBoundingClientRect();
-          const dropCursorX = event.clientX - rect.left;
-          const dropCursorY = event.clientY - rect.top;
           
-          // Usar a função de detecção de zona do Board
-          const detectedZone = detectZoneAtPosition(dropCursorX, dropCursorY);
+          // Converter coordenadas para o espaço base antes de detectar zona
+          let baseX: number;
+          let baseY: number;
+          
+          if (viewMode === 'separated' && convertMouseToSeparatedCoordinates) {
+            const coords = convertMouseToSeparatedCoordinates(
+              event.clientX,
+              event.clientY,
+              playerId,
+              rect
+            );
+            if (coords) {
+              baseX = coords.x;
+              baseY = coords.y;
+            } else {
+              // Se não está na janela do player, usar dropCursorX/Y já convertidos
+              baseX = dropCursorX || 0;
+              baseY = dropCursorY || 0;
+            }
+          } else if ((viewMode === 'individual' || viewMode === 'unified') && convertMouseToUnifiedCoordinates) {
+            const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+            baseX = coords.x;
+            baseY = coords.y;
+          } else {
+            // Fallback: usar dropCursorX/Y já convertidos
+            baseX = dropCursorX || 0;
+            baseY = dropCursorY || 0;
+          }
+          
+          // Usar a função de detecção de zona do Board (espera coordenadas no espaço base)
+          const detectedZone = detectZoneAtPosition(baseX, baseY);
           
           // Se detectou uma zona diferente da hand, mudar
           if (detectedZone.zone && detectedZone.zone !== 'hand') {
@@ -838,11 +903,13 @@ const Hand = ({
       stopDragExecutedRef.current = false;
     };
     
+    const handleUp = (e: PointerEvent) => stopDrag(e);
+    
     window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', (e) => stopDrag(e));
+    window.addEventListener('pointerup', handleUp);
     return () => {
       window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', (e) => stopDrag(e));
+      window.removeEventListener('pointerup', handleUp);
     };
   }, [
     draggingHandCard,
@@ -861,6 +928,9 @@ const Hand = ({
     getPlayerArea,
     players,
     addEventLog,
+    viewMode,
+    convertMouseToSeparatedCoordinates,
+    convertMouseToUnifiedCoordinates,
   ]);
 
   // Sincronizar originalHandOrder quando o board mudar (após reordenação)

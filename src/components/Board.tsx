@@ -472,14 +472,14 @@ const Board = () => {
   // Tamanho base do board em 1080p (importado de BoardTypes.ts)
   
   // Calcular scale baseado na resolução atual (para individual/unified)
-  const getBoardScale = () => {
+  const getBoardScale = useCallback(() => {
     if (!boardRef.current) return 1;
     const rect = boardRef.current.getBoundingClientRect();
     const scaleX = rect.width / BASE_BOARD_WIDTH;
     const scaleY = rect.height / BASE_BOARD_HEIGHT;
     // Usar o menor scale para manter proporções e garantir que caiba
     return Math.min(scaleX, scaleY);
-  };
+  }, []);
 
   // Função auxiliar para converter coordenadas do mouse no modo separated
   const convertMouseToSeparatedCoordinates = (
@@ -493,54 +493,41 @@ const Board = () => {
       return null;
     }
 
-    const availableWidth = windowInfo.windowWidth;
-    const availableHeight = windowInfo.windowHeight;
+    // Criar um rect virtual para a janela do player
+    // O rect da janela do player é relativo ao board principal
+    const windowRect = {
+      left: rect.left + windowInfo.windowLeft,
+      top: rect.top + windowInfo.windowTop,
+      width: windowInfo.windowWidth,
+      height: windowInfo.windowHeight,
+    } as DOMRect;
 
-    // Calcular scale e offsets do container escalado (mesmo cálculo do render)
-    const aspectRatio = 16 / 9;
-    const widthBasedHeight = availableWidth / aspectRatio;
-    const heightBasedWidth = availableHeight * aspectRatio;
+    // Usar EXATAMENTE a mesma lógica do convertMouseToUnifiedCoordinates (individual)
+    // mas aplicada ao rect da janela do player
+    // Isso garante que o drag funcione da mesma forma que no individual
+    let cursorX = mouseX - windowRect.left;
+    let cursorY = mouseY - windowRect.top;
 
-    let playerAreaWidth, playerAreaHeight, offsetX, offsetY;
-    if (widthBasedHeight <= availableHeight) {
-      playerAreaWidth = availableWidth;
-      playerAreaHeight = widthBasedHeight;
-      offsetX = 0;
-      offsetY = (availableHeight - playerAreaHeight) / 2;
-    } else {
-      playerAreaWidth = heightBasedWidth;
-      playerAreaHeight = availableHeight;
-      offsetX = (availableWidth - playerAreaWidth) / 2;
-      offsetY = 0;
-    }
+    // Converter coordenadas do mouse para o espaço base (1920x1080)
+    // Usar o mesmo cálculo do individual: Math.min(scaleX, scaleY) para manter proporção
+    const scaleX = windowRect.width / BASE_BOARD_WIDTH;
+    const scaleY = windowRect.height / BASE_BOARD_HEIGHT;
+    const scale = Math.min(scaleX, scaleY);
+    
+    const scaledWidth = BASE_BOARD_WIDTH * scale;
+    const scaledHeight = BASE_BOARD_HEIGHT * scale;
+    const offsetX = (windowRect.width - scaledWidth) / 2;
+    const offsetY = (windowRect.height - scaledHeight) / 2;
 
-    // Calcular scale baseado na largura
-    const scale = playerAreaWidth / BASE_BOARD_WIDTH;
+    // Converter para coordenadas no espaço base
+    cursorX = (cursorX - offsetX) / scale;
+    cursorY = (cursorY - offsetY) / scale;
 
-    // Converter coordenadas do mouse para o espaço base (1920x1080) considerando scale e offsets
-    const relativeX = mouseX - rect.left;
-    const relativeY = mouseY - rect.top;
-    const localX = relativeX - windowInfo.windowLeft - offsetX;
-    const localY = relativeY - windowInfo.windowTop - offsetY;
-
-    // Converter para coordenadas no espaço base (1920x1080)
-    const baseX = localX / scale;
-    const baseY = localY / scale;
-
-    // Converter para porcentagens relativas à área do player (0-100)
-    const playerArea = getPlayerArea(playerId);
-    if (playerArea) {
-      return {
-        x: (baseX / playerArea.width) * 100,
-        y: (baseY / playerArea.height) * 100,
-      };
-    }
-
-    return { x: baseX, y: baseY };
+    return { x: cursorX, y: cursorY };
   };
 
   // Função auxiliar para converter coordenadas do mouse no modo individual/unified
-  const convertMouseToUnifiedCoordinates = (
+  const convertMouseToUnifiedCoordinates = useCallback((
     mouseX: number,
     mouseY: number,
     rect: DOMRect
@@ -549,7 +536,12 @@ const Board = () => {
     let cursorY = mouseY - rect.top;
 
     // Converter coordenadas do mouse para o espaço base (1920x1080)
-    const scale = getBoardScale();
+    // Usar o mesmo cálculo do render para garantir consistência
+    // Calcular scale usando o rect fornecido (mesmo usado no render)
+    const scaleX = rect.width / BASE_BOARD_WIDTH;
+    const scaleY = rect.height / BASE_BOARD_HEIGHT;
+    const scale = Math.min(scaleX, scaleY);
+    
     const scaledWidth = BASE_BOARD_WIDTH * scale;
     const scaledHeight = BASE_BOARD_HEIGHT * scale;
     const offsetX = (rect.width - scaledWidth) / 2;
@@ -560,7 +552,7 @@ const Board = () => {
     cursorY = (cursorY - offsetY) / scale;
 
     return { x: cursorX, y: cursorY };
-  };
+  }, []);
 
   // Função para encontrar qual player window contém o cursor
   const getPlayerWindowAtPosition = (mouseX: number, mouseY: number) => {
@@ -874,13 +866,14 @@ const Board = () => {
         rect
       );
       if (!coords) {
-        // Se não está na janela do player correto, manter posição atual (em porcentagens)
+        // Se não está na janela do player correto, manter posição atual
         return;
       }
       cursorX = coords.x;
       cursorY = coords.y;
     } else {
       // Modo individual/unified: usar função auxiliar específica
+      // Garantir que estamos usando o mesmo rect e scale do render
       const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
       cursorX = coords.x;
       cursorY = coords.y;
@@ -894,11 +887,7 @@ const Board = () => {
     let clampedY = y;
 
     if (viewMode === 'separated') {
-      // No modo separated, trabalhar com porcentagens (0-100)
-      clampedX = Math.max(0, Math.min(100, x));
-      clampedY = Math.max(0, Math.min(100, y));
-    } else {
-      // No modo normal, trabalhar com pixels
+      // No modo separated, trabalhar com pixels no espaço base (1920x1080)
       const playerArea = getPlayerArea(card.ownerId);
       if (playerArea) {
         clampedX = Math.max(
@@ -910,8 +899,25 @@ const Board = () => {
           Math.min(playerArea.y + playerArea.height - CARD_HEIGHT, y)
         );
       } else {
-        clampedX = Math.max(0, Math.min(rect.width - CARD_WIDTH, x));
-        clampedY = Math.max(0, Math.min(rect.height - CARD_HEIGHT, y));
+        clampedX = Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, x));
+        clampedY = Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, y));
+      }
+    } else {
+      // No modo individual/unified, trabalhar com pixels no espaço base (1920x1080)
+      const playerArea = getPlayerArea(card.ownerId);
+      if (playerArea) {
+        clampedX = Math.max(
+          playerArea.x,
+          Math.min(playerArea.x + playerArea.width - CARD_WIDTH, x)
+        );
+        clampedY = Math.max(
+          playerArea.y,
+          Math.min(playerArea.y + playerArea.height - CARD_HEIGHT, y)
+        );
+      } else {
+        // Usar espaço base (1920x1080) como no modo separated
+        clampedX = Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, x));
+        clampedY = Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, y));
       }
     }
 
@@ -955,10 +961,33 @@ const Board = () => {
         
         if (card && card.ownerId === playerId) {
           const rect = boardRef.current.getBoundingClientRect();
-          const cursorX = event.clientX - rect.left;
-          const cursorY = event.clientY - rect.top;
           
-          const detectedZone = detectZoneAtPosition(cursorX, cursorY);
+          // Converter coordenadas para o espaço base antes de detectar zona
+          let baseX: number;
+          let baseY: number;
+          
+          if (viewMode === 'separated') {
+            const coords = convertMouseToSeparatedCoordinates(
+              event.clientX,
+              event.clientY,
+              card.ownerId,
+              rect
+            );
+            if (coords) {
+              baseX = coords.x;
+              baseY = coords.y;
+            } else {
+              // Se não está na janela do player, usar coordenadas relativas
+              baseX = event.clientX - rect.left;
+              baseY = event.clientY - rect.top;
+            }
+          } else {
+            const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+            baseX = coords.x;
+            baseY = coords.y;
+          }
+          
+          const detectedZone = detectZoneAtPosition(baseX, baseY);
           
           // Se detectou uma zona diferente da atual, mudar
           if (detectedZone.zone && detectedZone.zone !== card.zone) {
@@ -972,10 +1001,10 @@ const Board = () => {
             let position: Point = { x: 0, y: 0 };
             
             if (detectedZone.zone === 'battlefield') {
-              // Posição onde soltou
+              // Posição onde soltou (já convertida para espaço base)
               position = {
-                x: Math.max(0, Math.min(rect.width - CARD_WIDTH, cursorX - dragState.offsetX)),
-                y: Math.max(0, Math.min(rect.height - CARD_HEIGHT, cursorY - dragState.offsetY)),
+                x: Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, baseX - dragState.offsetX)),
+                y: Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, baseY - dragState.offsetY)),
               };
             } else if (detectedZone.zone === 'cemetery') {
               const cemeteryPos = getCemeteryPosition(detectedZone.ownerId || card.ownerId);
@@ -1179,12 +1208,11 @@ const Board = () => {
     const rect = boardRef.current.getBoundingClientRect();
     // Calcular offset: posição do cursor dentro da carta (relativo ao board)
     // Usar currentCard para garantir que temos a posição mais recente
-    let cardX = currentCard.position.x;
-    let cardY = currentCard.position.y;
-    let cursorX = event.clientX - rect.left;
-    let cursorY = event.clientY - rect.top;
+    const cardX = currentCard.position.x;
+    const cardY = currentCard.position.y;
     
-    // Converter coordenadas do mouse baseado no modo
+    // Converter coordenadas do mouse baseado no modo ANTES de calcular offset
+    let cursorX, cursorY;
     if (viewMode === 'separated') {
       // Modo separated: usar função auxiliar específica
       const coords = convertMouseToSeparatedCoordinates(
@@ -1194,7 +1222,7 @@ const Board = () => {
         rect
       );
       if (!coords) {
-        // Se não está na janela do player correto, usar posição atual da carta (já em porcentagens)
+        // Se não está na janela do player correto, usar posição atual da carta
         cursorX = cardX;
         cursorY = cardY;
       } else {
@@ -1208,8 +1236,7 @@ const Board = () => {
       cursorY = coords.y;
     }
     
-    // No modo separated, cardX e cardY estão em porcentagens, então o offset também será
-    // No modo normal, estão em pixels
+    // Ambos estão em pixels no espaço base (1920x1080)
     const offsetX = cursorX - cardX;
     const offsetY = cursorY - cardY;
 
@@ -1635,18 +1662,24 @@ const Board = () => {
       const x = cursorX - draggingLibrary.offsetX;
       const y = cursorY - draggingLibrary.offsetY;
 
+      // Clamp dentro da área
       const playerArea = getPlayerArea(draggingLibrary.playerId);
+      let clampedX = x;
+      let clampedY = y;
+      
       if (playerArea) {
-        // Clamp dentro da área - se estiver fora, limitar aos limites
-        const clampedX = Math.max(
+        clampedX = Math.max(
           playerArea.x,
           Math.min(playerArea.x + playerArea.width - LIBRARY_CARD_WIDTH, x)
         );
-        const clampedY = Math.max(
+        clampedY = Math.max(
           playerArea.y,
           Math.min(playerArea.y + playerArea.height - LIBRARY_CARD_HEIGHT, y)
         );
-
+      }
+      
+      // Atualizar posição
+      if (playerArea) {
         const relativePosition = {
           x: clampedX - playerArea.x,
           y: clampedY - playerArea.y,
@@ -1657,8 +1690,6 @@ const Board = () => {
           [draggingLibrary.playerId]: relativePosition,
         }));
 
-        // moveLibrary vai armazenar a posição relativa no store
-        // e passar a absoluta para a ação
         moveLibrary(draggingLibrary.playerId, relativePosition, { x: clampedX, y: clampedY });
       }
     };
@@ -1705,11 +1736,13 @@ const Board = () => {
       libraryMovedRef.current = false;
     };
 
+    const handleUp = (e: PointerEvent) => stopDrag(e);
+    
     window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', (e) => stopDrag(e));
+    window.addEventListener('pointerup', handleUp);
     return () => {
       window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', stopDrag);
+      window.removeEventListener('pointerup', handleUp);
     };
   }, [draggingLibrary, moveLibrary, playerId, libraryMoved, viewMode, players]);
 
@@ -1775,7 +1808,8 @@ const Board = () => {
       cursorX = coords.x;
       cursorY = coords.y;
     }
-
+    
+    // Ambos estão em pixels
     const offsetX = cursorX - cemeteryPos.x;
     const offsetY = cursorY - cemeteryPos.y;
 
@@ -1865,7 +1899,6 @@ const Board = () => {
       }));
 
       // Sincronizar com os peers - isso vai atualizar o store e enviar para outros players
-      console.log('[Board] Chamando moveCemetery', { playerId: draggingCemetery.playerId, position: { x: clampedX, y: clampedY } });
       moveCemetery(draggingCemetery.playerId, { x: clampedX, y: clampedY });
     };
 
@@ -1886,11 +1919,13 @@ const Board = () => {
       setTimeout(() => setCemeteryMoved(false), 100);
     };
 
+    const handleUp = () => stopDrag();
+    
     window.addEventListener('pointermove', handleMove);
-    window.addEventListener('pointerup', stopDrag);
+    window.addEventListener('pointerup', handleUp);
     return () => {
       window.removeEventListener('pointermove', handleMove);
-      window.removeEventListener('pointerup', stopDrag);
+      window.removeEventListener('pointerup', handleUp);
     };
   }, [draggingCemetery, moveCemetery, playerId, cemeteryMoved, viewMode, players, getPlayerArea]);
 
@@ -1945,6 +1980,9 @@ const Board = () => {
       getPlayerArea,
       getLibraryPosition,
       getCemeteryPosition,
+      viewMode,
+      convertMouseToSeparatedCoordinates,
+      convertMouseToUnifiedCoordinates,
     };
 
     if (viewMode === 'individual') {
@@ -2191,19 +2229,8 @@ const Board = () => {
             `.card-token, button, .library-stack, .cemetery-stack, .player-area${showHand ? ', .hand-card-wrapper, .hand-area, .hand-cards' : ''}`
           );
           
-          console.log('[Board] board-surface onClick:', {
-            target: target.className,
-            isInteractive: !!isInteractive,
-            isDragging,
-            draggingCemetery,
-            clickBlockTimeout: clickBlockTimeoutRef.current,
-            dragStateRef: dragStateRef.current,
-            dragStartedFromHand: dragStartedFromHandRef.current,
-          });
-          
           // Não resetar se estiver arrastando cemitério ou library
           if (!isInteractive && !draggingCemetery && !draggingLibrary) {
-            console.log('[Board] board-surface onClick: Chamando resetAllDragStates');
             resetAllDragStates();
           }
         }}

@@ -178,6 +178,9 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
             dragStateRef.current = null;
             // setIsDragging é gerenciado no Board.tsx principal
           }}
+          viewMode={props.viewMode}
+          convertMouseToSeparatedCoordinates={props.convertMouseToSeparatedCoordinates}
+          convertMouseToUnifiedCoordinates={props.convertMouseToUnifiedCoordinates}
         />
       )}
     </>

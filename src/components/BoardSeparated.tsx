@@ -178,11 +178,13 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       }
                       const storePos = storeLibraryPositions[id];
                       if (storePos) {
+                        // Usar posição do store diretamente (em pixels)
                         return {
                           x: storePos.x,
                           y: storePos.y,
                         };
                       }
+                      // Posição padrão em pixels no espaço base
                       return {
                         x: 50,
                         y: BASE_BOARD_HEIGHT / 2 - 70,
@@ -212,11 +214,13 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       }
                       const storePos = storeCemeteryPositions[id];
                       if (storePos) {
+                        // Usar posição do store diretamente (em pixels)
                         return {
                           x: storePos.x,
                           y: storePos.y,
                         };
                       }
+                      // Posição padrão em pixels no espaço base
                       return {
                         x: BASE_BOARD_WIDTH - 150,
                         y: BASE_BOARD_HEIGHT / 2 - 70,
@@ -240,26 +244,14 @@ export const BoardSeparated = (props: BoardViewProps) => {
                     const posX = isNaN(card.position.x) ? 0 : card.position.x;
                     const posY = isNaN(card.position.y) ? 0 : card.position.y;
 
-                    // No modo separated, converter porcentagens para pixels
-                    let displayX, displayY;
-                    if (typeof posX === 'number' && posX <= 100 && posX >= 0) {
-                      // Está em porcentagens (0-100), converter para pixels
-                      displayX = (posX / 100) * BASE_BOARD_WIDTH;
-                      displayY = (posY / 100) * BASE_BOARD_HEIGHT;
-                    } else {
-                      // Está em pixels
-                      displayX = posX;
-                      displayY = posY;
-                    }
-
                     return (
                       <div
                         key={card.id}
                         className={`battlefield-card ${isDragging ? 'dragging' : ''}`}
                         style={{
                           position: 'absolute',
-                          left: `${displayX}px`,
-                          top: `${displayY}px`,
+                          left: `${posX}px`,
+                          top: `${posY}px`,
                           zIndex: isDragging ? 1000 : 1,
                         }}
                       >
@@ -313,6 +305,9 @@ export const BoardSeparated = (props: BoardViewProps) => {
                         dragStateRef.current = null;
                         // setIsDragging é gerenciado no Board.tsx principal
                       }}
+                      viewMode={props.viewMode}
+                      convertMouseToSeparatedCoordinates={props.convertMouseToSeparatedCoordinates}
+                      convertMouseToUnifiedCoordinates={props.convertMouseToUnifiedCoordinates}
                     />
                   )}
                 </div>
