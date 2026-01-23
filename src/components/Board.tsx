@@ -6,11 +6,16 @@ import CardToken from './CardToken';
 import Hand from './Hand';
 import Library from './Library';
 import Cemetery from './Cemetery';
+import { BoardSeparated } from './BoardSeparated';
+import { BoardIndividual } from './BoardIndividual';
+import { BoardUnified } from './BoardUnified';
+import type { BoardViewProps } from './BoardTypes';
+import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT, CARD_WIDTH, CARD_HEIGHT } from './BoardTypes';
 
 type Point = { x: number; y: number };
 
-const CARD_WIDTH = 150;
-const CARD_HEIGHT = 210;
+// Constantes importadas de BoardTypes.ts
+// CARD_WIDTH, CARD_HEIGHT, BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT já estão importados
 const LIBRARY_CARD_WIDTH = 100;
 const LIBRARY_CARD_HEIGHT = 140;
 const THROTTLE_MS = 8; // ~120fps para melhor responsividade durante drag
@@ -464,11 +469,9 @@ const Board = () => {
     });
   }, [board, playerId, moveCard]);
 
-  // Tamanho base do board em 1080p
-  const BASE_BOARD_WIDTH = 1920;
-  const BASE_BOARD_HEIGHT = 1080;
+  // Tamanho base do board em 1080p (importado de BoardTypes.ts)
   
-  // Calcular scale baseado na resolução atual
+  // Calcular scale baseado na resolução atual (para individual/unified)
   const getBoardScale = () => {
     if (!boardRef.current) return 1;
     const rect = boardRef.current.getBoundingClientRect();
@@ -476,6 +479,87 @@ const Board = () => {
     const scaleY = rect.height / BASE_BOARD_HEIGHT;
     // Usar o menor scale para manter proporções e garantir que caiba
     return Math.min(scaleX, scaleY);
+  };
+
+  // Função auxiliar para converter coordenadas do mouse no modo separated
+  const convertMouseToSeparatedCoordinates = (
+    mouseX: number,
+    mouseY: number,
+    playerId: string,
+    rect: DOMRect
+  ): { x: number; y: number } | null => {
+    const windowInfo = getPlayerWindowAtPosition(mouseX, mouseY);
+    if (!windowInfo || windowInfo.player.id !== playerId) {
+      return null;
+    }
+
+    const availableWidth = windowInfo.windowWidth;
+    const availableHeight = windowInfo.windowHeight;
+
+    // Calcular scale e offsets do container escalado (mesmo cálculo do render)
+    const aspectRatio = 16 / 9;
+    const widthBasedHeight = availableWidth / aspectRatio;
+    const heightBasedWidth = availableHeight * aspectRatio;
+
+    let playerAreaWidth, playerAreaHeight, offsetX, offsetY;
+    if (widthBasedHeight <= availableHeight) {
+      playerAreaWidth = availableWidth;
+      playerAreaHeight = widthBasedHeight;
+      offsetX = 0;
+      offsetY = (availableHeight - playerAreaHeight) / 2;
+    } else {
+      playerAreaWidth = heightBasedWidth;
+      playerAreaHeight = availableHeight;
+      offsetX = (availableWidth - playerAreaWidth) / 2;
+      offsetY = 0;
+    }
+
+    // Calcular scale baseado na largura
+    const scale = playerAreaWidth / BASE_BOARD_WIDTH;
+
+    // Converter coordenadas do mouse para o espaço base (1920x1080) considerando scale e offsets
+    const relativeX = mouseX - rect.left;
+    const relativeY = mouseY - rect.top;
+    const localX = relativeX - windowInfo.windowLeft - offsetX;
+    const localY = relativeY - windowInfo.windowTop - offsetY;
+
+    // Converter para coordenadas no espaço base (1920x1080)
+    const baseX = localX / scale;
+    const baseY = localY / scale;
+
+    // Converter para porcentagens relativas à área do player (0-100)
+    const playerArea = getPlayerArea(playerId);
+    if (playerArea) {
+      return {
+        x: (baseX / playerArea.width) * 100,
+        y: (baseY / playerArea.height) * 100,
+      };
+    }
+
+    return { x: baseX, y: baseY };
+  };
+
+  // Função auxiliar para converter coordenadas do mouse no modo individual/unified
+  const convertMouseToUnifiedCoordinates = (
+    mouseX: number,
+    mouseY: number,
+    rect: DOMRect
+  ): { x: number; y: number } => {
+    let cursorX = mouseX - rect.left;
+    let cursorY = mouseY - rect.top;
+
+    // Converter coordenadas do mouse para o espaço base (1920x1080)
+    const scale = getBoardScale();
+    const scaledWidth = BASE_BOARD_WIDTH * scale;
+    const scaledHeight = BASE_BOARD_HEIGHT * scale;
+    const offsetX = (rect.width - scaledWidth) / 2;
+    const offsetY = (rect.height - scaledHeight) / 2;
+
+    // Converter para coordenadas no espaço base
+    cursorX = (cursorX - offsetX) / scale;
+    cursorY = (cursorY - offsetY) / scale;
+
+    return { x: cursorX, y: cursorY };
   };
 
   // Função para encontrar qual player window contém o cursor
@@ -780,86 +864,42 @@ const Board = () => {
       const relativeMouseX = cursorX;
       const relativeMouseY = cursorY;
       
-      // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
-      if (viewMode === 'separated') {
-        const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
-        if (!windowInfo || windowInfo.player.id !== card.ownerId) {
-          // Se não está na janela do player correto, limitar aos limites da área
-          const playerArea = getPlayerArea(card.ownerId);
-          if (playerArea) {
-            const x = card.position.x;
-            const y = card.position.y;
-            const clampedX = Math.max(
-              playerArea.x,
-              Math.min(playerArea.x + playerArea.width - CARD_WIDTH, x)
-            );
-            const clampedY = Math.max(
-              playerArea.y,
-              Math.min(playerArea.y + playerArea.height - CARD_HEIGHT, y)
-            );
-            if (dragState.hasMoved) {
-              moveCard(dragState.cardId, { x: clampedX, y: clampedY });
-            }
-          }
-          return;
-        }
-        
-        const availableWidth = windowInfo.windowWidth;
-        const availableHeight = windowInfo.windowHeight; // Sem header
-        
-        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
-        const relativeX = event.clientX - rect.left;
-        const relativeY = event.clientY - rect.top;
-        const localX = relativeX - windowInfo.windowLeft;
-        const localY = relativeY - windowInfo.windowTop;
-        
-        cursorX = localX;
-        cursorY = localY;
-        
-        // Log: mouse no board (separated mode)
-        console.log('[Board] Mouse coordinates:', {
-          realMouse: { x: realMouseX, y: realMouseY },
-          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
-          inBoardSpace: { x: cursorX, y: cursorY },
-          windowInfo: {
-            windowLeft: windowInfo.windowLeft,
-            windowTop: windowInfo.windowTop,
-            windowWidth: windowInfo.windowWidth,
-            windowHeight: windowInfo.windowHeight,
-            playerId: windowInfo.player.id,
-          },
-          availableSize: { width: availableWidth, height: availableHeight },
-        });
-      } else {
-        // Converter coordenadas do mouse para o espaço base (1920x1080)
-        const scale = getBoardScale();
-        const scaledWidth = BASE_BOARD_WIDTH * scale;
-        const scaledHeight = BASE_BOARD_HEIGHT * scale;
-        const offsetX = (rect.width - scaledWidth) / 2;
-        const offsetY = (rect.height - scaledHeight) / 2;
-        
-        // Converter para coordenadas no espaço base
-        cursorX = (cursorX - offsetX) / scale;
-        cursorY = (cursorY - offsetY) / scale;
-        
-        // Log: mouse no board (normal mode)
-        console.log('[Board] Mouse coordinates:', {
-          realMouse: { x: realMouseX, y: realMouseY },
-          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
-          inBoardSpace: { x: cursorX, y: cursorY },
-          scale,
-          offset: { x: offsetX, y: offsetY },
-        });
+    // Converter coordenadas do mouse baseado no modo
+    if (viewMode === 'separated') {
+      // Modo separated: usar função auxiliar específica
+      const coords = convertMouseToSeparatedCoordinates(
+        event.clientX,
+        event.clientY,
+        card.ownerId,
+        rect
+      );
+      if (!coords) {
+        // Se não está na janela do player correto, manter posição atual (em porcentagens)
+        return;
       }
+      cursorX = coords.x;
+      cursorY = coords.y;
+    } else {
+      // Modo individual/unified: usar função auxiliar específica
+      const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+      cursorX = coords.x;
+      cursorY = coords.y;
+    }
       
-      const x = cursorX - dragState.offsetX;
-      const y = cursorY - dragState.offsetY;
+    const x = cursorX - dragState.offsetX;
+    const y = cursorY - dragState.offsetY;
 
-      // Clamp dentro da área do player - se estiver fora, limitar aos limites
+    // Clamp dentro da área do player
+    let clampedX = x;
+    let clampedY = y;
+
+    if (viewMode === 'separated') {
+      // No modo separated, trabalhar com porcentagens (0-100)
+      clampedX = Math.max(0, Math.min(100, x));
+      clampedY = Math.max(0, Math.min(100, y));
+    } else {
+      // No modo normal, trabalhar com pixels
       const playerArea = getPlayerArea(card.ownerId);
-      let clampedX = x;
-      let clampedY = y;
-
       if (playerArea) {
         clampedX = Math.max(
           playerArea.x,
@@ -873,19 +913,20 @@ const Board = () => {
         clampedX = Math.max(0, Math.min(rect.width - CARD_WIDTH, x));
         clampedY = Math.max(0, Math.min(rect.height - CARD_HEIGHT, y));
       }
+    }
 
-      // Mover a carta apenas se realmente moveu
-      if (dragState.hasMoved) {
-        const currentBoard = useGameStore.getState().board;
-        const card = currentBoard.find((c) => c.id === dragState.cardId);
-        if (card) {
-          addEventLog('MOVE_CARD', `Movendo carta: ${card.name}`, card.id, card.name, {
-            from: card.position,
-            to: { x: clampedX, y: clampedY },
-          });
-        }
-        moveCard(dragState.cardId, { x: clampedX, y: clampedY });
+    // Mover a carta apenas se realmente moveu
+    if (dragState.hasMoved) {
+      const currentBoard = useGameStore.getState().board;
+      const card = currentBoard.find((c) => c.id === dragState.cardId);
+      if (card) {
+        addEventLog('MOVE_CARD', `Movendo carta: ${card.name}`, card.id, card.name, {
+          from: card.position,
+          to: { x: clampedX, y: clampedY },
+        });
       }
+      moveCard(dragState.cardId, { x: clampedX, y: clampedY });
+    }
     };
 
     const handleUp = (event: PointerEvent) => {
@@ -1143,39 +1184,32 @@ const Board = () => {
     let cursorX = event.clientX - rect.left;
     let cursorY = event.clientY - rect.top;
     
-    // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+    // Converter coordenadas do mouse baseado no modo
     if (viewMode === 'separated') {
-      const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
-      if (!windowInfo || windowInfo.player.id !== currentCard.ownerId) {
-        // Se não está na janela do player correto, usar posição atual da carta
+      // Modo separated: usar função auxiliar específica
+      const coords = convertMouseToSeparatedCoordinates(
+        event.clientX,
+        event.clientY,
+        currentCard.ownerId,
+        rect
+      );
+      if (!coords) {
+        // Se não está na janela do player correto, usar posição atual da carta (já em porcentagens)
         cursorX = cardX;
         cursorY = cardY;
       } else {
-        const availableWidth = windowInfo.windowWidth;
-        const availableHeight = windowInfo.windowHeight; // Sem header
-        
-        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
-        const relativeX = event.clientX - rect.left;
-        const relativeY = event.clientY - rect.top;
-        const localX = relativeX - windowInfo.windowLeft;
-        const localY = relativeY - windowInfo.windowTop;
-        
-        cursorX = localX;
-        cursorY = localY;
+        cursorX = coords.x;
+        cursorY = coords.y;
       }
     } else {
-      // Converter coordenadas do mouse para o espaço base (1920x1080)
-      const scale = getBoardScale();
-      const scaledWidth = BASE_BOARD_WIDTH * scale;
-      const scaledHeight = BASE_BOARD_HEIGHT * scale;
-      const offsetX = (rect.width - scaledWidth) / 2;
-      const offsetY = (rect.height - scaledHeight) / 2;
-      
-      // Converter para coordenadas no espaço base
-      cursorX = (cursorX - offsetX) / scale;
-      cursorY = (cursorY - offsetY) / scale;
+      // Modo individual/unified: usar função auxiliar específica
+      const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+      cursorX = coords.x;
+      cursorY = coords.y;
     }
     
+    // No modo separated, cardX e cardY estão em porcentagens, então o offset também será
+    // No modo normal, estão em pixels
     const offsetX = cursorX - cardX;
     const offsetY = cursorY - cardY;
 
@@ -1504,40 +1538,29 @@ const Board = () => {
     const libraryPos = getLibraryPosition(targetPlayerId);
     if (!libraryPos) return;
 
-    let cursorX = event.clientX - rect.left;
-    let cursorY = event.clientY - rect.top;
-    
-    // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+    // Converter coordenadas do mouse baseado no modo
+    let cursorX, cursorY;
     if (viewMode === 'separated') {
-      const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
-      if (!windowInfo || windowInfo.player.id !== targetPlayerId) {
+      // Modo separated: usar função auxiliar específica
+      const coords = convertMouseToSeparatedCoordinates(
+        event.clientX,
+        event.clientY,
+        targetPlayerId,
+        rect
+      );
+      if (!coords) {
         // Se não está na janela do player correto, usar posição atual da library
         cursorX = libraryPos.x;
         cursorY = libraryPos.y;
       } else {
-        const availableWidth = windowInfo.windowWidth;
-        const availableHeight = windowInfo.windowHeight; // Sem header
-        
-        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
-        const relativeX = event.clientX - rect.left;
-        const relativeY = event.clientY - rect.top;
-        const localX = relativeX - windowInfo.windowLeft;
-        const localY = relativeY - windowInfo.windowTop;
-        
-        cursorX = localX;
-        cursorY = localY;
+        cursorX = coords.x;
+        cursorY = coords.y;
       }
     } else {
-      // Converter coordenadas do mouse para o espaço base (1920x1080)
-      const scale = getBoardScale();
-      const scaledWidth = BASE_BOARD_WIDTH * scale;
-      const scaledHeight = BASE_BOARD_HEIGHT * scale;
-      const offsetX = (rect.width - scaledWidth) / 2;
-      const offsetY = (rect.height - scaledHeight) / 2;
-      
-      // Converter para coordenadas no espaço base
-      cursorX = (cursorX - offsetX) / scale;
-      cursorY = (cursorY - offsetY) / scale;
+      // Modo individual/unified: usar função auxiliar específica
+      const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+      cursorX = coords.x;
+      cursorY = coords.y;
     }
 
     const offsetX = cursorX - libraryPos.x;
@@ -1587,85 +1610,26 @@ const Board = () => {
       const relativeMouseX = cursorX;
       const relativeMouseY = cursorY;
       
-      // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+      // Converter coordenadas do mouse baseado no modo
       if (viewMode === 'separated') {
-        const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
-        if (!windowInfo || windowInfo.player.id !== draggingLibrary.playerId) {
-          // Se não está na janela do player correto, limitar aos limites da área
-          const playerArea = getPlayerArea(draggingLibrary.playerId);
-          if (playerArea) {
-            const libraryPos = getLibraryPosition(draggingLibrary.playerId);
-            if (libraryPos) {
-              const x = libraryPos.x;
-              const y = libraryPos.y;
-              const clampedX = Math.max(
-                playerArea.x,
-                Math.min(playerArea.x + playerArea.width - LIBRARY_CARD_WIDTH, x)
-              );
-              const clampedY = Math.max(
-                playerArea.y,
-                Math.min(playerArea.y + playerArea.height - LIBRARY_CARD_HEIGHT, y)
-              );
-              const relativePosition = {
-                x: clampedX - playerArea.x,
-                y: clampedY - playerArea.y,
-              };
-              setLibraryPositions((prev) => ({
-                ...prev,
-                [draggingLibrary.playerId]: relativePosition,
-              }));
-              moveLibrary(draggingLibrary.playerId, relativePosition, { x: clampedX, y: clampedY });
-            }
-          }
+        // Modo separated: usar função auxiliar específica
+        const coords = convertMouseToSeparatedCoordinates(
+          event.clientX,
+          event.clientY,
+          draggingLibrary.playerId,
+          rect
+        );
+        if (!coords) {
+          // Se não está na janela do player correto, manter posição atual
           return;
         }
-        
-        const availableWidth = windowInfo.windowWidth;
-        const availableHeight = windowInfo.windowHeight; // Sem header
-        
-        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
-        const relativeX = event.clientX - rect.left;
-        const relativeY = event.clientY - rect.top;
-        const localX = relativeX - windowInfo.windowLeft;
-        const localY = relativeY - windowInfo.windowTop;
-        
-        cursorX = localX;
-        cursorY = localY;
-        
-        // Log: mouse no board (separated mode)
-        console.log('[Board] Library drag - Mouse coordinates:', {
-          realMouse: { x: realMouseX, y: realMouseY },
-          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
-          inBoardSpace: { x: cursorX, y: cursorY },
-          windowInfo: {
-            windowLeft: windowInfo.windowLeft,
-            windowTop: windowInfo.windowTop,
-            windowWidth: windowInfo.windowWidth,
-            windowHeight: windowInfo.windowHeight,
-            playerId: windowInfo.player.id,
-          },
-          availableSize: { width: availableWidth, height: availableHeight },
-        });
+        cursorX = coords.x;
+        cursorY = coords.y;
       } else {
-        // Converter coordenadas do mouse para o espaço base (1920x1080)
-        const scale = getBoardScale();
-        const scaledWidth = BASE_BOARD_WIDTH * scale;
-        const scaledHeight = BASE_BOARD_HEIGHT * scale;
-        const offsetX = (rect.width - scaledWidth) / 2;
-        const offsetY = (rect.height - scaledHeight) / 2;
-        
-        // Converter para coordenadas no espaço base
-        cursorX = (cursorX - offsetX) / scale;
-        cursorY = (cursorY - offsetY) / scale;
-        
-        // Log: mouse no board (normal mode)
-        console.log('[Board] Library drag - Mouse coordinates:', {
-          realMouse: { x: realMouseX, y: realMouseY },
-          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
-          inBoardSpace: { x: cursorX, y: cursorY },
-          scale,
-          offset: { x: offsetX, y: offsetY },
-        });
+        // Modo individual/unified: usar função auxiliar específica
+        const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+        cursorX = coords.x;
+        cursorY = coords.y;
       }
       
       const x = cursorX - draggingLibrary.offsetX;
@@ -1787,40 +1751,29 @@ const Board = () => {
       };
     }
 
-    let cursorX = event.clientX - rect.left;
-    let cursorY = event.clientY - rect.top;
-    
-    // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+    // Converter coordenadas do mouse baseado no modo
+    let cursorX, cursorY;
     if (viewMode === 'separated') {
-      const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
-      if (!windowInfo || windowInfo.player.id !== targetPlayerId) {
+      // Modo separated: usar função auxiliar específica
+      const coords = convertMouseToSeparatedCoordinates(
+        event.clientX,
+        event.clientY,
+        targetPlayerId,
+        rect
+      );
+      if (!coords) {
         // Se não está na janela do player correto, usar posição atual do cemetery
         cursorX = cemeteryPos.x;
         cursorY = cemeteryPos.y;
       } else {
-        const availableWidth = windowInfo.windowWidth;
-        const availableHeight = windowInfo.windowHeight; // Sem header
-        
-        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
-        const relativeX = event.clientX - rect.left;
-        const relativeY = event.clientY - rect.top;
-        const localX = relativeX - windowInfo.windowLeft;
-        const localY = relativeY - windowInfo.windowTop;
-        
-        cursorX = localX;
-        cursorY = localY;
+        cursorX = coords.x;
+        cursorY = coords.y;
       }
     } else {
-      // Converter coordenadas do mouse para o espaço base (1920x1080)
-      const scale = getBoardScale();
-      const scaledWidth = BASE_BOARD_WIDTH * scale;
-      const scaledHeight = BASE_BOARD_HEIGHT * scale;
-      const offsetX = (rect.width - scaledWidth) / 2;
-      const offsetY = (rect.height - scaledHeight) / 2;
-      
-      // Converter para coordenadas no espaço base
-      cursorX = (cursorX - offsetX) / scale;
-      cursorY = (cursorY - offsetY) / scale;
+      // Modo individual/unified: usar função auxiliar específica
+      const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+      cursorX = coords.x;
+      cursorY = coords.y;
     }
 
     const offsetX = cursorX - cemeteryPos.x;
@@ -1868,83 +1821,26 @@ const Board = () => {
       const relativeMouseX = cursorX;
       const relativeMouseY = cursorY;
       
-      // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+      // Converter coordenadas do mouse baseado no modo
       if (viewMode === 'separated') {
-        const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
-        if (!windowInfo || windowInfo.player.id !== draggingCemetery.playerId) {
-          // Se não está na janela do player correto, limitar aos limites da área
-          const CEMETERY_CARD_WIDTH = 100;
-          const CEMETERY_CARD_HEIGHT = 140;
-          const playerArea = getPlayerArea(draggingCemetery.playerId);
-          if (playerArea) {
-            const cemeteryPos = getCemeteryPosition(draggingCemetery.playerId);
-            if (cemeteryPos) {
-              const x = cemeteryPos.x;
-              const y = cemeteryPos.y;
-              const clampedX = Math.max(
-                playerArea.x,
-                Math.min(playerArea.x + playerArea.width - CEMETERY_CARD_WIDTH, x)
-              );
-              const clampedY = Math.max(
-                playerArea.y,
-                Math.min(playerArea.y + playerArea.height - CEMETERY_CARD_HEIGHT, y)
-              );
-              setCemeteryPositions((prev) => ({
-                ...prev,
-                [draggingCemetery.playerId]: { x: clampedX, y: clampedY },
-              }));
-              moveCemetery(draggingCemetery.playerId, { x: clampedX, y: clampedY });
-            }
-          }
+        // Modo separated: usar função auxiliar específica
+        const coords = convertMouseToSeparatedCoordinates(
+          event.clientX,
+          event.clientY,
+          draggingCemetery.playerId,
+          rect
+        );
+        if (!coords) {
+          // Se não está na janela do player correto, manter posição atual
           return;
         }
-        
-        const availableWidth = windowInfo.windowWidth;
-        const availableHeight = windowInfo.windowHeight; // Sem header
-        
-        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
-        const relativeX = event.clientX - rect.left;
-        const relativeY = event.clientY - rect.top;
-        const localX = relativeX - windowInfo.windowLeft;
-        const localY = relativeY - windowInfo.windowTop;
-        
-        cursorX = localX;
-        cursorY = localY;
-        
-        // Log: mouse no board (separated mode)
-        console.log('[Board] Cemetery drag - Mouse coordinates:', {
-          realMouse: { x: realMouseX, y: realMouseY },
-          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
-          inBoardSpace: { x: cursorX, y: cursorY },
-          windowInfo: {
-            windowLeft: windowInfo.windowLeft,
-            windowTop: windowInfo.windowTop,
-            windowWidth: windowInfo.windowWidth,
-            windowHeight: windowInfo.windowHeight,
-            playerId: windowInfo.player.id,
-          },
-          availableSize: { width: availableWidth, height: availableHeight },
-        });
+        cursorX = coords.x;
+        cursorY = coords.y;
       } else {
-        // Converter coordenadas do mouse para o espaço base (1920x1080)
-        const scale = getBoardScale();
-        const scaledWidth = BASE_BOARD_WIDTH * scale;
-        const scaledHeight = BASE_BOARD_HEIGHT * scale;
-        const offsetX = (rect.width - scaledWidth) / 2;
-        const offsetY = (rect.height - scaledHeight) / 2;
-        
-        // Converter para coordenadas no espaço base
-        cursorX = (cursorX - offsetX) / scale;
-        cursorY = (cursorY - offsetY) / scale;
-        
-        // Log: mouse no board (normal mode)
-        console.log('[Board] Cemetery drag - Mouse coordinates:', {
-          realMouse: { x: realMouseX, y: realMouseY },
-          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
-          inBoardSpace: { x: cursorX, y: cursorY },
-          scale,
-          offset: { x: offsetX, y: offsetY },
-        });
+        // Modo individual/unified: usar função auxiliar específica
+        const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+        cursorX = coords.x;
+        cursorY = coords.y;
       }
       
       const x = cursorX - draggingCemetery.offsetX;
@@ -2019,602 +1915,44 @@ const Board = () => {
 
   // Função para renderizar o conteúdo do board baseado no modo de visualização
   const renderBoardContent = () => {
+    const boardViewProps: BoardViewProps = {
+      boardRef,
+      board,
+      allPlayers,
+      playerId,
+      battlefieldCards,
+      libraryCards,
+      cemeteryCards,
+      storeLibraryPositions,
+      storeCemeteryPositions,
+      showHand,
+      dragStateRef,
+      draggingLibrary,
+      draggingCemetery,
+      ownerName,
+      handleCardClick,
+      handleCardContextMenu,
+      startDrag,
+      startLibraryDrag,
+      startCemeteryDrag,
+      changeCardZone,
+      detectZoneAtPosition,
+      reorderHandCard,
+      dragStartedFromHandRef,
+      handCardPlacedRef,
+      setContextMenu,
+      setLastTouchedCard,
+      getPlayerArea,
+      getLibraryPosition,
+      getCemeteryPosition,
+    };
+
     if (viewMode === 'individual') {
-      // Modo individual: mostrar apenas o player selecionado, centralizado
-      const selectedPlayer = allPlayers[selectedPlayerIndex];
-      if (!selectedPlayer) return null;
-      
-      const selectedPlayerId = selectedPlayer.id;
-      const filteredPlayers = [selectedPlayer];
-      // Nota: Para players simulados, não há cartas, então filteredBattlefieldCards, etc. estarão vazios
-      const filteredBattlefieldCards = battlefieldCards.filter(c => c.ownerId === selectedPlayerId);
-      const filteredLibraryCards = libraryCards.filter(c => c.ownerId === selectedPlayerId);
-      const filteredCemeteryCards = cemeteryCards.filter(c => c.ownerId === selectedPlayerId);
-      
-      // No modo individual, usar o espaço base completo (1920x1080)
-      // O container já está escalado, então usamos coordenadas no espaço base
-      return (
-        <>
-          {/* Player area - ocupar todo o espaço base */}
-          <div
-            className={`player-area ${selectedPlayerId === playerId ? 'current-player' : ''}`}
-            style={{
-              left: '0px',
-              top: '0px',
-              width: `${BASE_BOARD_WIDTH}px`,
-              height: `${BASE_BOARD_HEIGHT}px`,
-            }}
-          >
-            <div className="player-area-label">{selectedPlayer.name}</div>
-          </div>
-          
-          {/* Library do player selecionado */}
-          <Library
-            boardRef={boardRef}
-            playerId={playerId}
-            libraryCards={filteredLibraryCards}
-            players={filteredPlayers}
-            getPlayerArea={(id) => {
-              if (id === selectedPlayerId) {
-                return {
-                  x: 0,
-                  y: 0,
-                  width: BASE_BOARD_WIDTH,
-                  height: BASE_BOARD_HEIGHT,
-                };
-              }
-              return null;
-            }}
-            getLibraryPosition={getLibraryPosition}
-            ownerName={ownerName}
-            onLibraryContextMenu={(card, e) => {
-              setContextMenu({
-                x: e.clientX,
-                y: e.clientY,
-                card,
-              });
-            }}
-            startLibraryDrag={startLibraryDrag}
-            draggingLibrary={draggingLibrary}
-            startDrag={startDrag}
-          />
-          
-          {/* Cemetery do player selecionado */}
-          <Cemetery
-            boardRef={boardRef}
-            playerId={playerId}
-            cemeteryCards={filteredCemeteryCards}
-            players={filteredPlayers}
-            getCemeteryPosition={getCemeteryPosition}
-            ownerName={ownerName}
-            onCemeteryContextMenu={(card, e) => {
-              setContextMenu({
-                x: e.clientX,
-                y: e.clientY,
-                card,
-              });
-            }}
-            startDrag={startDrag}
-            startCemeteryDrag={startCemeteryDrag}
-            draggingCemetery={draggingCemetery}
-          />
-          
-          {/* Battlefield cards do player selecionado */}
-          {filteredBattlefieldCards.map((card) => {
-            const isDragging = dragStateRef.current?.cardId === card.id;
-            const posX = isNaN(card.position.x) ? 0 : card.position.x;
-            const posY = isNaN(card.position.y) ? 0 : card.position.y;
-            
-            return (
-              <div
-                key={card.id}
-                className={`battlefield-card ${isDragging ? 'dragging' : ''}`}
-                style={{
-                  position: 'absolute',
-                  left: `${posX}px`,
-                  top: `${posY}px`,
-                  zIndex: isDragging ? 1000 : 1,
-                }}
-              >
-                <CardToken
-                  card={card}
-                  onPointerDown={(event) => {
-                    setLastTouchedCard(card);
-                    startDrag(card, event);
-                  }}
-                  onClick={(event) => handleCardClick(card, event)}
-                  onContextMenu={(event) => handleCardContextMenu(card, event)}
-                  ownerName={ownerName(card)}
-                  width={CARD_WIDTH}
-                  height={CARD_HEIGHT}
-                  showBack={false}
-                />
-              </div>
-            );
-          })}
-          
-          {/* Hand do player selecionado (se for o player atual) */}
-          {showHand && selectedPlayerId === playerId && (
-            <Hand
-              boardRef={boardRef}
-              playerId={playerId}
-              board={board}
-              players={filteredPlayers}
-              getPlayerArea={(id) => {
-                if (id === selectedPlayerId) {
-                  return {
-                    x: 0,
-                    y: 0,
-                    width: BASE_BOARD_WIDTH,
-                    height: BASE_BOARD_HEIGHT,
-                  };
-                }
-                return null;
-              }}
-              handleCardClick={handleCardClick}
-              handleCardContextMenu={handleCardContextMenu}
-              startDrag={startDrag}
-              ownerName={ownerName}
-              changeCardZone={changeCardZone}
-              detectZoneAtPosition={detectZoneAtPosition}
-              reorderHandCard={reorderHandCard}
-              dragStartedFromHandRef={dragStartedFromHandRef}
-              handCardPlacedRef={handCardPlacedRef}
-              setDragStartedFromHand={(value: boolean) => {
-                dragStartedFromHandRef.current = value;
-              }}
-              clearBoardDrag={() => {
-                dragStateRef.current = null;
-                setIsDragging(false);
-              }}
-            />
-          )}
-        </>
-      );
+      return <BoardIndividual {...boardViewProps} selectedPlayerIndex={selectedPlayerIndex} />;
     } else if (viewMode === 'separated') {
-      // Modo separated: cada player em uma janela separada
-      if (!boardRef.current) return null;
-      const rect = boardRef.current.getBoundingClientRect();
-      const boardWidth = rect.width;
-      const boardHeight = rect.height;
-      const cols = Math.ceil(Math.sqrt(allPlayers.length));
-      const rows = Math.ceil(allPlayers.length / cols);
-      
-      // Área padrão do player (usada como referência para posicionamento)
-      
-      return (
-        <>
-          {allPlayers.map((player, index) => {
-            const col = index % cols;
-            const row = Math.floor(index / cols);
-            
-            // Calcular porcentagens para posicionamento
-            const leftPercent = (col / cols) * 100;
-            const topPercent = (row / rows) * 100;
-            const widthPercent = 100 / cols;
-            const heightPercent = 100 / rows;
-            
-            // Calcular tamanho real da janela baseado em porcentagens
-            const windowWidth = (boardWidth * widthPercent) / 100;
-            const windowHeight = (boardHeight * heightPercent) / 100;
-            const availableWidth = windowWidth;
-            const availableHeight = windowHeight; // Sem header
-            
-            // Manter proporção 16:9 com área máxima possível
-            const aspectRatio = 16 / 9;
-            
-            // Calcular qual dimensão permite área maior mantendo 16:9
-            const widthBasedHeight = availableWidth / aspectRatio;
-            const heightBasedWidth = availableHeight * aspectRatio;
-            
-            let playerAreaWidth, playerAreaHeight, offsetX, offsetY;
-            
-            if (widthBasedHeight <= availableHeight) {
-              // A largura é limitante - usar 100% da largura
-              playerAreaWidth = availableWidth;
-              playerAreaHeight = widthBasedHeight;
-              offsetX = 0;
-              offsetY = (availableHeight - playerAreaHeight) / 2;
-            } else {
-              // A altura é limitante - usar 100% da altura e calcular largura
-              playerAreaWidth = heightBasedWidth;
-              playerAreaHeight = availableHeight;
-              offsetX = (availableWidth - playerAreaWidth) / 2;
-              offsetY = 0;
-            }
-            
-            // Calcular scale baseado na proporção entre o tamanho real e o tamanho base (1920x1080)
-            const scaleX = playerAreaWidth / BASE_BOARD_WIDTH;
-            const scaleY = playerAreaHeight / BASE_BOARD_HEIGHT;
-            const scale = Math.min(scaleX, scaleY); // Usar o menor para manter proporções
-            
-            const playerBattlefieldCards = battlefieldCards.filter(c => c.ownerId === player.id);
-            const playerLibraryCards = libraryCards.filter(c => c.ownerId === player.id);
-            const playerCemeteryCards = cemeteryCards.filter(c => c.ownerId === player.id);
-            
-            return (
-              <div
-                key={player.id}
-                id={`player-window-${player.id}`}
-                data-player-id={player.id}
-                data-player-index={index}
-                data-player-name={player.name}
-                data-window-position={`col-${col}-row-${row}`}
-                style={{
-                  position: 'absolute',
-                  left: `${leftPercent}%`,
-                  top: `${topPercent}%`,
-                  width: `${widthPercent}%`,
-                  height: `${heightPercent}%`,
-                  border: 'none',
-                  borderRadius: '0px',
-                  backgroundColor: 'transparent',
-                  overflow: 'hidden',
-                  display: 'flex',
-                  flexDirection: 'column',
-                }}
-              >
-                {/* Container para a área do player - usando transform para posicionar */}
-                <div 
-                  id={`player-content-container-${player.id}`}
-                  data-player-id={player.id}
-                  data-element="player-content-container"
-                  style={{ 
-                    position: 'relative',
-                    width: '100%',
-                    flex: 1,
-                    minHeight: 0,
-                    overflow: 'visible',
-                  }}
-                >
-                  {/* Área do player - mantendo proporção 16:9 com largura máxima */}
-                  <div 
-                    id={`player-scaled-area-${player.id}`}
-                    data-player-id={player.id}
-                    data-element="player-scaled-area"
-                    data-area-width={playerAreaWidth}
-                    data-area-height={playerAreaHeight}
-                    data-scale={scale}
-                    style={{ 
-                      position: 'absolute',
-                      left: `${offsetX >= 0 ? (offsetX / availableWidth) * 100 : 0}%`,
-                      top: `${offsetY >= 0 ? (offsetY / availableHeight) * 100 : 0}%`,
-                      width: `${(playerAreaWidth / availableWidth) * 100}%`,
-                      height: `${(playerAreaHeight / availableHeight) * 100}%`,
-                      overflow: 'visible',
-                    }}
-                  >
-                  {/* Container escalado para cartas e elementos */}
-                  <div
-                    style={{
-                      position: 'absolute',
-                      left: '0',
-                      top: '0',
-                      width: `${BASE_BOARD_WIDTH}px`,
-                      height: `${BASE_BOARD_HEIGHT}px`,
-                      transform: `scale(${scale})`,
-                      transformOrigin: 'top left',
-                      overflow: 'visible',
-                    }}
-                  >
-                  {/* Player area - ocupando 100% da área base */}
-                  <div
-                    id={`player-area-${player.id}`}
-                    data-player-id={player.id}
-                    data-element="player-area"
-                    className={`player-area ${player.id === playerId ? 'current-player' : ''}`}
-                    style={{
-                      position: 'absolute',
-                      left: '0px',
-                      top: '0px',
-                      width: `${BASE_BOARD_WIDTH}px`,
-                      height: `${BASE_BOARD_HEIGHT}px`,
-                    }}
-                  >
-                    <div className="player-area-label">{player.name}</div>
-                  </div>
-                  
-                  {/* Library */}
-                  <Library
-                    boardRef={boardRef}
-                    playerId={playerId}
-                    libraryCards={playerLibraryCards}
-                    players={[player]}
-                    getPlayerArea={(id) => {
-                      if (id === player.id) {
-                        // Retornar tamanho base (1920x1080) já que o scale é aplicado no container
-                        return {
-                          x: 0,
-                          y: 0,
-                          width: BASE_BOARD_WIDTH,
-                          height: BASE_BOARD_HEIGHT,
-                        };
-                      }
-                      return null;
-                    }}
-                    getLibraryPosition={(id) => {
-                      // No modo separated, só mostrar a library do player atual desta janela
-                      if (id !== player.id) {
-                        return null;
-                      }
-                      // No modo separated, usar a posição real do store
-                      // A posição no store é relativa à área do player no espaço padrão
-                      const storePos = storeLibraryPositions[id];
-                      if (storePos) {
-                        // Usar posição do store diretamente (já está no espaço padrão)
-                        return {
-                          x: storePos.x,
-                          y: storePos.y,
-                        };
-                      }
-                      // Posição padrão - usar tamanho base (1920x1080) já que o scale é aplicado
-                      return {
-                        x: 50, // 50px da esquerda
-                        y: BASE_BOARD_HEIGHT / 2 - 70, // Centro vertical menos metade da altura da carta
-                      };
-                    }}
-                    ownerName={ownerName}
-                    onLibraryContextMenu={(card, e) => {
-                      setContextMenu({
-                        x: e.clientX,
-                        y: e.clientY,
-                        card,
-                      });
-                    }}
-                    startLibraryDrag={startLibraryDrag}
-                    draggingLibrary={draggingLibrary}
-                    startDrag={startDrag}
-                  />
-                  
-                  {/* Cemetery */}
-                  <Cemetery
-                    boardRef={boardRef}
-                    playerId={playerId}
-                    cemeteryCards={playerCemeteryCards}
-                    players={[player]}
-                    getCemeteryPosition={(id) => {
-                      // No modo separated, só mostrar o cemitério do player atual desta janela
-                      if (id !== player.id) {
-                        return null;
-                      }
-                      // No modo separated, usar a posição real do store
-                      // A posição no store é relativa à área do player no espaço padrão
-                      // Converter para o espaço da área escalada
-                      const storePos = storeCemeteryPositions[id];
-                      if (storePos) {
-                        // Usar posição do store diretamente (já está no espaço padrão)
-                        return {
-                          x: storePos.x,
-                          y: storePos.y,
-                        };
-                      }
-                      // Posição padrão - usar tamanho base (1920x1080) já que o scale é aplicado
-                      return {
-                        x: BASE_BOARD_WIDTH - 150, // 150px da direita
-                        y: BASE_BOARD_HEIGHT / 2 - 70, // Centro vertical menos metade da altura da carta
-                      };
-                    }}
-                    ownerName={ownerName}
-                    onCemeteryContextMenu={(card, e) => {
-                      setContextMenu({
-                        x: e.clientX,
-                        y: e.clientY,
-                        card,
-                      });
-                    }}
-                    startDrag={startDrag}
-                    startCemeteryDrag={startCemeteryDrag}
-                    draggingCemetery={draggingCemetery}
-                  />
-                  
-                  {/* Battlefield cards - mostrar todas as cartas do player */}
-                  {playerBattlefieldCards.map((card) => {
-                    const isDragging = dragStateRef.current?.cardId === card.id;
-                    const posX = isNaN(card.position.x) ? 0 : card.position.x;
-                    const posY = isNaN(card.position.y) ? 0 : card.position.y;
-                    
-                    // No modo separated, as cartas estão em coordenadas absolutas do board
-                    // Mostrar todas as cartas do player, mesmo que estejam fora do espaço padrão
-                    // O scale vai ajustar automaticamente
-                    
-                    return (
-                      <div
-                        key={card.id}
-                        className={`battlefield-card ${isDragging ? 'dragging' : ''}`}
-                        style={{
-                          position: 'absolute',
-                          left: `${posX}px`,
-                          top: `${posY}px`,
-                          zIndex: isDragging ? 1000 : 1,
-                        }}
-                      >
-                        <CardToken
-                          card={card}
-                          onPointerDown={(event) => {
-                            setLastTouchedCard(card);
-                            startDrag(card, event);
-                          }}
-                          onClick={(event) => handleCardClick(card, event)}
-                          onContextMenu={(event) => handleCardContextMenu(card, event)}
-                          ownerName={ownerName(card)}
-                          width={CARD_WIDTH}
-                          height={CARD_HEIGHT}
-                          showBack={false}
-                        />
-                      </div>
-                    );
-                  })}
-                  
-                  {/* Hand (se for o player atual) */}
-                  {showHand && player.id === playerId && (
-                    <Hand
-                      boardRef={boardRef}
-                      playerId={playerId}
-                      board={board}
-                      players={[player]}
-                      getPlayerArea={(id) => {
-                        if (id === player.id) {
-                          // Retornar tamanho base (1920x1080) já que o scale é aplicado no container
-                          return {
-                            x: 0,
-                            y: 0,
-                            width: BASE_BOARD_WIDTH,
-                            height: BASE_BOARD_HEIGHT,
-                          };
-                        }
-                        return null;
-                      }}
-                      handleCardClick={handleCardClick}
-                      handleCardContextMenu={handleCardContextMenu}
-                      startDrag={startDrag}
-                      ownerName={ownerName}
-                      changeCardZone={changeCardZone}
-                      detectZoneAtPosition={detectZoneAtPosition}
-                      reorderHandCard={reorderHandCard}
-                      dragStartedFromHandRef={dragStartedFromHandRef}
-                      handCardPlacedRef={handCardPlacedRef}
-                      setDragStartedFromHand={(value: boolean) => {
-                        dragStartedFromHandRef.current = value;
-                      }}
-                      clearBoardDrag={() => {
-                        dragStateRef.current = null;
-                        setIsDragging(false);
-                      }}
-                    />
-                  )}
-                  </div>
-                  </div>
-                </div>
-              </div>
-            );
-          })}
-        </>
-      );
+      return <BoardSeparated {...boardViewProps} />;
     } else {
-      // Modo unified: renderizar tudo como está (padrão)
-      return (
-        <>
-          {allPlayers.length > 0 && allPlayers.map((player) => {
-            const area = getPlayerArea(player.id);
-            if (!area) return null;
-            const isCurrentPlayer = player.id === playerId;
-            
-            return (
-              <div key={player.id}>
-                <div
-                  className={`player-area ${isCurrentPlayer ? 'current-player' : ''}`}
-                  style={{
-                    left: `${area.x}px`,
-                    top: `${area.y}px`,
-                    width: `${area.width}px`,
-                    height: `${area.height}px`,
-                  }}
-                >
-                  <div className="player-area-label">{player.name}</div>
-                </div>
-              </div>
-            );
-          })}
-          
-          <Library
-            boardRef={boardRef}
-            playerId={playerId}
-            libraryCards={libraryCards}
-            players={players}
-            getPlayerArea={getPlayerArea}
-            getLibraryPosition={getLibraryPosition}
-            ownerName={ownerName}
-            onLibraryContextMenu={(card, e) => {
-              setContextMenu({
-                x: e.clientX,
-                y: e.clientY,
-                card,
-              });
-            }}
-            startLibraryDrag={startLibraryDrag}
-            draggingLibrary={draggingLibrary}
-            startDrag={startDrag}
-          />
-          
-          <Cemetery
-            boardRef={boardRef}
-            playerId={playerId}
-            cemeteryCards={cemeteryCards}
-            players={players}
-            getCemeteryPosition={getCemeteryPosition}
-            ownerName={ownerName}
-            onCemeteryContextMenu={(card, e) => {
-              setContextMenu({
-                x: e.clientX,
-                y: e.clientY,
-                card,
-              });
-            }}
-            startDrag={startDrag}
-            startCemeteryDrag={startCemeteryDrag}
-            draggingCemetery={draggingCemetery}
-          />
-          
-          {battlefieldCards.map((card) => {
-            const isDragging = dragStateRef.current?.cardId === card.id;
-            const posX = isNaN(card.position.x) ? 0 : card.position.x;
-            const posY = isNaN(card.position.y) ? 0 : card.position.y;
-            
-            return (
-              <div
-                key={card.id}
-                className={`battlefield-card ${isDragging ? 'dragging' : ''}`}
-                style={{
-                  position: 'absolute',
-                  left: `${posX}px`,
-                  top: `${posY}px`,
-                  zIndex: isDragging ? 1000 : 1,
-                }}
-              >
-                <CardToken
-                  card={card}
-                  onPointerDown={(event) => {
-                    setLastTouchedCard(card);
-                    startDrag(card, event);
-                  }}
-                  onClick={(event) => handleCardClick(card, event)}
-                  onContextMenu={(event) => handleCardContextMenu(card, event)}
-                  ownerName={ownerName(card)}
-                  width={CARD_WIDTH}
-                  height={CARD_HEIGHT}
-                  showBack={false}
-                />
-              </div>
-            );
-          })}
-          
-          {showHand && (
-            <Hand
-              boardRef={boardRef}
-              playerId={playerId}
-              board={board}
-              players={players}
-              getPlayerArea={getPlayerArea}
-              handleCardClick={handleCardClick}
-              handleCardContextMenu={handleCardContextMenu}
-              startDrag={startDrag}
-              ownerName={ownerName}
-              changeCardZone={changeCardZone}
-              detectZoneAtPosition={detectZoneAtPosition}
-              reorderHandCard={reorderHandCard}
-              dragStartedFromHandRef={dragStartedFromHandRef}
-              handCardPlacedRef={handCardPlacedRef}
-              setDragStartedFromHand={(value: boolean) => {
-                dragStartedFromHandRef.current = value;
-              }}
-              clearBoardDrag={() => {
-                dragStateRef.current = null;
-                setIsDragging(false);
-              }}
-            />
-          )}
-        </>
-      );
+      return <BoardUnified {...boardViewProps} />;
     }
   };
 
