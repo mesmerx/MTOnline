@@ -43,16 +43,6 @@ const App = () => {
 
   return (
     <div className="app-shell">
-      <header className="top-bar">
-        <div>
-          <h1>MTOnline</h1>
-          <p className="subtitle">Peer-to-peer Magic rooms with collaborative boards.</p>
-        </div>
-        <div className="status-pill">
-          <span>Status: {status}</span>
-        </div>
-      </header>
-
       {error && <div className="error-banner">{error}</div>}
 
       <main className="board-fullscreen">

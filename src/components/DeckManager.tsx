@@ -2,7 +2,7 @@ import { useState } from 'react';
 import type { FormEvent } from 'react';
 import { parseDecklist } from '../lib/deck';
 import type { DeckEntry } from '../lib/deck';
-import { fetchCardByCollector, fetchCardByName } from '../lib/scryfall';
+import { fetchCardByCollector, fetchCardByName, fetchCardsBatch } from '../lib/scryfall';
 import { useGameStore } from '../store/useGameStore';
 
 const DeckManager = () => {
@@ -248,28 +248,17 @@ const DeckManager = () => {
                     onClick={async () => {
                       setBusyCard('loading deck');
                       try {
-                        // Carregar cada carta única uma vez
-                        const uniqueCards = await Promise.all(
-                          deck.entries.map(async (entry) => {
-                            const card =
-                              entry.setCode && entry.collectorNumber
-                                ? await fetchCardByCollector(entry.setCode, entry.collectorNumber)
-                                : await fetchCardByName(entry.name, entry.setCode);
-                            return {
-                              card: {
-                                name: card.name,
-                                oracleText: card.oracleText,
-                                manaCost: card.manaCost,
-                                typeLine: card.typeLine,
-                                setName: card.setName,
-                                imageUrl: card.imageUrl,
-                              },
-                              quantity: entry.quantity,
-                            };
-                          })
-                        );
+                        // Preparar requisições batch
+                        const batchRequests = deck.entries.map((entry) => ({
+                          name: entry.name,
+                          setCode: entry.setCode,
+                          collectorNumber: entry.collectorNumber,
+                        }));
+
+                        // Buscar todas as cartas de uma vez
+                        const results = await fetchCardsBatch(batchRequests);
                         
-                        // Expandir cada carta pela quantidade
+                        // Processar resultados e expandir pela quantidade
                         const cards: {
                           name: string;
                           oracleText?: string;
@@ -279,9 +268,24 @@ const DeckManager = () => {
                           imageUrl?: string;
                         }[] = [];
                         
-                        for (const { card, quantity } of uniqueCards) {
-                          for (let i = 0; i < quantity; i++) {
-                            cards.push(card);
+                        for (let i = 0; i < results.length; i++) {
+                          const result = results[i];
+                          const entry = deck.entries[i];
+                          
+                          if ('error' in result) {
+                            throw new Error(`Erro ao carregar carta "${entry.name}": ${result.error}`);
+                          }
+                          
+                          // Expandir pela quantidade
+                          for (let j = 0; j < entry.quantity; j++) {
+                            cards.push({
+                              name: result.name,
+                              oracleText: result.oracleText,
+                              manaCost: result.manaCost,
+                              typeLine: result.typeLine,
+                              setName: result.setName,
+                              imageUrl: result.imageUrl,
+                            });
                           }
                         }
                         

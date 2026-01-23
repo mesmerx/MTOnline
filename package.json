@@ -11,6 +11,7 @@
     "peer:server": "node server/peer-server.mjs",
     "turn:server": "node server/turn-server.mjs",
     "dev:all": "concurrently \"pnpm api:server\" \"pnpm peer:server\" \"pnpm turn:server\" \"pnpm dev\"",
+    "download-cards": "node server/download-cards.mjs",
     "test": "vitest run",
     "test:watch": "vitest"
   },

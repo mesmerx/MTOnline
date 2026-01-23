@@ -51,12 +51,39 @@ const Library = ({
         return (
           <div
             key={player.id}
-            className={`library-stack ${isCurrentPlayer ? 'draggable' : ''}`}
             style={{
+              position: 'absolute',
               left: `${libraryPos.x}px`,
-              top: `${libraryPos.y}px`,
-              cursor: isCurrentPlayer ? (draggingLibrary?.playerId === player.id ? 'grabbing' : 'grab') : 'pointer',
+              top: `${libraryPos.y - 20}px`,
             }}
+          >
+            {/* Label com nome do dono */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '0px',
+                left: '0px',
+                fontSize: '11px',
+                fontWeight: 'bold',
+                color: '#fff',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+                zIndex: 100,
+              }}
+            >
+              {player.name} - Deck
+            </div>
+            <div
+              className={`library-stack ${isCurrentPlayer ? 'draggable' : ''}`}
+              style={{
+                position: 'absolute',
+                left: '0px',
+                top: '20px',
+                cursor: isCurrentPlayer ? (draggingLibrary?.playerId === player.id ? 'grabbing' : 'grab') : 'pointer',
+              }}
             onPointerDown={(e) => {
               if (isCurrentPlayer) {
                 // Se for botão direito, não fazer nada (abre menu de contexto)
@@ -113,6 +140,7 @@ const Library = ({
               </div>
             ))}
             <div className="library-count">{sortedLibraryCards.length}</div>
+            </div>
           </div>
         );
       })}

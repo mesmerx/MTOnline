@@ -46,6 +46,7 @@ type CardAction =
   | { kind: 'add'; card: CardOnBoard }
   | { kind: 'move'; id: string; position: Point }
   | { kind: 'moveLibrary'; playerId: string; position: Point }
+  | { kind: 'moveCemetery'; playerId: string; position: Point }
   | { kind: 'toggleTap'; id: string }
   | { kind: 'remove'; id: string }
   | { kind: 'addToLibrary'; card: CardOnBoard }
@@ -56,9 +57,9 @@ type CardAction =
 
 type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string }
-  | { type: 'BOARD_STATE'; board: CardOnBoard[] }
-  | { type: 'ROOM_STATE'; board: CardOnBoard[]; players: PlayerSummary[] }
-  | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; players: PlayerSummary[] }
+  | { type: 'BOARD_STATE'; board: CardOnBoard[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
+  | { type: 'ROOM_STATE'; board: CardOnBoard[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
+  | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
   | { type: 'ERROR'; message: string };
 
 type RoomStatus = 'idle' | 'initializing' | 'waiting' | 'connected' | 'error';
@@ -247,6 +248,8 @@ interface GameStore {
   error?: string;
   board: CardOnBoard[];
   players: PlayerSummary[];
+  cemeteryPositions: Record<string, Point>;
+  libraryPositions: Record<string, Point>;
   savedDecks: SavedDeck[];
   turnConfig: TurnConfig;
   peer?: Peer;
@@ -271,13 +274,15 @@ interface GameStore {
   replaceLibrary: (cards: NewCardPayload[]) => void;
   drawFromLibrary: () => void;
   moveCard: (cardId: string, position: Point) => void;
-  moveLibrary: (playerId: string, position: Point) => void;
+  moveLibrary: (playerId: string, relativePosition: Point, absolutePosition: Point) => void;
+  moveCemetery: (playerId: string, position: Point) => void;
   toggleTap: (cardId: string) => void;
   removeCard: (cardId: string) => void;
   changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   reorderHandCard: (cardId: string, newIndex: number) => void;
   shuffleLibrary: (playerId: string) => void;
   resetBoard: () => void;
+  setPeerEventLogger: (logger: ((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => void) | null) => void;
 }
 
 // Função helper para recalcular posições das cartas na mão
@@ -361,6 +366,59 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
               position: {
                 x: cardCurrentX + offsetX,
                 y: cardCurrentY + offsetY,
+              },
+            };
+          }
+          // Cartas não visíveis mantêm posição (0,0) - não precisam ser atualizadas
+          return card;
+        }
+        return card;
+      });
+    }
+    case 'moveCemetery': {
+      // Atualizar posição do cemitério do player
+      // Apenas as top 5 cartas visíveis precisam ter posição trackeada
+      // As outras cartas não precisam de posição (são apenas dados)
+      const cemeteryCards = board.filter((c) => c.zone === 'cemetery' && c.ownerId === action.playerId);
+      if (cemeteryCards.length === 0) return board;
+      
+      // Ordenar por stackIndex para pegar as top 5 cartas (maiores índices)
+      const sortedCards = [...cemeteryCards].sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
+      const top5Cards = sortedCards.slice(0, 5);
+      const topCard = top5Cards[0];
+      
+      if (!topCard) return board;
+      
+      // Calcular offset baseado na carta do topo
+      // Se a carta do topo não tiver posição (0,0), usar a posição da ação diretamente
+      const currentX = topCard.position.x || 0;
+      const currentY = topCard.position.y || 0;
+      const offsetX = action.position.x - currentX;
+      const offsetY = action.position.y - currentY;
+      
+      // Criar um Set com os IDs das top 5 cartas para lookup rápido
+      const top5CardIds = new Set(top5Cards.map(c => c.id));
+      
+      return board.map((card) => {
+        if (card.zone === 'cemetery' && card.ownerId === action.playerId) {
+          // Apenas atualizar posição das top 5 cartas visíveis
+          if (top5CardIds.has(card.id)) {
+            const cardIndex = top5Cards.findIndex((c) => c.id === card.id);
+            const cardCurrentX = card.position.x || 0;
+            const cardCurrentY = card.position.y || 0;
+            // Se a carta não tinha posição (0,0), usar a posição base + offset do stack
+            const CEMETERY_CARD_WIDTH = 100;
+            const stackOffsetX = cardIndex * 3; // Offset visual do stack
+            const stackOffsetY = cardIndex * 3;
+            return {
+              ...card,
+              position: {
+                x: (cardCurrentX === 0 && cardCurrentY === 0) 
+                  ? action.position.x + stackOffsetX 
+                  : cardCurrentX + offsetX,
+                y: (cardCurrentX === 0 && cardCurrentY === 0) 
+                  ? action.position.y + stackOffsetY 
+                  : cardCurrentY + offsetY,
               },
             };
           }
@@ -611,6 +669,8 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
 };
 
 export const useGameStore = create<GameStore>((set, get) => {
+  let peerEventLogger: ((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => void) | null = null;
+  
   const baseState = () => ({
     status: 'idle' as RoomStatus,
     isHost: false,
@@ -619,6 +679,8 @@ export const useGameStore = create<GameStore>((set, get) => {
     error: undefined,
     board: [] as CardOnBoard[],
     players: [] as PlayerSummary[],
+    cemeteryPositions: {} as Record<string, Point>,
+    libraryPositions: {} as Record<string, Point>,
     connections: {} as Record<string, DataConnection>,
     hostConnection: undefined as DataConnection | undefined,
     peer: undefined as Peer | undefined,
@@ -651,21 +713,58 @@ export const useGameStore = create<GameStore>((set, get) => {
     const state = get();
     if (!state || !state.isHost) return;
     const connections = state.connections;
-    Object.values(connections).forEach((conn) => {
-      if (conn && conn.open) {
-        try {
-          conn.send(message);
-        } catch (error) {
-          debugLog('failed to send message', error);
-        }
+    const peerIds = Object.keys(connections);
+    const openConnections = Object.values(connections).filter(conn => conn && conn.open);
+    
+    openConnections.forEach((conn) => {
+      try {
+        conn.send(message);
+      } catch (error) {
+        debugLog('failed to send message', error);
       }
     });
+    
+    // Log evento
+    if (peerEventLogger && openConnections.length > 0) {
+      const actionKind = (message as any).action?.kind;
+      const details: Record<string, unknown> = {
+        messageType: message.type,
+        targetCount: openConnections.length,
+        peerIds: peerIds,
+      };
+      
+      // Adicionar informações específicas por tipo de mensagem
+      if (message.type === 'BOARD_STATE' && Array.isArray((message as any).board)) {
+        details.boardSize = (message as any).board.length;
+        details.cardsByZone = {
+          battlefield: (message as any).board.filter((c: any) => c.zone === 'battlefield').length,
+          hand: (message as any).board.filter((c: any) => c.zone === 'hand').length,
+          library: (message as any).board.filter((c: any) => c.zone === 'library').length,
+          cemetery: (message as any).board.filter((c: any) => c.zone === 'cemetery').length,
+        };
+      } else if (message.type === 'ROOM_STATE') {
+        if (Array.isArray((message as any).board)) {
+          details.boardSize = (message as any).board.length;
+        }
+        if (Array.isArray((message as any).players)) {
+          details.playersCount = (message as any).players.length;
+          details.playerNames = (message as any).players.map((p: any) => p.name);
+        }
+      }
+      
+      peerEventLogger('SENT', 'TO_PEERS', message.type, actionKind, `${openConnections.length} peer(s)`, details);
+    }
   };
 
   const pushBoardState = () => {
     const state = get();
     if (!state) return;
-    broadcastToPeers({ type: 'BOARD_STATE', board: state.board });
+    broadcastToPeers({ 
+      type: 'BOARD_STATE', 
+      board: state.board,
+      cemeteryPositions: state.cemeteryPositions,
+      libraryPositions: state.libraryPositions,
+    });
     // Salvar sessão quando o board mudar
     if (state.roomId) {
       saveSession(state);
@@ -685,14 +784,36 @@ export const useGameStore = create<GameStore>((set, get) => {
   const handleHostAction = (action: CardAction) => {
     set((state) => {
       if (!state) return state;
+      
+      // Atualizar posições se for moveLibrary ou moveCemetery
+      let newCemeteryPositions = state.cemeteryPositions;
+      let newLibraryPositions = state.libraryPositions;
+      
+      if (action.kind === 'moveCemetery' && 'playerId' in action && 'position' in action) {
+        console.log('[Store] handleHostAction moveCemetery', { playerId: action.playerId, position: action.position });
+        newCemeteryPositions = {
+          ...state.cemeteryPositions,
+          [action.playerId]: action.position,
+        };
+      } else if (action.kind === 'moveLibrary' && 'playerId' in action && 'position' in action) {
+        // Para library, a posição vem absoluta, mas precisamos armazenar relativa
+        // Por enquanto, vamos armazenar a absoluta e calcular a relativa no Board
+        newLibraryPositions = {
+          ...state.libraryPositions,
+          [action.playerId]: action.position,
+        };
+      }
+      
       return {
         board: applyCardAction(state.board, action),
+        cemeteryPositions: newCemeteryPositions,
+        libraryPositions: newLibraryPositions,
       };
     });
     pushBoardState();
   };
 
-  const registerHostConn = (conn: DataConnection, playerId: string, playerName: string) => {
+    const registerHostConn = (conn: DataConnection, playerId: string, playerName: string) => {
     conn.on('data', (raw: unknown) => {
       // Ignorar mensagens que não são objetos ou não têm tipo válido
       if (!raw || typeof raw !== 'object') return;
@@ -701,7 +822,47 @@ export const useGameStore = create<GameStore>((set, get) => {
       // Filtrar apenas mensagens válidas do jogo
       if (message?.type === 'REQUEST_ACTION' && message.action && message.actorId) {
         debugLog('host received action', message.actorId, message.action.kind);
+        
+        // Log evento
+        if (peerEventLogger) {
+          const details: Record<string, unknown> = {
+            actionKind: message.action.kind,
+            actorId: message.actorId,
+            playerName,
+          };
+          
+          // Adicionar detalhes específicos por tipo de ação
+          if ('id' in message.action) {
+            details.cardId = (message.action as any).id;
+          }
+          if ('position' in message.action) {
+            details.position = (message.action as any).position;
+          }
+          if ('zone' in message.action) {
+            details.zone = (message.action as any).zone;
+          }
+          if ('playerId' in message.action) {
+            details.targetPlayerId = (message.action as any).playerId;
+          }
+          if ('cards' in message.action) {
+            details.cardsCount = Array.isArray((message.action as any).cards) ? (message.action as any).cards.length : 0;
+          }
+          if ('card' in message.action) {
+            details.cardName = (message.action as any).card?.name;
+          }
+          
+          peerEventLogger('RECEIVED', 'FROM_PEER', 'REQUEST_ACTION', message.action.kind, playerId, details);
+        }
+        
         handleHostAction(message.action);
+      } else if (message?.type) {
+        // Log outros tipos de mensagens recebidas
+        if (peerEventLogger) {
+          peerEventLogger('RECEIVED', 'FROM_PEER', message.type, undefined, playerId, {
+            messageType: message.type,
+            playerName,
+          });
+        }
       }
     });
 
@@ -746,7 +907,9 @@ export const useGameStore = create<GameStore>((set, get) => {
         conn.send({ 
           type: 'ROOM_STATE', 
           board: currentState.board, 
-          players: currentState.players 
+          players: currentState.players,
+          cemeteryPositions: currentState.cemeteryPositions,
+          libraryPositions: currentState.libraryPositions,
         });
         debugLog('host registered connection', playerId, playerName);
         pushRoomState();
@@ -775,6 +938,37 @@ export const useGameStore = create<GameStore>((set, get) => {
       }
       
       debugLog('client received', message.type);
+      
+      // Log evento
+      if (peerEventLogger) {
+        const details: Record<string, unknown> = {
+          messageType: message.type,
+          hasBoard: Array.isArray((message as any).board),
+          hasPlayers: Array.isArray((message as any).players),
+        };
+        
+        // Adicionar informações específicas por tipo de mensagem
+        if (message.type === 'BOARD_STATE' && Array.isArray((message as any).board)) {
+          details.boardSize = (message as any).board.length;
+          details.cardsByZone = {
+            battlefield: (message as any).board.filter((c: any) => c.zone === 'battlefield').length,
+            hand: (message as any).board.filter((c: any) => c.zone === 'hand').length,
+            library: (message as any).board.filter((c: any) => c.zone === 'library').length,
+            cemetery: (message as any).board.filter((c: any) => c.zone === 'cemetery').length,
+          };
+        } else if (message.type === 'ROOM_STATE') {
+          if (Array.isArray((message as any).board)) {
+            details.boardSize = (message as any).board.length;
+          }
+          if (Array.isArray((message as any).players)) {
+            details.playersCount = (message as any).players.length;
+            details.playerNames = (message as any).players.map((p: any) => p.name);
+          }
+        }
+        
+        peerEventLogger('RECEIVED', 'FROM_HOST', message.type, undefined, conn.peer, details);
+      }
+      
       switch (message.type) {
         case 'ROOM_STATE':
           if (Array.isArray(message.board) && Array.isArray(message.players)) {
@@ -796,12 +990,18 @@ export const useGameStore = create<GameStore>((set, get) => {
           break;
         case 'BOARD_STATE':
           if (Array.isArray(message.board)) {
-            set({ board: message.board });
+            const currentState = get();
+            // Preservar posições locais se não vierem no BOARD_STATE ou se estivermos arrastando
+            set({ 
+              board: message.board,
+              cemeteryPositions: message.cemeteryPositions || currentState?.cemeteryPositions || {},
+              libraryPositions: message.libraryPositions || currentState?.libraryPositions || {},
+            });
             // Salvar sessão quando receber estado do board
             setTimeout(() => {
-              const currentState = get();
-              if (currentState) {
-                saveSession(currentState);
+              const updatedState = get();
+              if (updatedState) {
+                saveSession(updatedState);
               }
             }, 100);
           }
@@ -1014,6 +1214,36 @@ export const useGameStore = create<GameStore>((set, get) => {
           action,
           actorId: state.playerId,
         });
+        
+        // Log evento
+        if (peerEventLogger) {
+          const details: Record<string, unknown> = {
+            actionKind: action.kind,
+            actorId: state.playerId,
+          };
+          
+          // Adicionar detalhes específicos por tipo de ação
+          if ('id' in action) {
+            details.cardId = (action as any).id;
+          }
+          if ('position' in action) {
+            details.position = (action as any).position;
+          }
+          if ('zone' in action) {
+            details.zone = (action as any).zone;
+          }
+          if ('playerId' in action) {
+            details.targetPlayerId = (action as any).playerId;
+          }
+          if ('cards' in action) {
+            details.cardsCount = Array.isArray((action as any).cards) ? (action as any).cards.length : 0;
+          }
+          if ('card' in action) {
+            details.cardName = (action as any).card?.name;
+          }
+          
+          peerEventLogger('SENT', 'TO_HOST', 'REQUEST_ACTION', action.kind, state.hostConnection.peer, details);
+        }
         return;
       } catch (error) {
         debugLog('failed to send action', error);
@@ -1423,8 +1653,11 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
     addCardToBoard: (payload: NewCardPayload) => {
       if (!payload.name) return;
-      // Se não há posição especificada, será calculada no Board baseado na área do player
-      const position = payload.position ?? { x: 24, y: 24 };
+      
+      // Se não há posição especificada, usar uma posição especial que indica "centro da área"
+      // O Board component ajustará para o centro real quando a carta for adicionada
+      const position = payload.position ?? { x: -1, y: -1 }; // -1 indica "usar centro"
+      
       const card: CardOnBoard = {
         id: randomId(),
         name: payload.name,
@@ -1485,8 +1718,42 @@ export const useGameStore = create<GameStore>((set, get) => {
     moveCard: (cardId: string, position: Point) => {
       requestAction({ kind: 'move', id: cardId, position });
     },
-    moveLibrary: (playerId: string, position: Point) => {
-      requestAction({ kind: 'moveLibrary', playerId, position });
+    moveLibrary: (playerId: string, relativePosition: Point, absolutePosition: Point) => {
+      const state = get();
+      if (!state) return;
+      
+      // Armazenar posição relativa no store (para sincronização)
+      set((s) => {
+        if (!s) return s;
+        return {
+          ...s,
+          libraryPositions: {
+            ...s.libraryPositions,
+            [playerId]: relativePosition,
+          },
+        };
+      });
+      
+      // Passar posição absoluta para a ação (para atualizar as cartas)
+      requestAction({ kind: 'moveLibrary', playerId, position: absolutePosition });
+    },
+    moveCemetery: (playerId: string, position: Point) => {
+      const state = get();
+      if (!state) return;
+      
+      // Armazenar posição do cemitério
+      set((s) => {
+        if (!s) return s;
+        return {
+          ...s,
+          cemeteryPositions: {
+            ...s.cemeteryPositions,
+            [playerId]: position,
+          },
+        };
+      });
+      
+      requestAction({ kind: 'moveCemetery', playerId, position });
     },
     toggleTap: (cardId: string) => {
       requestAction({ kind: 'toggleTap', id: cardId });
@@ -1573,6 +1840,9 @@ export const useGameStore = create<GameStore>((set, get) => {
           }
         }
       }
+    },
+    setPeerEventLogger: (logger) => {
+      peerEventLogger = logger;
     },
   };
   

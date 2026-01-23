@@ -7,54 +7,47 @@ export interface CardLookupResult {
   setName?: string;
 }
 
-const SCRYFALL_BASE = 'https://api.scryfall.com';
-
-const pickImageUrl = (data: any): string | undefined => {
-  if (data?.image_uris) {
-    return data.image_uris.normal || data.image_uris.large || data.image_uris.small;
-  }
-
-  if (Array.isArray(data?.card_faces) && data.card_faces.length > 0) {
-    const faceWithImage = data.card_faces.find((face: any) => face.image_uris) || data.card_faces[0];
-    return faceWithImage?.image_uris?.normal ?? faceWithImage?.image_uris?.large;
-  }
-
-  return undefined;
-};
-
-const toResult = (data: any): CardLookupResult => ({
-  name: data?.name ?? 'Unknown',
-  oracleText: data?.oracle_text,
-  manaCost: data?.mana_cost,
-  typeLine: data?.type_line,
-  imageUrl: pickImageUrl(data),
-  setName: data?.set_name,
-});
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 const ensureOk = async (response: Response) => {
   if (!response.ok) {
     const details = await response.json().catch(() => ({}));
-    throw new Error(details.details || details.error || 'Unable to reach Scryfall');
+    throw new Error(details.error || details.details || 'Unable to fetch card');
   }
-
   return response;
 };
 
-export const fetchCardByName = async (name: string, setCode?: string) => {
-  const params = new URLSearchParams({ fuzzy: name });
+export const fetchCardByName = async (name: string, setCode?: string): Promise<CardLookupResult> => {
+  const params = new URLSearchParams({ name });
   if (setCode) {
     params.append('set', setCode);
   }
 
-  const response = await fetch(`${SCRYFALL_BASE}/cards/named?${params.toString()}`);
+  const response = await fetch(`${API_URL}/cards/search?${params.toString()}`);
   await ensureOk(response);
-  const data = await response.json();
-  return toResult(data);
+  return await response.json();
 };
 
-export const fetchCardByCollector = async (setCode: string, collectorNumber: string) => {
-  const response = await fetch(`${SCRYFALL_BASE}/cards/${setCode}/${collectorNumber}`);
+export const fetchCardByCollector = async (setCode: string, collectorNumber: string): Promise<CardLookupResult> => {
+  const response = await fetch(`${API_URL}/cards/${setCode}/${collectorNumber}`);
   await ensureOk(response);
-  const data = await response.json();
-  return toResult(data);
+  return await response.json();
+};
+
+export interface BatchCardRequest {
+  name?: string;
+  setCode?: string;
+  collectorNumber?: string;
+}
+
+export const fetchCardsBatch = async (requests: BatchCardRequest[]): Promise<(CardLookupResult | { error: string; request?: BatchCardRequest })[]> => {
+  const response = await fetch(`${API_URL}/cards/batch`, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({ cards: requests }),
+  });
+  await ensureOk(response);
+  return await response.json();
 };

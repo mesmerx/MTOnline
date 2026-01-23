@@ -12,12 +12,12 @@ interface CemeteryProps {
   playerId: string;
   cemeteryCards: CardOnBoard[];
   players: Array<{ id: string; name: string }>;
-  getCemeteryPosition: () => Point | null;
+  getCemeteryPosition: (playerId: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
   onCemeteryContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
-  startCemeteryDrag: (event: ReactPointerEvent) => void;
-  draggingCemetery: { offsetX: number; offsetY: number; startX: number; startY: number } | null;
+  startCemeteryDrag: (playerId: string, event: ReactPointerEvent) => void;
+  draggingCemetery: { playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
 }
 
 const Cemetery = ({
@@ -34,9 +34,6 @@ const Cemetery = ({
 }: CemeteryProps) => {
   if (!boardRef.current || players.length === 0) return null;
 
-  const cemeteryPos = getCemeteryPosition();
-  if (!cemeteryPos) return null;
-
   // Agrupar cartas por owner
   const cemeteryByOwner = players.map((player) => {
     const playerCemeteryCards = cemeteryCards.filter((c) => c.ownerId === player.id);
@@ -47,21 +44,58 @@ const Cemetery = ({
   return (
     <>
       {cemeteryByOwner.map(({ player, cards }) => {
-        // Posicionar cada stack de cemitério lado a lado
-        const playerIndex = players.findIndex((p) => p.id === player.id);
-        const offsetX = playerIndex * (CEMETERY_CARD_WIDTH + 20);
+        const cemeteryPos = getCemeteryPosition(player.id);
+        if (!cemeteryPos) return null;
 
         return (
           <div
             key={player.id}
-            className={`cemetery-stack ${player.id === playerId ? 'draggable' : ''}`}
             style={{
               position: 'absolute',
-              left: `${cemeteryPos.x + offsetX}px`,
-              top: `${cemeteryPos.y}px`,
-              cursor: player.id === playerId ? (draggingCemetery ? 'grabbing' : 'grab') : 'pointer',
+              left: `${cemeteryPos.x}px`,
+              top: `${cemeteryPos.y - 20}px`,
             }}
+          >
+            {/* Label com nome do dono */}
+            <div
+              style={{
+                position: 'absolute',
+                top: '0px',
+                left: '0px',
+                fontSize: '11px',
+                fontWeight: 'bold',
+                color: '#fff',
+                backgroundColor: 'rgba(0, 0, 0, 0.7)',
+                padding: '2px 6px',
+                borderRadius: '4px',
+                whiteSpace: 'nowrap',
+                pointerEvents: 'none',
+                zIndex: 100,
+              }}
+            >
+              {player.name} - Cemitério
+            </div>
+            <div
+              className={`cemetery-stack ${player.id === playerId ? 'draggable' : ''}`}
+              style={{
+                position: 'absolute',
+                left: '0px',
+                top: '20px',
+                width: `${CEMETERY_CARD_WIDTH}px`,
+                height: `${CEMETERY_CARD_HEIGHT}px`,
+                cursor: player.id === playerId ? (draggingCemetery && draggingCemetery.playerId === player.id ? 'grabbing' : 'grab') : 'pointer',
+                pointerEvents: 'auto',
+              }}
             onPointerDown={(e) => {
+              console.log('[Cemetery] onPointerDown', { 
+                playerId: player.id, 
+                currentPlayerId: playerId, 
+                matches: player.id === playerId,
+                button: e.button,
+                shiftKey: e.shiftKey,
+                cardsLength: cards.length 
+              });
+              
               if (player.id === playerId) {
                 // Se for botão direito, não fazer nada (abre menu de contexto)
                 if (e.button === 2) return;
@@ -74,8 +108,11 @@ const Cemetery = ({
                   startDrag(topCard, e);
                 } else {
                   // Caso contrário, arrastar o stack inteiro
-                  startCemeteryDrag(e);
+                  console.log('[Cemetery] Chamando startCemeteryDrag', player.id);
+                  startCemeteryDrag(player.id, e);
                 }
+              } else {
+                console.log('[Cemetery] Bloqueado - não é o player atual');
               }
             }}
             onContextMenu={(e) => {
@@ -125,10 +162,10 @@ const Cemetery = ({
                 <div
                   style={{
                     position: 'absolute',
-                    width: `${CEMETERY_CARD_WIDTH + 20}px`,
-                    height: `${CEMETERY_CARD_HEIGHT + 20}px`,
-                    left: '-10px',
-                    top: '-10px',
+                    width: `${CEMETERY_CARD_WIDTH}px`,
+                    height: `${CEMETERY_CARD_HEIGHT}px`,
+                    left: '0px',
+                    top: '0px',
                     border: '2px dashed rgba(148, 163, 184, 0.5)',
                     borderRadius: '8px',
                     backgroundColor: 'rgba(15, 23, 42, 0.3)',
@@ -140,9 +177,10 @@ const Cemetery = ({
                 >
                   <span style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: '16px' }}>⚰️</span>
                 </div>
-                <div className="cemetery-count" style={{ opacity: 0.5 }}>0</div>
+                <div className="cemetery-count" style={{ opacity: 0.5, pointerEvents: 'none' }}>0</div>
               </>
             )}
+            </div>
           </div>
         );
       })}

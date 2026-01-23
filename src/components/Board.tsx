@@ -1,7 +1,7 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useCallback } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useGameStore } from '../store/useGameStore';
-import type { CardOnBoard } from '../store/useGameStore';
+import type { CardOnBoard, PlayerSummary } from '../store/useGameStore';
 import CardToken from './CardToken';
 import Hand from './Hand';
 import Library from './Library';
@@ -36,15 +36,24 @@ const Board = () => {
   const board = useGameStore((state) => state.board);
   const players = useGameStore((state) => state.players);
   const playerId = useGameStore((state) => state.playerId);
+  const storeCemeteryPositions = useGameStore((state) => state.cemeteryPositions);
+  const storeLibraryPositions = useGameStore((state) => state.libraryPositions);
   const moveCard = useGameStore((state) => state.moveCard);
   const moveLibrary = useGameStore((state) => state.moveLibrary);
+  const moveCemetery = useGameStore((state) => state.moveCemetery);
   const toggleTap = useGameStore((state) => state.toggleTap);
   const removeCard = useGameStore((state) => state.removeCard);
   const changeCardZone = useGameStore((state) => state.changeCardZone);
   const drawFromLibrary = useGameStore((state) => state.drawFromLibrary);
   const reorderHandCard = useGameStore((state) => state.reorderHandCard);
   const shuffleLibrary = useGameStore((state) => state.shuffleLibrary);
-  const status = useGameStore((state) => state.status);
+  const status = useGameStore((state) => state?.status ?? 'idle');
+  const peer = useGameStore((state) => state.peer);
+  const connections = useGameStore((state) => state.connections);
+  const hostConnection = useGameStore((state) => state.hostConnection);
+  const isHost = useGameStore((state) => state.isHost);
+  const roomId = useGameStore((state) => state.roomId);
+  const setPeerEventLogger = useGameStore((state) => state.setPeerEventLogger);
   const boardRef = useRef<HTMLDivElement>(null);
   
   // Sistema centralizado de drag - apenas uma carta pode ser arrastada por vez
@@ -53,21 +62,49 @@ const Board = () => {
   const dragUpdateRef = useRef<number>(0);
   const clickBlockTimeoutRef = useRef<ClickBlockState | null>(null);
   
-  // Estados para library e hand
+  // Estados para library e hand (sincronizar com store)
   const [libraryPositions, setLibraryPositions] = useState<Record<string, Point>>({});
   const [draggingLibrary, setDraggingLibrary] = useState<{ playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
   const [libraryMoved, setLibraryMoved] = useState(false);
   const libraryMovedRef = useRef<boolean>(false);
   const libraryClickExecutedRef = useRef<boolean>(false);
   
-  // Estados para cemetery
-  const [cemeteryPosition, setCemeteryPosition] = useState<Point | null>(null);
-  const [draggingCemetery, setDraggingCemetery] = useState<{ offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
+  // Estados para cemetery (sincronizar com store)
+  const [cemeteryPositions, setCemeteryPositions] = useState<Record<string, Point>>({});
+  
+  // Sincronizar posições do store com estado local
+  useEffect(() => {
+    setCemeteryPositions(storeCemeteryPositions);
+  }, [storeCemeteryPositions]);
+  
+  useEffect(() => {
+    setLibraryPositions(storeLibraryPositions);
+  }, [storeLibraryPositions]);
+  const [draggingCemetery, setDraggingCemetery] = useState<{ playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
   const [cemeteryMoved, setCemeteryMoved] = useState(false);
   const cemeteryMovedRef = useRef<boolean>(false);
   const [showHand, setShowHand] = useState(true);
   const [handButtonEnabled, setHandButtonEnabled] = useState(false);
   const [showDebugMode, setShowDebugMode] = useState(false);
+  const [eventLogMinimized, setEventLogMinimized] = useState(false);
+  const [simulatePlayers, setSimulatePlayers] = useState<number>(0);
+  const [showSimulatePanel, setShowSimulatePanel] = useState(false);
+  const [peerDebugMinimized, setPeerDebugMinimized] = useState(false);
+  
+  // Gerar players simulados
+  const simulatedPlayers: PlayerSummary[] = Array.from({ length: simulatePlayers }, (_, i) => ({
+    id: `simulated-${i + 1}`,
+    name: `Player ${i + 1}`,
+  }));
+
+  // Combinar players reais com simulados
+  const allPlayers = simulatePlayers > 0 
+    ? [...players, ...simulatedPlayers]
+    : players;
+  
+  // Modos de visualização: 'unified' (todos juntos), 'individual' (um por vez), 'separated' (boards separados)
+  const [viewMode, setViewMode] = useState<'unified' | 'individual' | 'separated'>('unified');
+  const [selectedPlayerIndex, setSelectedPlayerIndex] = useState(0); // Para modo individual
   const [contextMenu, setContextMenu] = useState<{
     x: number;
     y: number;
@@ -113,6 +150,46 @@ const Board = () => {
   const [isRecording, setIsRecording] = useState(false);
   const [recordedEvents, setRecordedEvents] = useState<EventLog[]>([]);
   const maxLogs = 50;
+  
+  // Sistema de log de eventos de peer
+  interface PeerEventLog {
+    id: string;
+    timestamp: number;
+    type: 'SENT' | 'RECEIVED';
+    direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER';
+    messageType: string;
+    actionKind?: string;
+    target?: string;
+    details?: Record<string, unknown>;
+  }
+  const [peerEventLogs, setPeerEventLogs] = useState<PeerEventLog[]>([]);
+  const maxPeerLogs = 30;
+  
+  const addPeerEventLog = useCallback((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => {
+    const log: PeerEventLog = {
+      id: `${Date.now()}-${Math.random()}`,
+      timestamp: Date.now(),
+      type,
+      direction,
+      messageType,
+      actionKind,
+      target,
+      details,
+    };
+    
+    setPeerEventLogs((prev) => {
+      const updated = [log, ...prev].slice(0, maxPeerLogs);
+      return updated;
+    });
+  }, []);
+  
+  // Conectar o logger de eventos de peer ao store
+  useEffect(() => {
+    setPeerEventLogger(addPeerEventLog);
+    return () => {
+      setPeerEventLogger(null);
+    };
+  }, [setPeerEventLogger, addPeerEventLog]);
   
   const addEventLog = (type: string, message: string, cardId?: string, cardName?: string, details?: Record<string, unknown>) => {
     const log: EventLog = {
@@ -348,25 +425,147 @@ const Board = () => {
   const handCards = board.filter((c) => c.zone === 'hand');
   const cemeteryCards = board.filter((c) => c.zone === 'cemetery');
   
+  // Ajustar posição de cartas recém-adicionadas para o centro da área do player
+  const processedCardsRef = useRef<Set<string>>(new Set());
+  useEffect(() => {
+    if (!boardRef.current) return;
+    
+    const cardsToCenter = battlefieldCards.filter(
+      (card) => 
+        card.ownerId === playerId && 
+        card.position.x === -1 && 
+        card.position.y === -1 &&
+        !processedCardsRef.current.has(card.id)
+    );
+    
+    if (cardsToCenter.length > 0) {
+      const rect = boardRef.current.getBoundingClientRect();
+      const playerArea = getPlayerArea(playerId);
+      
+      if (playerArea) {
+        const CARD_WIDTH = 150;
+        const CARD_HEIGHT = 210;
+        const centerX = playerArea.x + (playerArea.width / 2) - (CARD_WIDTH / 2);
+        const centerY = playerArea.y + (playerArea.height / 2) - (CARD_HEIGHT / 2);
+        
+        cardsToCenter.forEach((card) => {
+          processedCardsRef.current.add(card.id);
+          moveCard(card.id, { x: centerX, y: centerY });
+        });
+      }
+    }
+    
+    // Limpar ref de cartas que não existem mais
+    const currentCardIds = new Set(battlefieldCards.map(c => c.id));
+    processedCardsRef.current.forEach((id) => {
+      if (!currentCardIds.has(id)) {
+        processedCardsRef.current.delete(id);
+      }
+    });
+  }, [board, playerId, moveCard]);
+
+  // Tamanho base do board em 1080p
+  const BASE_BOARD_WIDTH = 1920;
+  const BASE_BOARD_HEIGHT = 1080;
+  
+  // Calcular scale baseado na resolução atual
+  const getBoardScale = () => {
+    if (!boardRef.current) return 1;
+    const rect = boardRef.current.getBoundingClientRect();
+    const scaleX = rect.width / BASE_BOARD_WIDTH;
+    const scaleY = rect.height / BASE_BOARD_HEIGHT;
+    // Usar o menor scale para manter proporções e garantir que caiba
+    return Math.min(scaleX, scaleY);
+  };
+
+  // Função para encontrar qual player window contém o cursor
+  const getPlayerWindowAtPosition = (mouseX: number, mouseY: number) => {
+    if (viewMode !== 'separated' || !boardRef.current) return null;
+    
+    const rect = boardRef.current.getBoundingClientRect();
+    const boardWidth = rect.width;
+    const boardHeight = rect.height;
+    const cols = Math.ceil(Math.sqrt(allPlayers.length));
+    const rows = Math.ceil(allPlayers.length / cols);
+    
+    // Converter coordenadas do mouse para coordenadas relativas ao board
+    const relativeX = mouseX - rect.left;
+    const relativeY = mouseY - rect.top;
+    
+    // Calcular porcentagens (mesmo cálculo do render)
+    const widthPercent = 100 / cols;
+    const heightPercent = 100 / rows;
+    
+    // Encontrar qual coluna e linha contém o cursor usando porcentagens
+    // Isso deve corresponder exatamente ao cálculo do render
+    const col = Math.min(Math.floor((relativeX / boardWidth) * cols), cols - 1);
+    const row = Math.min(Math.floor((relativeY / boardHeight) * rows), rows - 1);
+    
+    // Verificar se está dentro dos limites
+    if (col < 0 || col >= cols || row < 0 || row >= rows) return null;
+    
+    // Calcular posição e tamanho da janela usando porcentagens (igual ao render)
+    const leftPercent = (col / cols) * 100;
+    const topPercent = (row / rows) * 100;
+    const windowLeft = (boardWidth * leftPercent) / 100;
+    const windowTop = (boardHeight * topPercent) / 100;
+    const windowWidth = (boardWidth * widthPercent) / 100;
+    const windowHeight = (boardHeight * heightPercent) / 100;
+    
+    // Verificar se o cursor está dentro da janela (com tolerância para bordas)
+    const tolerance = 1; // 1px de tolerância para bordas
+    if (
+      relativeX >= windowLeft - tolerance &&
+      relativeX <= windowLeft + windowWidth + tolerance &&
+      relativeY >= windowTop - tolerance &&
+      relativeY <= windowTop + windowHeight + tolerance
+    ) {
+      // Calcular o índice do player (mesmo cálculo do render: index = row * cols + col)
+      const playerIndex = row * cols + col;
+      if (playerIndex >= 0 && playerIndex < allPlayers.length) {
+        return {
+          player: allPlayers[playerIndex],
+          playerIndex,
+          col,
+          row,
+          windowLeft,
+          windowTop,
+          windowWidth,
+          windowHeight,
+        };
+      }
+    }
+    
+    return null;
+  };
 
   const getPlayerArea = (ownerId: string) => {
-    if (!boardRef.current || players.length === 0) return null;
-    const rect = boardRef.current.getBoundingClientRect();
-    const playerIndex = players.findIndex((p) => p.id === ownerId);
+    if (!boardRef.current || allPlayers.length === 0) return null;
+    const playerIndex = allPlayers.findIndex((p) => p.id === ownerId);
     if (playerIndex === -1) return null;
 
+    // No modo separated, retornar tamanho base (1920x1080) já que o scale é aplicado no container
+    if (viewMode === 'separated') {
+      return {
+        x: 0,
+        y: 0,
+        width: BASE_BOARD_WIDTH,
+        height: BASE_BOARD_HEIGHT,
+      };
+    }
+    
+    // No modo individual ou unified, usar o espaço base
     return {
       x: 0,
       y: 0,
-      width: rect.width,
-      height: rect.height,
+      width: BASE_BOARD_WIDTH,
+      height: BASE_BOARD_HEIGHT,
     };
   };
 
   const getHandArea = (ownerId: string) => {
-    if (!boardRef.current || players.length === 0 || !showHand) return null;
-    const rect = boardRef.current.getBoundingClientRect();
-    const playerIndex = players.findIndex((p) => p.id === ownerId);
+    if (!boardRef.current || allPlayers.length === 0 || !showHand) return null;
+    const playerIndex = allPlayers.findIndex((p) => p.id === ownerId);
     if (playerIndex === -1) return null;
 
     const HAND_CARD_LEFT_SPACING = 120;
@@ -375,27 +574,28 @@ const Board = () => {
     const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === ownerId);
     const totalCards = playerHandCards.length;
     
+    // Usar o espaço base (1920x1080)
     if (totalCards === 0) {
       const handHeight = 168 + 20; // HAND_CARD_HEIGHT + margin
-      const handY = rect.height - handHeight;
+      const handY = BASE_BOARD_HEIGHT - handHeight;
       return {
         x: 0,
         y: handY,
-        width: rect.width,
+        width: BASE_BOARD_WIDTH,
         height: handHeight,
       };
     }
     
     const visibleCardsCount = Math.min(maxRenderCards, totalCards);
     const handWidth = (visibleCardsCount * HAND_CARD_LEFT_SPACING) + 40;
-    const handX = (rect.width - handWidth) / 2;
+    const handX = (BASE_BOARD_WIDTH - handWidth) / 2;
     
     const curveHeight = 8;
     const HOVER_LIFT_PX = 10;
     const baseHandHeight = 168 + curveHeight + HOVER_LIFT_PX + 10; // HAND_CARD_HEIGHT + extras
     const marginY = baseHandHeight * 0.1;
     const handHeight = baseHandHeight + (marginY * 2);
-    const handY = rect.height - handHeight;
+    const handY = BASE_BOARD_HEIGHT - handHeight;
 
     return {
       x: handX,
@@ -405,21 +605,46 @@ const Board = () => {
     };
   };
 
-  const getCemeteryPosition = (): Point | null => {
-    if (!boardRef.current) return null;
-    const rect = boardRef.current.getBoundingClientRect();
+  const getCemeteryPosition = (playerId: string): Point | null => {
+    const area = getPlayerArea(playerId);
+    if (!area) return null;
+    
     const CEMETERY_CARD_WIDTH = 100;
     const CEMETERY_CARD_HEIGHT = 140;
     
-    // Se há posição salva, usar ela
-    if (cemeteryPosition) {
-      return cemeteryPosition;
+    // Primeiro, verificar se há posição no store (sincronizada entre peers)
+    // As posições no store já estão no espaço base
+    if (storeCemeteryPositions[playerId]) {
+      return storeCemeteryPositions[playerId];
     }
     
-    // Caso contrário, posição central do battlefield
+    // Segundo, verificar se há posição salva localmente
+    if (cemeteryPositions[playerId]) {
+      return cemeteryPositions[playerId];
+    }
+    
+    // Terceiro, verificar se há cartas no board com posição (vindo dos peers)
+    const playerCemeteryCards = cemeteryCards
+      .filter((c) => c.ownerId === playerId)
+      .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0))
+      .slice(0, 5);
+    
+    const topCard = playerCemeteryCards[0];
+    if (topCard && topCard.position.x !== 0 && topCard.position.y !== 0) {
+      // Usar a posição da carta do topo (que vem do board sincronizado)
+      // As posições já estão no espaço base
+      return {
+        x: topCard.position.x,
+        y: topCard.position.y,
+      };
+    }
+    
+    // Caso contrário, posição padrão no espaço base com offset baseado no índice do jogador
+    const playerIndex = players.findIndex((p) => p.id === playerId);
+    const offsetX = playerIndex * (CEMETERY_CARD_WIDTH + 20);
     return {
-      x: rect.width / 2 - CEMETERY_CARD_WIDTH / 2,
-      y: rect.height / 2 - CEMETERY_CARD_HEIGHT / 2,
+      x: area.x + (area.width / 2) - CEMETERY_CARD_WIDTH / 2 + offsetX,
+      y: area.y + (area.height / 2) - CEMETERY_CARD_HEIGHT / 2,
     };
   };
 
@@ -428,24 +653,19 @@ const Board = () => {
     if (!boardRef.current) return { zone: null };
     
     // Verificar cemitério
-    const cemeteryPos = getCemeteryPosition();
-    if (cemeteryPos) {
-      const CEMETERY_CARD_WIDTH = 100;
-      const CEMETERY_STACK_WIDTH = 120; // Área maior do stack
-      const CEMETERY_STACK_HEIGHT = 160;
-      
-      // Verificar se está dentro da área do cemitério (considerando todos os players)
-      for (const player of players) {
-        const playerIndex = players.findIndex((p) => p.id === player.id);
-        const offsetX = playerIndex * (CEMETERY_CARD_WIDTH + 20);
-        const cemeteryX = cemeteryPos.x + offsetX;
-        const cemeteryY = cemeteryPos.y;
-        
+    const CEMETERY_CARD_WIDTH = 100;
+    const CEMETERY_STACK_WIDTH = 120; // Área maior do stack
+    const CEMETERY_STACK_HEIGHT = 160;
+    
+    // Verificar se está dentro da área do cemitério (considerando todos os players)
+    for (const player of allPlayers) {
+      const cemeteryPos = getCemeteryPosition(player.id);
+      if (cemeteryPos) {
         if (
-          x >= cemeteryX - 10 &&
-          x <= cemeteryX + CEMETERY_STACK_WIDTH &&
-          y >= cemeteryY - 10 &&
-          y <= cemeteryY + CEMETERY_STACK_HEIGHT
+          x >= cemeteryPos.x - 10 &&
+          x <= cemeteryPos.x + CEMETERY_STACK_WIDTH &&
+          y >= cemeteryPos.y - 10 &&
+          y <= cemeteryPos.y + CEMETERY_STACK_HEIGHT
         ) {
           return { zone: 'cemetery', ownerId: player.id };
         }
@@ -468,7 +688,7 @@ const Board = () => {
     }
     
     // Verificar library
-    for (const player of players) {
+    for (const player of allPlayers) {
       const libraryPos = getLibraryPosition(player.id);
       if (libraryPos) {
         const LIBRARY_CARD_WIDTH = 100;
@@ -499,19 +719,22 @@ const Board = () => {
     
     const topCard = playerLibraryCards[0];
     if (topCard && topCard.position.x !== 0 && topCard.position.y !== 0) {
+      // As posições das cartas já estão no espaço base
       return {
         x: topCard.position.x,
         y: topCard.position.y,
       };
     }
     
-    if (libraryPositions[ownerId]) {
+    // Se há posição salva no store, usar ela (já está no espaço base)
+    if (storeLibraryPositions[ownerId]) {
       return {
-        x: area.x + libraryPositions[ownerId].x,
-        y: area.y + libraryPositions[ownerId].y,
+        x: storeLibraryPositions[ownerId].x,
+        y: storeLibraryPositions[ownerId].y,
       };
     }
     
+    // Posição padrão no espaço base
     return {
       x: area.x + (area.width / 2) - (LIBRARY_CARD_WIDTH / 2),
       y: area.y + (area.height / 2) - (LIBRARY_CARD_HEIGHT / 2),
@@ -548,12 +771,91 @@ const Board = () => {
 
       // Calcular nova posição
       const rect = boardRef.current!.getBoundingClientRect();
-      const cursorX = event.clientX - rect.left;
-      const cursorY = event.clientY - rect.top;
+      let cursorX = event.clientX - rect.left;
+      let cursorY = event.clientY - rect.top;
+      
+      // Log: mouse real
+      const realMouseX = event.clientX;
+      const realMouseY = event.clientY;
+      const relativeMouseX = cursorX;
+      const relativeMouseY = cursorY;
+      
+      // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+      if (viewMode === 'separated') {
+        const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
+        if (!windowInfo || windowInfo.player.id !== card.ownerId) {
+          // Se não está na janela do player correto, limitar aos limites da área
+          const playerArea = getPlayerArea(card.ownerId);
+          if (playerArea) {
+            const x = card.position.x;
+            const y = card.position.y;
+            const clampedX = Math.max(
+              playerArea.x,
+              Math.min(playerArea.x + playerArea.width - CARD_WIDTH, x)
+            );
+            const clampedY = Math.max(
+              playerArea.y,
+              Math.min(playerArea.y + playerArea.height - CARD_HEIGHT, y)
+            );
+            if (dragState.hasMoved) {
+              moveCard(dragState.cardId, { x: clampedX, y: clampedY });
+            }
+          }
+          return;
+        }
+        
+        const availableWidth = windowInfo.windowWidth;
+        const availableHeight = windowInfo.windowHeight; // Sem header
+        
+        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
+        const relativeX = event.clientX - rect.left;
+        const relativeY = event.clientY - rect.top;
+        const localX = relativeX - windowInfo.windowLeft;
+        const localY = relativeY - windowInfo.windowTop;
+        
+        cursorX = localX;
+        cursorY = localY;
+        
+        // Log: mouse no board (separated mode)
+        console.log('[Board] Mouse coordinates:', {
+          realMouse: { x: realMouseX, y: realMouseY },
+          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
+          inBoardSpace: { x: cursorX, y: cursorY },
+          windowInfo: {
+            windowLeft: windowInfo.windowLeft,
+            windowTop: windowInfo.windowTop,
+            windowWidth: windowInfo.windowWidth,
+            windowHeight: windowInfo.windowHeight,
+            playerId: windowInfo.player.id,
+          },
+          availableSize: { width: availableWidth, height: availableHeight },
+        });
+      } else {
+        // Converter coordenadas do mouse para o espaço base (1920x1080)
+        const scale = getBoardScale();
+        const scaledWidth = BASE_BOARD_WIDTH * scale;
+        const scaledHeight = BASE_BOARD_HEIGHT * scale;
+        const offsetX = (rect.width - scaledWidth) / 2;
+        const offsetY = (rect.height - scaledHeight) / 2;
+        
+        // Converter para coordenadas no espaço base
+        cursorX = (cursorX - offsetX) / scale;
+        cursorY = (cursorY - offsetY) / scale;
+        
+        // Log: mouse no board (normal mode)
+        console.log('[Board] Mouse coordinates:', {
+          realMouse: { x: realMouseX, y: realMouseY },
+          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
+          inBoardSpace: { x: cursorX, y: cursorY },
+          scale,
+          offset: { x: offsetX, y: offsetY },
+        });
+      }
+      
       const x = cursorX - dragState.offsetX;
       const y = cursorY - dragState.offsetY;
 
-      // Clamp dentro da área do player
+      // Clamp dentro da área do player - se estiver fora, limitar aos limites
       const playerArea = getPlayerArea(card.ownerId);
       let clampedX = x;
       let clampedY = y;
@@ -635,7 +937,7 @@ const Board = () => {
                 y: Math.max(0, Math.min(rect.height - CARD_HEIGHT, cursorY - dragState.offsetY)),
               };
             } else if (detectedZone.zone === 'cemetery') {
-              const cemeteryPos = getCemeteryPosition();
+              const cemeteryPos = getCemeteryPosition(detectedZone.ownerId || card.ownerId);
               position = cemeteryPos || { x: 0, y: 0 };
             } else if (detectedZone.zone === 'library') {
               const libraryPos = getLibraryPosition(detectedZone.ownerId || card.ownerId);
@@ -790,7 +1092,7 @@ const Board = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
     };
-  }, [isDragging, showHand, playerId, moveCard, changeCardZone, getPlayerArea, getHandArea]);
+  }, [isDragging, showHand, playerId, moveCard, changeCardZone, getPlayerArea, getHandArea, viewMode, players]);
 
   const startDrag = (card: CardOnBoard, event: ReactPointerEvent) => {
     // Ignorar botão direito e botão do meio
@@ -836,10 +1138,44 @@ const Board = () => {
     const rect = boardRef.current.getBoundingClientRect();
     // Calcular offset: posição do cursor dentro da carta (relativo ao board)
     // Usar currentCard para garantir que temos a posição mais recente
-    const cardX = currentCard.position.x;
-    const cardY = currentCard.position.y;
-    const cursorX = event.clientX - rect.left;
-    const cursorY = event.clientY - rect.top;
+    let cardX = currentCard.position.x;
+    let cardY = currentCard.position.y;
+    let cursorX = event.clientX - rect.left;
+    let cursorY = event.clientY - rect.top;
+    
+    // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+    if (viewMode === 'separated') {
+      const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
+      if (!windowInfo || windowInfo.player.id !== currentCard.ownerId) {
+        // Se não está na janela do player correto, usar posição atual da carta
+        cursorX = cardX;
+        cursorY = cardY;
+      } else {
+        const availableWidth = windowInfo.windowWidth;
+        const availableHeight = windowInfo.windowHeight; // Sem header
+        
+        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
+        const relativeX = event.clientX - rect.left;
+        const relativeY = event.clientY - rect.top;
+        const localX = relativeX - windowInfo.windowLeft;
+        const localY = relativeY - windowInfo.windowTop;
+        
+        cursorX = localX;
+        cursorY = localY;
+      }
+    } else {
+      // Converter coordenadas do mouse para o espaço base (1920x1080)
+      const scale = getBoardScale();
+      const scaledWidth = BASE_BOARD_WIDTH * scale;
+      const scaledHeight = BASE_BOARD_HEIGHT * scale;
+      const offsetX = (rect.width - scaledWidth) / 2;
+      const offsetY = (rect.height - scaledHeight) / 2;
+      
+      // Converter para coordenadas no espaço base
+      cursorX = (cursorX - offsetX) / scale;
+      cursorY = (cursorY - offsetY) / scale;
+    }
+    
     const offsetX = cursorX - cardX;
     const offsetY = cursorY - cardY;
 
@@ -861,6 +1197,9 @@ const Board = () => {
     setIsDragging(false);
     setDraggingLibrary(null);
     setLibraryMoved(false);
+    // NÃO resetar draggingCemetery aqui - ele é gerenciado pelo seu próprio useEffect
+    // setDraggingCemetery(null);
+    // setCemeteryMoved(false);
     if (clickBlockTimeoutRef.current) {
       clearTimeout(clickBlockTimeoutRef.current.timeoutId);
       clickBlockTimeoutRef.current = null;
@@ -874,7 +1213,7 @@ const Board = () => {
   const instruction =
     status === 'idle' ? 'Create or join a room to sync the battlefield.' : 'Drag cards, double-click to tap.';
 
-  const ownerName = (card: CardOnBoard) => players.find((player) => player.id === card.ownerId)?.name ?? 'Unknown';
+  const ownerName = (card: CardOnBoard) => allPlayers.find((player) => player.id === card.ownerId)?.name ?? 'Unknown';
 
   const handleLibraryClick = (targetPlayerId: string) => {
     if (targetPlayerId === playerId) {
@@ -1074,7 +1413,7 @@ const Board = () => {
       if (card.ownerId === playerId && card.zone !== targetZone) {
         if (targetZone === 'cemetery') {
           // Cemitério = mover para cemitério (não remover)
-          const cemeteryPos = getCemeteryPosition();
+          const cemeteryPos = getCemeteryPosition(card.ownerId);
           const position = cemeteryPos || { x: 0, y: 0 };
           
           addEventLog('CHANGE_ZONE', `Mudando para cemitério: ${card.name}`, card.id, card.name, {
@@ -1165,8 +1504,44 @@ const Board = () => {
     const libraryPos = getLibraryPosition(targetPlayerId);
     if (!libraryPos) return;
 
-    const offsetX = event.clientX - rect.left - libraryPos.x;
-    const offsetY = event.clientY - rect.top - libraryPos.y;
+    let cursorX = event.clientX - rect.left;
+    let cursorY = event.clientY - rect.top;
+    
+    // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+    if (viewMode === 'separated') {
+      const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
+      if (!windowInfo || windowInfo.player.id !== targetPlayerId) {
+        // Se não está na janela do player correto, usar posição atual da library
+        cursorX = libraryPos.x;
+        cursorY = libraryPos.y;
+      } else {
+        const availableWidth = windowInfo.windowWidth;
+        const availableHeight = windowInfo.windowHeight; // Sem header
+        
+        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
+        const relativeX = event.clientX - rect.left;
+        const relativeY = event.clientY - rect.top;
+        const localX = relativeX - windowInfo.windowLeft;
+        const localY = relativeY - windowInfo.windowTop;
+        
+        cursorX = localX;
+        cursorY = localY;
+      }
+    } else {
+      // Converter coordenadas do mouse para o espaço base (1920x1080)
+      const scale = getBoardScale();
+      const scaledWidth = BASE_BOARD_WIDTH * scale;
+      const scaledHeight = BASE_BOARD_HEIGHT * scale;
+      const offsetX = (rect.width - scaledWidth) / 2;
+      const offsetY = (rect.height - scaledHeight) / 2;
+      
+      // Converter para coordenadas no espaço base
+      cursorX = (cursorX - offsetX) / scale;
+      cursorY = (cursorY - offsetY) / scale;
+    }
+
+    const offsetX = cursorX - libraryPos.x;
+    const offsetY = cursorY - libraryPos.y;
 
     setLibraryMoved(false);
     setDraggingLibrary({
@@ -1203,13 +1578,102 @@ const Board = () => {
       }
 
       const rect = boardRef.current!.getBoundingClientRect();
-      const cursorX = event.clientX - rect.left;
-      const cursorY = event.clientY - rect.top;
+      let cursorX = event.clientX - rect.left;
+      let cursorY = event.clientY - rect.top;
+      
+      // Log: mouse real
+      const realMouseX = event.clientX;
+      const realMouseY = event.clientY;
+      const relativeMouseX = cursorX;
+      const relativeMouseY = cursorY;
+      
+      // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+      if (viewMode === 'separated') {
+        const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
+        if (!windowInfo || windowInfo.player.id !== draggingLibrary.playerId) {
+          // Se não está na janela do player correto, limitar aos limites da área
+          const playerArea = getPlayerArea(draggingLibrary.playerId);
+          if (playerArea) {
+            const libraryPos = getLibraryPosition(draggingLibrary.playerId);
+            if (libraryPos) {
+              const x = libraryPos.x;
+              const y = libraryPos.y;
+              const clampedX = Math.max(
+                playerArea.x,
+                Math.min(playerArea.x + playerArea.width - LIBRARY_CARD_WIDTH, x)
+              );
+              const clampedY = Math.max(
+                playerArea.y,
+                Math.min(playerArea.y + playerArea.height - LIBRARY_CARD_HEIGHT, y)
+              );
+              const relativePosition = {
+                x: clampedX - playerArea.x,
+                y: clampedY - playerArea.y,
+              };
+              setLibraryPositions((prev) => ({
+                ...prev,
+                [draggingLibrary.playerId]: relativePosition,
+              }));
+              moveLibrary(draggingLibrary.playerId, relativePosition, { x: clampedX, y: clampedY });
+            }
+          }
+          return;
+        }
+        
+        const availableWidth = windowInfo.windowWidth;
+        const availableHeight = windowInfo.windowHeight; // Sem header
+        
+        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
+        const relativeX = event.clientX - rect.left;
+        const relativeY = event.clientY - rect.top;
+        const localX = relativeX - windowInfo.windowLeft;
+        const localY = relativeY - windowInfo.windowTop;
+        
+        cursorX = localX;
+        cursorY = localY;
+        
+        // Log: mouse no board (separated mode)
+        console.log('[Board] Library drag - Mouse coordinates:', {
+          realMouse: { x: realMouseX, y: realMouseY },
+          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
+          inBoardSpace: { x: cursorX, y: cursorY },
+          windowInfo: {
+            windowLeft: windowInfo.windowLeft,
+            windowTop: windowInfo.windowTop,
+            windowWidth: windowInfo.windowWidth,
+            windowHeight: windowInfo.windowHeight,
+            playerId: windowInfo.player.id,
+          },
+          availableSize: { width: availableWidth, height: availableHeight },
+        });
+      } else {
+        // Converter coordenadas do mouse para o espaço base (1920x1080)
+        const scale = getBoardScale();
+        const scaledWidth = BASE_BOARD_WIDTH * scale;
+        const scaledHeight = BASE_BOARD_HEIGHT * scale;
+        const offsetX = (rect.width - scaledWidth) / 2;
+        const offsetY = (rect.height - scaledHeight) / 2;
+        
+        // Converter para coordenadas no espaço base
+        cursorX = (cursorX - offsetX) / scale;
+        cursorY = (cursorY - offsetY) / scale;
+        
+        // Log: mouse no board (normal mode)
+        console.log('[Board] Library drag - Mouse coordinates:', {
+          realMouse: { x: realMouseX, y: realMouseY },
+          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
+          inBoardSpace: { x: cursorX, y: cursorY },
+          scale,
+          offset: { x: offsetX, y: offsetY },
+        });
+      }
+      
       const x = cursorX - draggingLibrary.offsetX;
       const y = cursorY - draggingLibrary.offsetY;
 
       const playerArea = getPlayerArea(draggingLibrary.playerId);
       if (playerArea) {
+        // Clamp dentro da área - se estiver fora, limitar aos limites
         const clampedX = Math.max(
           playerArea.x,
           Math.min(playerArea.x + playerArea.width - LIBRARY_CARD_WIDTH, x)
@@ -1219,33 +1683,40 @@ const Board = () => {
           Math.min(playerArea.y + playerArea.height - LIBRARY_CARD_HEIGHT, y)
         );
 
+        const relativePosition = {
+          x: clampedX - playerArea.x,
+          y: clampedY - playerArea.y,
+        };
+        
         setLibraryPositions((prev) => ({
           ...prev,
-          [draggingLibrary.playerId]: {
-            x: clampedX - playerArea.x,
-            y: clampedY - playerArea.y,
-          },
+          [draggingLibrary.playerId]: relativePosition,
         }));
 
-        moveLibrary(draggingLibrary.playerId, { x: clampedX, y: clampedY });
+        // moveLibrary vai armazenar a posição relativa no store
+        // e passar a absoluta para a ação
+        moveLibrary(draggingLibrary.playerId, relativePosition, { x: clampedX, y: clampedY });
       }
     };
 
     const stopDrag = (event?: PointerEvent) => {
-      // Evitar múltiplas execuções
-      if (libraryClickExecutedRef.current) {
-        setDraggingLibrary(null);
-        setLibraryMoved(false);
-        libraryMovedRef.current = false;
-        setTimeout(() => setLibraryMoved(false), 100);
-        return;
-      }
-      
       // CRÍTICO: Só fazer draw se NÃO moveu (foi apenas um clique)
       // Usar tanto o estado quanto a ref para garantir que detecta movimento
       const actuallyMoved = libraryMoved || libraryMovedRef.current;
       
-      if (!actuallyMoved && event && event.button !== 2 && !contextMenu) {
+      // Log movimento do library se realmente moveu
+      if (actuallyMoved) {
+        const player = allPlayers.find(p => p.id === draggingLibrary.playerId);
+        const playerName = player?.name || draggingLibrary.playerId;
+        addEventLog('MOVE_LIBRARY', `Movendo library: ${playerName}`, undefined, undefined, {
+          playerId: draggingLibrary.playerId,
+          playerName,
+          position: libraryPositions[draggingLibrary.playerId],
+        });
+      }
+      
+      // Só fazer draw se NÃO moveu e não foi um clique executado anteriormente
+      if (!actuallyMoved && !libraryClickExecutedRef.current && event && event.button !== 2 && !contextMenu) {
         const target = event.target as HTMLElement;
         const isInteractive = target.closest('button, .library-count');
         const isLibraryStack = target.closest('.library-stack');
@@ -1257,17 +1728,17 @@ const Board = () => {
         // - NÃO moveu (verificado com estado e ref)
         if (isLibraryStack && !isInteractive && draggingLibrary) {
           libraryClickExecutedRef.current = true;
-        handleLibraryClick(draggingLibrary.playerId);
+          handleLibraryClick(draggingLibrary.playerId);
           // Resetar flag após um pequeno delay
           setTimeout(() => {
             libraryClickExecutedRef.current = false;
           }, 100);
         }
       }
+      
       setDraggingLibrary(null);
       setLibraryMoved(false);
       libraryMovedRef.current = false;
-      setTimeout(() => setLibraryMoved(false), 100);
     };
 
     window.addEventListener('pointermove', handleMove);
@@ -1276,28 +1747,88 @@ const Board = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', stopDrag);
     };
-  }, [draggingLibrary, moveLibrary, playerId, libraryMoved]);
+  }, [draggingLibrary, moveLibrary, playerId, libraryMoved, viewMode, players]);
 
   // Sistema de drag para cemitério
-  const startCemeteryDrag = (event: ReactPointerEvent) => {
-    if ((event.target as HTMLElement).closest('button')) return;
+  const startCemeteryDrag = (targetPlayerId: string, event: ReactPointerEvent) => {
+    console.log('[Board] startCemeteryDrag chamado', { targetPlayerId, currentPlayerId: playerId, matches: targetPlayerId === playerId });
+    
+    if ((event.target as HTMLElement).closest('button')) {
+      console.log('[Board] Bloqueado - botão');
+      return;
+    }
     // Não iniciar drag com botão direito (button 2)
-    if (event.button === 2) return;
+    if (event.button === 2) {
+      console.log('[Board] Bloqueado - botão direito');
+      return;
+    }
+    // A verificação de permissão já é feita no componente Cemetery
     event.preventDefault();
-    if (!boardRef.current) return;
+    if (!boardRef.current) {
+      console.log('[Board] Bloqueado - sem boardRef');
+      return;
+    }
 
     // Resetar flags ao iniciar novo drag
     cemeteryMovedRef.current = false;
 
     const rect = boardRef.current.getBoundingClientRect();
-    const cemeteryPos = getCemeteryPosition();
-    if (!cemeteryPos) return;
+    let cemeteryPos = getCemeteryPosition(targetPlayerId);
+    
+    // Se não encontrou posição, calcular uma posição padrão
+    if (!cemeteryPos) {
+      const CEMETERY_CARD_WIDTH = 100;
+      const CEMETERY_CARD_HEIGHT = 140;
+      const playerIndex = allPlayers.findIndex((p) => p.id === targetPlayerId);
+      const offsetX = playerIndex * (CEMETERY_CARD_WIDTH + 20);
+      cemeteryPos = {
+        x: rect.width / 2 - CEMETERY_CARD_WIDTH / 2 + offsetX,
+        y: rect.height / 2 - CEMETERY_CARD_HEIGHT / 2,
+      };
+    }
 
-    const offsetX = event.clientX - rect.left - cemeteryPos.x;
-    const offsetY = event.clientY - rect.top - cemeteryPos.y;
+    let cursorX = event.clientX - rect.left;
+    let cursorY = event.clientY - rect.top;
+    
+    // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+    if (viewMode === 'separated') {
+      const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
+      if (!windowInfo || windowInfo.player.id !== targetPlayerId) {
+        // Se não está na janela do player correto, usar posição atual do cemetery
+        cursorX = cemeteryPos.x;
+        cursorY = cemeteryPos.y;
+      } else {
+        const availableWidth = windowInfo.windowWidth;
+        const availableHeight = windowInfo.windowHeight; // Sem header
+        
+        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
+        const relativeX = event.clientX - rect.left;
+        const relativeY = event.clientY - rect.top;
+        const localX = relativeX - windowInfo.windowLeft;
+        const localY = relativeY - windowInfo.windowTop;
+        
+        cursorX = localX;
+        cursorY = localY;
+      }
+    } else {
+      // Converter coordenadas do mouse para o espaço base (1920x1080)
+      const scale = getBoardScale();
+      const scaledWidth = BASE_BOARD_WIDTH * scale;
+      const scaledHeight = BASE_BOARD_HEIGHT * scale;
+      const offsetX = (rect.width - scaledWidth) / 2;
+      const offsetY = (rect.height - scaledHeight) / 2;
+      
+      // Converter para coordenadas no espaço base
+      cursorX = (cursorX - offsetX) / scale;
+      cursorY = (cursorY - offsetY) / scale;
+    }
+
+    const offsetX = cursorX - cemeteryPos.x;
+    const offsetY = cursorY - cemeteryPos.y;
 
     setCemeteryMoved(false);
     setDraggingCemetery({
+      playerId: targetPlayerId,
       offsetX,
       offsetY,
       startX: event.clientX,
@@ -1328,21 +1859,131 @@ const Board = () => {
       }
 
       const rect = boardRef.current!.getBoundingClientRect();
-      const cursorX = event.clientX - rect.left;
-      const cursorY = event.clientY - rect.top;
+      let cursorX = event.clientX - rect.left;
+      let cursorY = event.clientY - rect.top;
+      
+      // Log: mouse real
+      const realMouseX = event.clientX;
+      const realMouseY = event.clientY;
+      const relativeMouseX = cursorX;
+      const relativeMouseY = cursorY;
+      
+      // No modo separated, converter coordenadas do mouse diretamente para o espaço do player
+      if (viewMode === 'separated') {
+        const windowInfo = getPlayerWindowAtPosition(event.clientX, event.clientY);
+        if (!windowInfo || windowInfo.player.id !== draggingCemetery.playerId) {
+          // Se não está na janela do player correto, limitar aos limites da área
+          const CEMETERY_CARD_WIDTH = 100;
+          const CEMETERY_CARD_HEIGHT = 140;
+          const playerArea = getPlayerArea(draggingCemetery.playerId);
+          if (playerArea) {
+            const cemeteryPos = getCemeteryPosition(draggingCemetery.playerId);
+            if (cemeteryPos) {
+              const x = cemeteryPos.x;
+              const y = cemeteryPos.y;
+              const clampedX = Math.max(
+                playerArea.x,
+                Math.min(playerArea.x + playerArea.width - CEMETERY_CARD_WIDTH, x)
+              );
+              const clampedY = Math.max(
+                playerArea.y,
+                Math.min(playerArea.y + playerArea.height - CEMETERY_CARD_HEIGHT, y)
+              );
+              setCemeteryPositions((prev) => ({
+                ...prev,
+                [draggingCemetery.playerId]: { x: clampedX, y: clampedY },
+              }));
+              moveCemetery(draggingCemetery.playerId, { x: clampedX, y: clampedY });
+            }
+          }
+          return;
+        }
+        
+        const availableWidth = windowInfo.windowWidth;
+        const availableHeight = windowInfo.windowHeight; // Sem header
+        
+        // Converter coordenadas do mouse diretamente para o espaço do player (sem scale)
+        const relativeX = event.clientX - rect.left;
+        const relativeY = event.clientY - rect.top;
+        const localX = relativeX - windowInfo.windowLeft;
+        const localY = relativeY - windowInfo.windowTop;
+        
+        cursorX = localX;
+        cursorY = localY;
+        
+        // Log: mouse no board (separated mode)
+        console.log('[Board] Cemetery drag - Mouse coordinates:', {
+          realMouse: { x: realMouseX, y: realMouseY },
+          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
+          inBoardSpace: { x: cursorX, y: cursorY },
+          windowInfo: {
+            windowLeft: windowInfo.windowLeft,
+            windowTop: windowInfo.windowTop,
+            windowWidth: windowInfo.windowWidth,
+            windowHeight: windowInfo.windowHeight,
+            playerId: windowInfo.player.id,
+          },
+          availableSize: { width: availableWidth, height: availableHeight },
+        });
+      } else {
+        // Converter coordenadas do mouse para o espaço base (1920x1080)
+        const scale = getBoardScale();
+        const scaledWidth = BASE_BOARD_WIDTH * scale;
+        const scaledHeight = BASE_BOARD_HEIGHT * scale;
+        const offsetX = (rect.width - scaledWidth) / 2;
+        const offsetY = (rect.height - scaledHeight) / 2;
+        
+        // Converter para coordenadas no espaço base
+        cursorX = (cursorX - offsetX) / scale;
+        cursorY = (cursorY - offsetY) / scale;
+        
+        // Log: mouse no board (normal mode)
+        console.log('[Board] Cemetery drag - Mouse coordinates:', {
+          realMouse: { x: realMouseX, y: realMouseY },
+          relativeToBoard: { x: relativeMouseX, y: relativeMouseY },
+          inBoardSpace: { x: cursorX, y: cursorY },
+          scale,
+          offset: { x: offsetX, y: offsetY },
+        });
+      }
+      
       const x = cursorX - draggingCemetery.offsetX;
       const y = cursorY - draggingCemetery.offsetY;
 
-      // Clamp dentro da área do board
+      // Clamp dentro da área - se estiver fora, limitar aos limites
       const CEMETERY_CARD_WIDTH = 100;
       const CEMETERY_CARD_HEIGHT = 140;
-      const clampedX = Math.max(0, Math.min(rect.width - CEMETERY_CARD_WIDTH, x));
-      const clampedY = Math.max(0, Math.min(rect.height - CEMETERY_CARD_HEIGHT, y));
+      const playerArea = getPlayerArea(draggingCemetery.playerId);
+      const maxX = playerArea ? playerArea.x + playerArea.width - CEMETERY_CARD_WIDTH : rect.width - CEMETERY_CARD_WIDTH;
+      const maxY = playerArea ? playerArea.y + playerArea.height - CEMETERY_CARD_HEIGHT : rect.height - CEMETERY_CARD_HEIGHT;
+      const minX = playerArea ? playerArea.x : 0;
+      const minY = playerArea ? playerArea.y : 0;
+      
+      const clampedX = Math.max(minX, Math.min(maxX, x));
+      const clampedY = Math.max(minY, Math.min(maxY, y));
 
-      setCemeteryPosition({ x: clampedX, y: clampedY });
+      // Atualizar posição local imediatamente para feedback visual
+      setCemeteryPositions((prev) => ({
+        ...prev,
+        [draggingCemetery.playerId]: { x: clampedX, y: clampedY },
+      }));
+
+      // Sincronizar com os peers - isso vai atualizar o store e enviar para outros players
+      console.log('[Board] Chamando moveCemetery', { playerId: draggingCemetery.playerId, position: { x: clampedX, y: clampedY } });
+      moveCemetery(draggingCemetery.playerId, { x: clampedX, y: clampedY });
     };
 
     const stopDrag = () => {
+      // Log movimento do cemetery se realmente moveu
+      if (cemeteryMovedRef.current) {
+        const player = players.find(p => p.id === draggingCemetery.playerId);
+        const playerName = player?.name || draggingCemetery.playerId;
+        addEventLog('MOVE_CEMETERY', `Movendo cemetery: ${playerName}`, undefined, undefined, {
+          playerId: draggingCemetery.playerId,
+          playerName,
+          position: cemeteryPositions[draggingCemetery.playerId],
+        });
+      }
       setDraggingCemetery(null);
       setCemeteryMoved(false);
       cemeteryMovedRef.current = false;
@@ -1355,7 +1996,7 @@ const Board = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', stopDrag);
     };
-  }, [draggingCemetery, cemeteryMoved]);
+  }, [draggingCemetery, moveCemetery, playerId, cemeteryMoved, viewMode, players, getPlayerArea]);
 
   // Rastrear posição do mouse para debug
   useEffect(() => {
@@ -1376,44 +2017,831 @@ const Board = () => {
     };
   }, []);
 
-  return (
-    <div className="board-container">
-      <div className="board-toolbar">
-        <div className="board-status">{instruction}</div>
-        <div style={{ marginLeft: 'auto', display: 'flex', gap: '8px' }}>
-          <button
-            onClick={() => setShowDebugMode(!showDebugMode)}
+  // Função para renderizar o conteúdo do board baseado no modo de visualização
+  const renderBoardContent = () => {
+    if (viewMode === 'individual') {
+      // Modo individual: mostrar apenas o player selecionado, centralizado
+      const selectedPlayer = allPlayers[selectedPlayerIndex];
+      if (!selectedPlayer) return null;
+      
+      const selectedPlayerId = selectedPlayer.id;
+      const filteredPlayers = [selectedPlayer];
+      // Nota: Para players simulados, não há cartas, então filteredBattlefieldCards, etc. estarão vazios
+      const filteredBattlefieldCards = battlefieldCards.filter(c => c.ownerId === selectedPlayerId);
+      const filteredLibraryCards = libraryCards.filter(c => c.ownerId === selectedPlayerId);
+      const filteredCemeteryCards = cemeteryCards.filter(c => c.ownerId === selectedPlayerId);
+      
+      // No modo individual, usar o espaço base completo (1920x1080)
+      // O container já está escalado, então usamos coordenadas no espaço base
+      return (
+        <>
+          {/* Player area - ocupar todo o espaço base */}
+          <div
+            className={`player-area ${selectedPlayerId === playerId ? 'current-player' : ''}`}
             style={{
-              padding: '8px 16px',
-              backgroundColor: showDebugMode ? '#6366f1' : '#475569',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '14px',
+              left: '0px',
+              top: '0px',
+              width: `${BASE_BOARD_WIDTH}px`,
+              height: `${BASE_BOARD_HEIGHT}px`,
             }}
           >
-            {showDebugMode ? '🔍 Debug ON' : '🔍 Debug OFF'}
-          </button>
-        <button
-          onClick={() => {
-            setShowHand(!showHand);
-            setHandButtonEnabled(true);
-          }}
-          disabled={!handButtonEnabled && !showHand}
+            <div className="player-area-label">{selectedPlayer.name}</div>
+          </div>
+          
+          {/* Library do player selecionado */}
+          <Library
+            boardRef={boardRef}
+            playerId={playerId}
+            libraryCards={filteredLibraryCards}
+            players={filteredPlayers}
+            getPlayerArea={(id) => {
+              if (id === selectedPlayerId) {
+                return {
+                  x: 0,
+                  y: 0,
+                  width: BASE_BOARD_WIDTH,
+                  height: BASE_BOARD_HEIGHT,
+                };
+              }
+              return null;
+            }}
+            getLibraryPosition={getLibraryPosition}
+            ownerName={ownerName}
+            onLibraryContextMenu={(card, e) => {
+              setContextMenu({
+                x: e.clientX,
+                y: e.clientY,
+                card,
+              });
+            }}
+            startLibraryDrag={startLibraryDrag}
+            draggingLibrary={draggingLibrary}
+            startDrag={startDrag}
+          />
+          
+          {/* Cemetery do player selecionado */}
+          <Cemetery
+            boardRef={boardRef}
+            playerId={playerId}
+            cemeteryCards={filteredCemeteryCards}
+            players={filteredPlayers}
+            getCemeteryPosition={getCemeteryPosition}
+            ownerName={ownerName}
+            onCemeteryContextMenu={(card, e) => {
+              setContextMenu({
+                x: e.clientX,
+                y: e.clientY,
+                card,
+              });
+            }}
+            startDrag={startDrag}
+            startCemeteryDrag={startCemeteryDrag}
+            draggingCemetery={draggingCemetery}
+          />
+          
+          {/* Battlefield cards do player selecionado */}
+          {filteredBattlefieldCards.map((card) => {
+            const isDragging = dragStateRef.current?.cardId === card.id;
+            const posX = isNaN(card.position.x) ? 0 : card.position.x;
+            const posY = isNaN(card.position.y) ? 0 : card.position.y;
+            
+            return (
+              <div
+                key={card.id}
+                className={`battlefield-card ${isDragging ? 'dragging' : ''}`}
+                style={{
+                  position: 'absolute',
+                  left: `${posX}px`,
+                  top: `${posY}px`,
+                  zIndex: isDragging ? 1000 : 1,
+                }}
+              >
+                <CardToken
+                  card={card}
+                  onPointerDown={(event) => {
+                    setLastTouchedCard(card);
+                    startDrag(card, event);
+                  }}
+                  onClick={(event) => handleCardClick(card, event)}
+                  onContextMenu={(event) => handleCardContextMenu(card, event)}
+                  ownerName={ownerName(card)}
+                  width={CARD_WIDTH}
+                  height={CARD_HEIGHT}
+                  showBack={false}
+                />
+              </div>
+            );
+          })}
+          
+          {/* Hand do player selecionado (se for o player atual) */}
+          {showHand && selectedPlayerId === playerId && (
+            <Hand
+              boardRef={boardRef}
+              playerId={playerId}
+              board={board}
+              players={filteredPlayers}
+              getPlayerArea={(id) => {
+                if (id === selectedPlayerId) {
+                  return {
+                    x: 0,
+                    y: 0,
+                    width: BASE_BOARD_WIDTH,
+                    height: BASE_BOARD_HEIGHT,
+                  };
+                }
+                return null;
+              }}
+              handleCardClick={handleCardClick}
+              handleCardContextMenu={handleCardContextMenu}
+              startDrag={startDrag}
+              ownerName={ownerName}
+              changeCardZone={changeCardZone}
+              detectZoneAtPosition={detectZoneAtPosition}
+              reorderHandCard={reorderHandCard}
+              dragStartedFromHandRef={dragStartedFromHandRef}
+              handCardPlacedRef={handCardPlacedRef}
+              setDragStartedFromHand={(value: boolean) => {
+                dragStartedFromHandRef.current = value;
+              }}
+              clearBoardDrag={() => {
+                dragStateRef.current = null;
+                setIsDragging(false);
+              }}
+            />
+          )}
+        </>
+      );
+    } else if (viewMode === 'separated') {
+      // Modo separated: cada player em uma janela separada
+      if (!boardRef.current) return null;
+      const rect = boardRef.current.getBoundingClientRect();
+      const boardWidth = rect.width;
+      const boardHeight = rect.height;
+      const cols = Math.ceil(Math.sqrt(allPlayers.length));
+      const rows = Math.ceil(allPlayers.length / cols);
+      
+      // Área padrão do player (usada como referência para posicionamento)
+      
+      return (
+        <>
+          {allPlayers.map((player, index) => {
+            const col = index % cols;
+            const row = Math.floor(index / cols);
+            
+            // Calcular porcentagens para posicionamento
+            const leftPercent = (col / cols) * 100;
+            const topPercent = (row / rows) * 100;
+            const widthPercent = 100 / cols;
+            const heightPercent = 100 / rows;
+            
+            // Calcular tamanho real da janela baseado em porcentagens
+            const windowWidth = (boardWidth * widthPercent) / 100;
+            const windowHeight = (boardHeight * heightPercent) / 100;
+            const availableWidth = windowWidth;
+            const availableHeight = windowHeight; // Sem header
+            
+            // Manter proporção 16:9 com área máxima possível
+            const aspectRatio = 16 / 9;
+            
+            // Calcular qual dimensão permite área maior mantendo 16:9
+            const widthBasedHeight = availableWidth / aspectRatio;
+            const heightBasedWidth = availableHeight * aspectRatio;
+            
+            let playerAreaWidth, playerAreaHeight, offsetX, offsetY;
+            
+            if (widthBasedHeight <= availableHeight) {
+              // A largura é limitante - usar 100% da largura
+              playerAreaWidth = availableWidth;
+              playerAreaHeight = widthBasedHeight;
+              offsetX = 0;
+              offsetY = (availableHeight - playerAreaHeight) / 2;
+            } else {
+              // A altura é limitante - usar 100% da altura e calcular largura
+              playerAreaWidth = heightBasedWidth;
+              playerAreaHeight = availableHeight;
+              offsetX = (availableWidth - playerAreaWidth) / 2;
+              offsetY = 0;
+            }
+            
+            // Calcular scale baseado na proporção entre o tamanho real e o tamanho base (1920x1080)
+            const scaleX = playerAreaWidth / BASE_BOARD_WIDTH;
+            const scaleY = playerAreaHeight / BASE_BOARD_HEIGHT;
+            const scale = Math.min(scaleX, scaleY); // Usar o menor para manter proporções
+            
+            const playerBattlefieldCards = battlefieldCards.filter(c => c.ownerId === player.id);
+            const playerLibraryCards = libraryCards.filter(c => c.ownerId === player.id);
+            const playerCemeteryCards = cemeteryCards.filter(c => c.ownerId === player.id);
+            
+            return (
+              <div
+                key={player.id}
+                id={`player-window-${player.id}`}
+                data-player-id={player.id}
+                data-player-index={index}
+                data-player-name={player.name}
+                data-window-position={`col-${col}-row-${row}`}
+                style={{
+                  position: 'absolute',
+                  left: `${leftPercent}%`,
+                  top: `${topPercent}%`,
+                  width: `${widthPercent}%`,
+                  height: `${heightPercent}%`,
+                  border: 'none',
+                  borderRadius: '0px',
+                  backgroundColor: 'transparent',
+                  overflow: 'hidden',
+                  display: 'flex',
+                  flexDirection: 'column',
+                }}
+              >
+                {/* Container para a área do player - usando transform para posicionar */}
+                <div 
+                  id={`player-content-container-${player.id}`}
+                  data-player-id={player.id}
+                  data-element="player-content-container"
+                  style={{ 
+                    position: 'relative',
+                    width: '100%',
+                    flex: 1,
+                    minHeight: 0,
+                    overflow: 'visible',
+                  }}
+                >
+                  {/* Área do player - mantendo proporção 16:9 com largura máxima */}
+                  <div 
+                    id={`player-scaled-area-${player.id}`}
+                    data-player-id={player.id}
+                    data-element="player-scaled-area"
+                    data-area-width={playerAreaWidth}
+                    data-area-height={playerAreaHeight}
+                    data-scale={scale}
+                    style={{ 
+                      position: 'absolute',
+                      left: `${offsetX >= 0 ? (offsetX / availableWidth) * 100 : 0}%`,
+                      top: `${offsetY >= 0 ? (offsetY / availableHeight) * 100 : 0}%`,
+                      width: `${(playerAreaWidth / availableWidth) * 100}%`,
+                      height: `${(playerAreaHeight / availableHeight) * 100}%`,
+                      overflow: 'visible',
+                    }}
+                  >
+                  {/* Container escalado para cartas e elementos */}
+                  <div
+                    style={{
+                      position: 'absolute',
+                      left: '0',
+                      top: '0',
+                      width: `${BASE_BOARD_WIDTH}px`,
+                      height: `${BASE_BOARD_HEIGHT}px`,
+                      transform: `scale(${scale})`,
+                      transformOrigin: 'top left',
+                      overflow: 'visible',
+                    }}
+                  >
+                  {/* Player area - ocupando 100% da área base */}
+                  <div
+                    id={`player-area-${player.id}`}
+                    data-player-id={player.id}
+                    data-element="player-area"
+                    className={`player-area ${player.id === playerId ? 'current-player' : ''}`}
+                    style={{
+                      position: 'absolute',
+                      left: '0px',
+                      top: '0px',
+                      width: `${BASE_BOARD_WIDTH}px`,
+                      height: `${BASE_BOARD_HEIGHT}px`,
+                    }}
+                  >
+                    <div className="player-area-label">{player.name}</div>
+                  </div>
+                  
+                  {/* Library */}
+                  <Library
+                    boardRef={boardRef}
+                    playerId={playerId}
+                    libraryCards={playerLibraryCards}
+                    players={[player]}
+                    getPlayerArea={(id) => {
+                      if (id === player.id) {
+                        // Retornar tamanho base (1920x1080) já que o scale é aplicado no container
+                        return {
+                          x: 0,
+                          y: 0,
+                          width: BASE_BOARD_WIDTH,
+                          height: BASE_BOARD_HEIGHT,
+                        };
+                      }
+                      return null;
+                    }}
+                    getLibraryPosition={(id) => {
+                      // No modo separated, só mostrar a library do player atual desta janela
+                      if (id !== player.id) {
+                        return null;
+                      }
+                      // No modo separated, usar a posição real do store
+                      // A posição no store é relativa à área do player no espaço padrão
+                      const storePos = storeLibraryPositions[id];
+                      if (storePos) {
+                        // Usar posição do store diretamente (já está no espaço padrão)
+                        return {
+                          x: storePos.x,
+                          y: storePos.y,
+                        };
+                      }
+                      // Posição padrão - usar tamanho base (1920x1080) já que o scale é aplicado
+                      return {
+                        x: 50, // 50px da esquerda
+                        y: BASE_BOARD_HEIGHT / 2 - 70, // Centro vertical menos metade da altura da carta
+                      };
+                    }}
+                    ownerName={ownerName}
+                    onLibraryContextMenu={(card, e) => {
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        card,
+                      });
+                    }}
+                    startLibraryDrag={startLibraryDrag}
+                    draggingLibrary={draggingLibrary}
+                    startDrag={startDrag}
+                  />
+                  
+                  {/* Cemetery */}
+                  <Cemetery
+                    boardRef={boardRef}
+                    playerId={playerId}
+                    cemeteryCards={playerCemeteryCards}
+                    players={[player]}
+                    getCemeteryPosition={(id) => {
+                      // No modo separated, só mostrar o cemitério do player atual desta janela
+                      if (id !== player.id) {
+                        return null;
+                      }
+                      // No modo separated, usar a posição real do store
+                      // A posição no store é relativa à área do player no espaço padrão
+                      // Converter para o espaço da área escalada
+                      const storePos = storeCemeteryPositions[id];
+                      if (storePos) {
+                        // Usar posição do store diretamente (já está no espaço padrão)
+                        return {
+                          x: storePos.x,
+                          y: storePos.y,
+                        };
+                      }
+                      // Posição padrão - usar tamanho base (1920x1080) já que o scale é aplicado
+                      return {
+                        x: BASE_BOARD_WIDTH - 150, // 150px da direita
+                        y: BASE_BOARD_HEIGHT / 2 - 70, // Centro vertical menos metade da altura da carta
+                      };
+                    }}
+                    ownerName={ownerName}
+                    onCemeteryContextMenu={(card, e) => {
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        card,
+                      });
+                    }}
+                    startDrag={startDrag}
+                    startCemeteryDrag={startCemeteryDrag}
+                    draggingCemetery={draggingCemetery}
+                  />
+                  
+                  {/* Battlefield cards - mostrar todas as cartas do player */}
+                  {playerBattlefieldCards.map((card) => {
+                    const isDragging = dragStateRef.current?.cardId === card.id;
+                    const posX = isNaN(card.position.x) ? 0 : card.position.x;
+                    const posY = isNaN(card.position.y) ? 0 : card.position.y;
+                    
+                    // No modo separated, as cartas estão em coordenadas absolutas do board
+                    // Mostrar todas as cartas do player, mesmo que estejam fora do espaço padrão
+                    // O scale vai ajustar automaticamente
+                    
+                    return (
+                      <div
+                        key={card.id}
+                        className={`battlefield-card ${isDragging ? 'dragging' : ''}`}
+                        style={{
+                          position: 'absolute',
+                          left: `${posX}px`,
+                          top: `${posY}px`,
+                          zIndex: isDragging ? 1000 : 1,
+                        }}
+                      >
+                        <CardToken
+                          card={card}
+                          onPointerDown={(event) => {
+                            setLastTouchedCard(card);
+                            startDrag(card, event);
+                          }}
+                          onClick={(event) => handleCardClick(card, event)}
+                          onContextMenu={(event) => handleCardContextMenu(card, event)}
+                          ownerName={ownerName(card)}
+                          width={CARD_WIDTH}
+                          height={CARD_HEIGHT}
+                          showBack={false}
+                        />
+                      </div>
+                    );
+                  })}
+                  
+                  {/* Hand (se for o player atual) */}
+                  {showHand && player.id === playerId && (
+                    <Hand
+                      boardRef={boardRef}
+                      playerId={playerId}
+                      board={board}
+                      players={[player]}
+                      getPlayerArea={(id) => {
+                        if (id === player.id) {
+                          // Retornar tamanho base (1920x1080) já que o scale é aplicado no container
+                          return {
+                            x: 0,
+                            y: 0,
+                            width: BASE_BOARD_WIDTH,
+                            height: BASE_BOARD_HEIGHT,
+                          };
+                        }
+                        return null;
+                      }}
+                      handleCardClick={handleCardClick}
+                      handleCardContextMenu={handleCardContextMenu}
+                      startDrag={startDrag}
+                      ownerName={ownerName}
+                      changeCardZone={changeCardZone}
+                      detectZoneAtPosition={detectZoneAtPosition}
+                      reorderHandCard={reorderHandCard}
+                      dragStartedFromHandRef={dragStartedFromHandRef}
+                      handCardPlacedRef={handCardPlacedRef}
+                      setDragStartedFromHand={(value: boolean) => {
+                        dragStartedFromHandRef.current = value;
+                      }}
+                      clearBoardDrag={() => {
+                        dragStateRef.current = null;
+                        setIsDragging(false);
+                      }}
+                    />
+                  )}
+                  </div>
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </>
+      );
+    } else {
+      // Modo unified: renderizar tudo como está (padrão)
+      return (
+        <>
+          {allPlayers.length > 0 && allPlayers.map((player) => {
+            const area = getPlayerArea(player.id);
+            if (!area) return null;
+            const isCurrentPlayer = player.id === playerId;
+            
+            return (
+              <div key={player.id}>
+                <div
+                  className={`player-area ${isCurrentPlayer ? 'current-player' : ''}`}
+                  style={{
+                    left: `${area.x}px`,
+                    top: `${area.y}px`,
+                    width: `${area.width}px`,
+                    height: `${area.height}px`,
+                  }}
+                >
+                  <div className="player-area-label">{player.name}</div>
+                </div>
+              </div>
+            );
+          })}
+          
+          <Library
+            boardRef={boardRef}
+            playerId={playerId}
+            libraryCards={libraryCards}
+            players={players}
+            getPlayerArea={getPlayerArea}
+            getLibraryPosition={getLibraryPosition}
+            ownerName={ownerName}
+            onLibraryContextMenu={(card, e) => {
+              setContextMenu({
+                x: e.clientX,
+                y: e.clientY,
+                card,
+              });
+            }}
+            startLibraryDrag={startLibraryDrag}
+            draggingLibrary={draggingLibrary}
+            startDrag={startDrag}
+          />
+          
+          <Cemetery
+            boardRef={boardRef}
+            playerId={playerId}
+            cemeteryCards={cemeteryCards}
+            players={players}
+            getCemeteryPosition={getCemeteryPosition}
+            ownerName={ownerName}
+            onCemeteryContextMenu={(card, e) => {
+              setContextMenu({
+                x: e.clientX,
+                y: e.clientY,
+                card,
+              });
+            }}
+            startDrag={startDrag}
+            startCemeteryDrag={startCemeteryDrag}
+            draggingCemetery={draggingCemetery}
+          />
+          
+          {battlefieldCards.map((card) => {
+            const isDragging = dragStateRef.current?.cardId === card.id;
+            const posX = isNaN(card.position.x) ? 0 : card.position.x;
+            const posY = isNaN(card.position.y) ? 0 : card.position.y;
+            
+            return (
+              <div
+                key={card.id}
+                className={`battlefield-card ${isDragging ? 'dragging' : ''}`}
+                style={{
+                  position: 'absolute',
+                  left: `${posX}px`,
+                  top: `${posY}px`,
+                  zIndex: isDragging ? 1000 : 1,
+                }}
+              >
+                <CardToken
+                  card={card}
+                  onPointerDown={(event) => {
+                    setLastTouchedCard(card);
+                    startDrag(card, event);
+                  }}
+                  onClick={(event) => handleCardClick(card, event)}
+                  onContextMenu={(event) => handleCardContextMenu(card, event)}
+                  ownerName={ownerName(card)}
+                  width={CARD_WIDTH}
+                  height={CARD_HEIGHT}
+                  showBack={false}
+                />
+              </div>
+            );
+          })}
+          
+          {showHand && (
+            <Hand
+              boardRef={boardRef}
+              playerId={playerId}
+              board={board}
+              players={players}
+              getPlayerArea={getPlayerArea}
+              handleCardClick={handleCardClick}
+              handleCardContextMenu={handleCardContextMenu}
+              startDrag={startDrag}
+              ownerName={ownerName}
+              changeCardZone={changeCardZone}
+              detectZoneAtPosition={detectZoneAtPosition}
+              reorderHandCard={reorderHandCard}
+              dragStartedFromHandRef={dragStartedFromHandRef}
+              handCardPlacedRef={handCardPlacedRef}
+              setDragStartedFromHand={(value: boolean) => {
+                dragStartedFromHandRef.current = value;
+              }}
+              clearBoardDrag={() => {
+                dragStateRef.current = null;
+                setIsDragging(false);
+              }}
+            />
+          )}
+        </>
+      );
+    }
+  };
+
+  return (
+    <div className="board-container">
+      {/* Painel flutuante com status e controles */}
+      <div
+        style={{
+          position: 'fixed',
+          top: '16px',
+          right: '16px',
+          zIndex: 1000,
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '8px',
+          alignItems: 'flex-end',
+        }}
+      >
+        {/* Status */}
+        <div
           style={{
-            padding: '8px 16px',
-            backgroundColor: showHand ? '#ef4444' : '#10b981',
-            color: 'white',
-            border: 'none',
-            borderRadius: '4px',
-            cursor: (!handButtonEnabled && !showHand) ? 'not-allowed' : 'pointer',
-            fontSize: '14px',
-            opacity: (!handButtonEnabled && !showHand) ? 0.5 : 1,
+            padding: '0.4rem 0.8rem',
+            borderRadius: '999px',
+            background: 'rgba(34, 197, 94, 0.15)',
+            border: '1px solid rgba(34, 197, 94, 0.3)',
+            color: '#86efac',
+            fontSize: '12px',
+            fontWeight: '500',
           }}
         >
-          {showHand ? 'Esconder Hand' : 'Mostrar Hand'}
-        </button>
+          Status: {status}
+        </div>
+        
+        {/* Controles */}
+        <div
+          style={{
+            display: 'flex',
+            flexDirection: 'column',
+            gap: '8px',
+            padding: '8px',
+            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+            border: '1px solid rgba(148, 163, 184, 0.3)',
+            borderRadius: '8px',
+            backdropFilter: 'blur(10px)',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.3)',
+          }}
+        >
+          {/* Controles de modo de visualização */}
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+            <button
+              onClick={() => setViewMode('unified')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: viewMode === 'unified' ? '#6366f1' : '#475569',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+              title="Todos os boards juntos"
+            >
+              🎯 Unificado
+            </button>
+            <button
+              onClick={() => {
+                setViewMode('individual');
+                // Começar com o player atual
+                const currentIndex = players.findIndex(p => p.id === playerId);
+                setSelectedPlayerIndex(currentIndex >= 0 ? currentIndex : 0);
+              }}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: viewMode === 'individual' ? '#6366f1' : '#475569',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+              title="Ver um player por vez"
+            >
+              👤 Individual
+            </button>
+            <button
+              onClick={() => setViewMode('separated')}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: viewMode === 'separated' ? '#6366f1' : '#475569',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+              title="Boards separados"
+            >
+              📑 Separado
+            </button>
+          </div>
+          
+          {/* Navegação entre players (modo individual) */}
+          {viewMode === 'individual' && allPlayers.length > 1 && (
+            <div style={{ display: 'flex', gap: '4px', alignItems: 'center', justifyContent: 'center' }}>
+              <button
+                onClick={() => {
+                  setSelectedPlayerIndex((prev) => (prev - 1 + allPlayers.length) % allPlayers.length);
+                }}
+                style={{
+                  padding: '6px 10px',
+                  backgroundColor: '#475569',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+                title="Player anterior"
+              >
+                ←
+              </button>
+              <span style={{ fontSize: '12px', color: '#fff', minWidth: '80px', textAlign: 'center' }}>
+                {allPlayers[selectedPlayerIndex]?.name || 'N/A'}
+              </span>
+              <button
+                onClick={() => {
+                  setSelectedPlayerIndex((prev) => (prev + 1) % allPlayers.length);
+                }}
+                style={{
+                  padding: '6px 10px',
+                  backgroundColor: '#475569',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '14px',
+                }}
+                title="Próximo player"
+              >
+                →
+              </button>
+            </div>
+          )}
+          
+          {/* Outros controles */}
+          <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
+            <button
+              onClick={() => setShowDebugMode(!showDebugMode)}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: showDebugMode ? '#10b981' : '#475569',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              {showDebugMode ? '🔍 Debug ON' : '🔍 Debug OFF'}
+            </button>
+            <button
+              onClick={() => {
+                setShowHand(!showHand);
+                setHandButtonEnabled(true);
+              }}
+              disabled={!handButtonEnabled && !showHand}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: showHand ? '#ef4444' : '#10b981',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: (!handButtonEnabled && !showHand) ? 'not-allowed' : 'pointer',
+                fontSize: '12px',
+                opacity: (!handButtonEnabled && !showHand) ? 0.5 : 1,
+              }}
+            >
+              {showHand ? 'Esconder Hand' : 'Mostrar Hand'}
+            </button>
+          </div>
+          
+          {/* Controle de simulação de players */}
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
+            <button
+              onClick={() => setShowSimulatePanel(!showSimulatePanel)}
+              style={{
+                padding: '6px 12px',
+                backgroundColor: simulatePlayers > 0 ? '#10b981' : '#475569',
+                color: 'white',
+                border: 'none',
+                borderRadius: '4px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+              title="Simular múltiplos players"
+            >
+              {simulatePlayers > 0 ? `👥 Simular: ${simulatePlayers}` : '👥 Simular Players'}
+            </button>
+            {showSimulatePanel && (
+              <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '4px', backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: '4px' }}>
+                <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '4px' }}>Quantos players simular?</div>
+                <div style={{ display: 'flex', gap: '4px', flexWrap: 'wrap' }}>
+                  {[0, 1, 2, 3, 4, 5, 6].map((num) => (
+                    <button
+                      key={num}
+                      onClick={() => {
+                        setSimulatePlayers(num);
+                        if (num === 0) setShowSimulatePanel(false);
+                      }}
+                      style={{
+                        padding: '4px 8px',
+                        backgroundColor: simulatePlayers === num ? '#6366f1' : '#475569',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        minWidth: '32px',
+                      }}
+                    >
+                      {num === 0 ? 'Off' : num}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
+          </div>
         </div>
       </div>
       <div 
@@ -1422,150 +2850,51 @@ const Board = () => {
         onClick={(e) => {
           const target = e.target as HTMLElement;
           const isInteractive = target.closest(
-            `.card-token, button, .library-stack, .player-area${showHand ? ', .hand-card-wrapper, .hand-area, .hand-cards' : ''}`
+            `.card-token, button, .library-stack, .cemetery-stack, .player-area${showHand ? ', .hand-card-wrapper, .hand-area, .hand-cards' : ''}`
           );
           
           console.log('[Board] board-surface onClick:', {
             target: target.className,
             isInteractive: !!isInteractive,
             isDragging,
+            draggingCemetery,
             clickBlockTimeout: clickBlockTimeoutRef.current,
             dragStateRef: dragStateRef.current,
             dragStartedFromHand: dragStartedFromHandRef.current,
           });
           
-          if (!isInteractive) {
+          // Não resetar se estiver arrastando cemitério ou library
+          if (!isInteractive && !draggingCemetery && !draggingLibrary) {
             console.log('[Board] board-surface onClick: Chamando resetAllDragStates');
             resetAllDragStates();
           }
         }}
       >
-        {board.length === 0 && <div className="empty-state">No cards yet. Add cards from the search or a deck.</div>}
-        
-        {players.length > 0 && players.map((player) => {
-          const area = getPlayerArea(player.id);
-          if (!area) return null;
-          const isCurrentPlayer = player.id === playerId;
-          
-          return (
-            <div key={player.id}>
-              <div
-                className={`player-area ${isCurrentPlayer ? 'current-player' : ''}`}
-                style={{
-                  left: `${area.x}px`,
-                  top: `${area.y}px`,
-                  width: `${area.width}px`,
-                  height: `${area.height}px`,
-                }}
-              >
-                <div className="player-area-label">{player.name}</div>
-              </div>
-            </div>
-          );
-        })}
-        
-        <Library
-          boardRef={boardRef}
-          playerId={playerId}
-          libraryCards={libraryCards}
-          players={players}
-          getPlayerArea={getPlayerArea}
-          getLibraryPosition={getLibraryPosition}
-          ownerName={ownerName}
-          onLibraryContextMenu={(card, e) => {
-            setContextMenu({
-              x: e.clientX,
-              y: e.clientY,
-              card,
-            });
-          }}
-          startLibraryDrag={startLibraryDrag}
-          draggingLibrary={draggingLibrary}
-          startDrag={startDrag}
-        />
-        
-        <Cemetery
-          boardRef={boardRef}
-          playerId={playerId}
-          cemeteryCards={cemeteryCards}
-          players={players}
-          getCemeteryPosition={getCemeteryPosition}
-          ownerName={ownerName}
-          onCemeteryContextMenu={(card, e) => {
-            setContextMenu({
-              x: e.clientX,
-              y: e.clientY,
-              card,
-            });
-          }}
-          startDrag={startDrag}
-          startCemeteryDrag={startCemeteryDrag}
-          draggingCemetery={draggingCemetery}
-        />
-        
-        {battlefieldCards.map((card) => {
-          const isDragging = dragStateRef.current?.cardId === card.id;
-          // Garantir que a posição seja válida
-          const posX = isNaN(card.position.x) ? 0 : card.position.x;
-          const posY = isNaN(card.position.y) ? 0 : card.position.y;
+        {/* Container escalado baseado em 1080p */}
+        {boardRef.current && (() => {
+          const rect = boardRef.current!.getBoundingClientRect();
+          const scale = getBoardScale();
+          const scaledWidth = BASE_BOARD_WIDTH * scale;
+          const scaledHeight = BASE_BOARD_HEIGHT * scale;
+          const offsetX = (rect.width - scaledWidth) / 2;
+          const offsetY = (rect.height - scaledHeight) / 2;
           
           return (
             <div
-              key={card.id}
-              className={`battlefield-card ${isDragging ? 'dragging' : ''}`}
               style={{
                 position: 'absolute',
-                left: `${posX}px`,
-                top: `${posY}px`,
-                zIndex: isDragging ? 1000 : 1,
+                left: `${offsetX}px`,
+                top: `${offsetY}px`,
+                width: `${BASE_BOARD_WIDTH}px`,
+                height: `${BASE_BOARD_HEIGHT}px`,
+                transform: `scale(${scale})`,
+                transformOrigin: 'top left',
               }}
             >
-              <CardToken
-                card={card}
-                onPointerDown={(event) => {
-                  setLastTouchedCard(card);
-                  startDrag(card, event);
-                }}
-                onClick={(event) => handleCardClick(card, event)}
-                onContextMenu={(event) => handleCardContextMenu(card, event)}
-                ownerName={ownerName(card)}
-                width={CARD_WIDTH}
-                height={CARD_HEIGHT}
-                showBack={false}
-              />
+              {renderBoardContent()}
             </div>
           );
-        })}
-        
-        {showHand && (
-          <Hand
-            boardRef={boardRef}
-            playerId={playerId}
-            board={board}
-            players={players}
-            getPlayerArea={getPlayerArea}
-            handleCardClick={handleCardClick}
-            handleCardContextMenu={handleCardContextMenu}
-            startDrag={startDrag}
-            ownerName={ownerName}
-            changeCardZone={changeCardZone}
-            detectZoneAtPosition={detectZoneAtPosition}
-            reorderHandCard={reorderHandCard}
-            dragStartedFromHandRef={dragStartedFromHandRef}
-            handCardPlacedRef={handCardPlacedRef}
-            setDragStartedFromHand={(value: boolean) => {
-              dragStartedFromHandRef.current = value;
-            }}
-            clearBoardDrag={() => {
-              dragStateRef.current = null;
-              setIsDragging(false);
-            }}
-            setLastTouchedCard={setLastTouchedCard}
-            handDragStateRef={handDragStateRef}
-            addEventLog={addEventLog}
-            showDebugMode={showDebugMode}
-          />
-        )}
+        })()}
         
         {/* Painel de Log de Eventos - Só mostra se debug mode estiver ativo */}
         {showDebugMode && (
@@ -1591,6 +2920,21 @@ const Board = () => {
           <div style={{ marginBottom: '8px', fontWeight: 'bold', borderBottom: '1px solid #555', paddingBottom: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
             <span>📋 Event Log ({eventLogs.length}){isRecording && <span style={{ color: '#ef4444', marginLeft: '8px', animation: 'pulse 1s infinite' }}>● REC</span>}</span>
             <div style={{ display: 'flex', gap: '4px' }}>
+              <button
+                onClick={() => setEventLogMinimized(!eventLogMinimized)}
+                style={{
+                  background: 'rgba(100, 100, 100, 0.3)',
+                  border: '1px solid #666',
+                  color: '#fff',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                }}
+                title={eventLogMinimized ? 'Expandir' : 'Minimizar'}
+              >
+                {eventLogMinimized ? '⬆️' : '⬇️'}
+              </button>
               <button
                 data-record-button
                 onClick={toggleRecording}
@@ -1646,6 +2990,7 @@ const Board = () => {
               </button>
             </div>
           </div>
+          {!eventLogMinimized && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '4px' }}>
             {eventLogs.length === 0 ? (
               <div style={{ opacity: 0.5, fontStyle: 'italic' }}>Nenhum evento ainda...</div>
@@ -1700,6 +3045,230 @@ const Board = () => {
               })
             )}
           </div>
+          )}
+          </div>
+        )}
+
+        {/* Painel de Debug de Peer - Só mostra se debug mode estiver ativo */}
+        {showDebugMode && (
+          <div
+            style={{
+              position: 'fixed',
+              bottom: '20px',
+              right: '20px',
+              width: '400px',
+              maxHeight: '500px',
+              backgroundColor: 'rgba(0, 0, 0, 0.9)',
+              color: '#fff',
+              padding: '12px',
+              borderRadius: '8px',
+              fontSize: '11px',
+              fontFamily: 'monospace',
+              zIndex: 9999,
+              overflow: 'auto',
+              border: '1px solid #555',
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+            }}
+          >
+            <div style={{ marginBottom: '8px', fontWeight: 'bold', borderBottom: '1px solid #555', paddingBottom: '4px', display: 'flex', justifyContent: 'space-between', alignItems: 'center', gap: '8px' }}>
+              <span>🔌 Peer Debug</span>
+              <button
+                onClick={() => setPeerDebugMinimized(!peerDebugMinimized)}
+                style={{
+                  background: 'rgba(100, 100, 100, 0.3)',
+                  border: '1px solid #666',
+                  color: '#fff',
+                  padding: '2px 8px',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                }}
+                title={peerDebugMinimized ? 'Expandir' : 'Minimizar'}
+              >
+                {peerDebugMinimized ? '⬆️' : '⬇️'}
+              </button>
+            </div>
+            {!peerDebugMinimized && (
+            <div style={{ display: 'flex', flexDirection: 'column', gap: '8px' }}>
+              {/* Status geral */}
+              <div style={{ padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
+                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Status Geral</div>
+                <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  <div>Status: <span style={{ color: status === 'playing' ? '#10b981' : status === 'waiting' ? '#f59e0b' : '#ef4444' }}>{status}</span></div>
+                  <div>É Host: <span style={{ color: isHost ? '#10b981' : '#94a3b8' }}>{isHost ? 'Sim' : 'Não'}</span></div>
+                  <div>Room ID: <span style={{ opacity: 0.7 }}>{roomId || 'N/A'}</span></div>
+                  <div>Player ID: <span style={{ opacity: 0.7 }}>{playerId.slice(0, 8)}...</span></div>
+                </div>
+              </div>
+
+              {/* Peer Instance */}
+              <div style={{ padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
+                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Peer Instance</div>
+                <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {peer ? (
+                    <>
+                      <div>ID: <span style={{ opacity: 0.7 }}>{peer.id || 'N/A'}</span></div>
+                      <div>Open: <span style={{ color: peer.open ? '#10b981' : '#ef4444' }}>{peer.open ? 'Sim' : 'Não'}</span></div>
+                      <div>Destroyed: <span style={{ color: peer.destroyed ? '#ef4444' : '#10b981' }}>{peer.destroyed ? 'Sim' : 'Não'}</span></div>
+                      <div>Disconnected: <span style={{ color: peer.disconnected ? '#ef4444' : '#10b981' }}>{peer.disconnected ? 'Sim' : 'Não'}</span></div>
+                    </>
+                  ) : (
+                    <div style={{ opacity: 0.5, fontStyle: 'italic' }}>Nenhum peer ativo</div>
+                  )}
+                </div>
+              </div>
+
+              {/* Host Connection */}
+              {hostConnection && (
+                <div style={{ padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
+                  <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Host Connection</div>
+                  <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                    <div>Peer: <span style={{ opacity: 0.7 }}>{hostConnection.peer || 'N/A'}</span></div>
+                    <div>Open: <span style={{ color: hostConnection.open ? '#10b981' : '#ef4444' }}>{hostConnection.open ? 'Sim' : 'Não'}</span></div>
+                    <div>Label: <span style={{ opacity: 0.7 }}>{hostConnection.label || 'N/A'}</span></div>
+                    <div>Metadata: <span style={{ opacity: 0.7 }}>{hostConnection.metadata ? JSON.stringify(hostConnection.metadata).slice(0, 50) + '...' : 'N/A'}</span></div>
+                  </div>
+                </div>
+              )}
+
+              {/* Client Connections */}
+              <div style={{ padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
+                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                  Client Connections ({Object.keys(connections).length})
+                </div>
+                <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
+                  {Object.keys(connections).length === 0 ? (
+                    <div style={{ opacity: 0.5, fontStyle: 'italic' }}>Nenhuma conexão de cliente</div>
+                  ) : (
+                    Object.entries(connections).map(([peerId, conn]) => (
+                      <div key={peerId} style={{ padding: '6px', backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: '4px', borderLeft: `3px solid ${conn.open ? '#10b981' : '#ef4444'}` }}>
+                        <div style={{ fontWeight: 'bold', marginBottom: '2px' }}>Peer: {peerId.slice(0, 8)}...</div>
+                        <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9px', opacity: 0.8 }}>
+                          <div>Open: <span style={{ color: conn.open ? '#10b981' : '#ef4444' }}>{conn.open ? 'Sim' : 'Não'}</span></div>
+                          <div>Label: <span style={{ opacity: 0.7 }}>{conn.label || 'N/A'}</span></div>
+                          {conn.metadata && (
+                            <div>Metadata: <span style={{ opacity: 0.7 }}>{JSON.stringify(conn.metadata).slice(0, 40) + '...'}</span></div>
+                          )}
+                        </div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Players */}
+              <div style={{ padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
+                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                  Players ({players.length})
+                </div>
+                <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
+                  {players.length === 0 ? (
+                    <div style={{ opacity: 0.5, fontStyle: 'italic' }}>Nenhum jogador</div>
+                  ) : (
+                    players.map((player) => (
+                      <div key={player.id} style={{ padding: '4px', backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: '4px' }}>
+                        <div>
+                          <span style={{ fontWeight: 'bold' }}>{player.name}</span>
+                          {player.id === playerId && <span style={{ marginLeft: '4px', color: '#10b981' }}>(Você)</span>}
+                        </div>
+                        <div style={{ fontSize: '9px', opacity: 0.7 }}>ID: {player.id.slice(0, 8)}...</div>
+                      </div>
+                    ))
+                  )}
+                </div>
+              </div>
+
+              {/* Peer Event Logs */}
+              <div style={{ padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
+                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>
+                  Eventos de Peer ({peerEventLogs.length})
+                </div>
+                <div style={{ fontSize: '9px', display: 'flex', flexDirection: 'column', gap: '3px', maxHeight: '200px', overflowY: 'auto' }}>
+                  {peerEventLogs.length === 0 ? (
+                    <div style={{ opacity: 0.5, fontStyle: 'italic' }}>Nenhum evento ainda</div>
+                  ) : (
+                    peerEventLogs.map((log) => {
+                      const time = new Date(log.timestamp).toLocaleTimeString();
+                      const typeColor = log.type === 'SENT' ? '#10b981' : '#3b82f6';
+                      const directionColor = 
+                        log.direction === 'TO_HOST' ? '#f59e0b' :
+                        log.direction === 'TO_PEERS' ? '#10b981' :
+                        log.direction === 'FROM_HOST' ? '#3b82f6' : '#8b5cf6';
+                      
+                      return (
+                        <div key={log.id} style={{ 
+                          padding: '4px 6px', 
+                          backgroundColor: 'rgba(0, 0, 0, 0.3)', 
+                          borderRadius: '4px',
+                          borderLeft: `3px solid ${typeColor}`,
+                        }}>
+                          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '2px' }}>
+                            <span style={{ fontWeight: 'bold', color: typeColor }}>{log.type}</span>
+                            <span style={{ opacity: 0.6, fontSize: '8px' }}>{time}</span>
+                          </div>
+                            <div style={{ fontSize: '8px', opacity: 0.8 }}>
+                            <div>
+                              <span style={{ color: directionColor }}>{log.direction}</span>
+                              {' → '}
+                              <span style={{ fontWeight: 'bold' }}>{log.messageType}</span>
+                              {log.actionKind && (
+                                <span style={{ marginLeft: '4px', opacity: 0.7 }}>({log.actionKind})</span>
+                              )}
+                            </div>
+                            {log.target && (
+                              <div style={{ opacity: 0.7, marginTop: '2px' }}>
+                                Para: {log.target}
+                              </div>
+                            )}
+                            {log.details && (
+                              <div style={{ opacity: 0.7, marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '7px' }}>
+                                {log.details.boardSize !== undefined && (
+                                  <div>Board: {log.details.boardSize} cartas</div>
+                                )}
+                                {log.details.cardsByZone && (
+                                  <div style={{ marginLeft: '4px' }}>
+                                    {Object.entries(log.details.cardsByZone as Record<string, number>).map(([zone, count]) => (
+                                      <span key={zone} style={{ marginRight: '6px' }}>
+                                        {zone}: {count}
+                                      </span>
+                                    ))}
+                                  </div>
+                                )}
+                                {log.details.playersCount !== undefined && (
+                                  <div>Players: {log.details.playersCount} ({Array.isArray(log.details.playerNames) ? (log.details.playerNames as string[]).join(', ') : ''})</div>
+                                )}
+                                {log.details.cardName && (
+                                  <div>Carta: {log.details.cardName as string}</div>
+                                )}
+                                {log.details.cardId && (
+                                  <div>Card ID: {(log.details.cardId as string).slice(0, 8)}...</div>
+                                )}
+                                {log.details.position && (
+                                  <div>Pos: ({Math.round((log.details.position as any).x)}, {Math.round((log.details.position as any).y)})</div>
+                                )}
+                                {log.details.zone && (
+                                  <div>Zone: {log.details.zone as string}</div>
+                                )}
+                                {log.details.cardsCount !== undefined && (
+                                  <div>Cards: {log.details.cardsCount as number}</div>
+                                )}
+                                {log.details.targetPlayerId && (
+                                  <div>Player: {(log.details.targetPlayerId as string).slice(0, 8)}...</div>
+                                )}
+                                {Array.isArray(log.details.peerIds) && log.details.peerIds.length > 0 && (
+                                  <div>Peers: {log.details.peerIds.length} ({log.details.peerIds.slice(0, 2).map((id: string) => id.slice(0, 6)).join(', ')}{log.details.peerIds.length > 2 ? '...' : ''})</div>
+                                )}
+                              </div>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+              </div>
+            </div>
+            )}
           </div>
         )}
         
