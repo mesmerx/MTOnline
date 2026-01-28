@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import { randomBytes, createHash } from 'crypto';
+import { randomBytes, createHash, createHmac } from 'crypto';
 import { readFileSync, existsSync } from 'fs';
 import { join } from 'path';
 import db from './db.mjs';
@@ -481,6 +481,33 @@ app.post('/cards/batch', (req, res) => {
   });
 
   res.json(results);
+});
+
+// Endpoint para gerar credenciais TURN
+app.get('/api/turn-credentials', (req, res) => {
+  const TURN_SECRET = process.env.TURN_SECRET;
+  
+  if (!TURN_SECRET) {
+    console.error('[TURN] TURN_SECRET não configurado no .env');
+    return res.status(500).json({ error: 'TURN_SECRET not configured' });
+  }
+  
+  const ttl = 60 * 60; // 1 hora
+  const username = Math.floor(Date.now() / 1000) + ttl;
+
+  const password = createHmac('sha1', TURN_SECRET)
+    .update(username.toString())
+    .digest('base64');
+
+  res.json({
+    urls: [
+      'stun:turn.mesmer.tv:3478',
+      'turn:turn.mesmer.tv:3478?transport=udp',
+      'turns:turn.mesmer.tv:5349?transport=tcp'
+    ],
+    username: username.toString(),
+    credential: password
+  });
 });
 
 app.listen(PORT, '0.0.0.0', () => {
