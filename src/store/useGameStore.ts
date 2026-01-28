@@ -112,17 +112,10 @@ const buildCoturnServers = (turnUrl: string, username?: string, credential?: str
 
 const parseIceServersFromEnv = (): RTCIceServer[] => {
   const env = import.meta.env;
-  // Servidores STUN públicos padrão (Google)
-  const defaultServers: RTCIceServer[] = [
-    { urls: 'stun:stun.l.google.com:19302' },
-    { urls: 'stun:stun1.l.google.com:19302' },
-    { urls: 'stun:stun2.l.google.com:19302' },
-    { urls: 'stun:stun3.l.google.com:19302' },
-    { urls: 'stun:stun4.l.google.com:19302' },
-  ];
   const internalIp = env.VITE_INTERNAL_IP;
 
-  let servers = [...defaultServers];
+  // Começar com lista vazia - apenas servidores locais
+  let servers: RTCIceServer[] = [];
 
   if (env.VITE_PEER_ICE_SERVERS) {
     try {
@@ -903,10 +896,9 @@ export const useGameStore = create<GameStore>((set, get) => {
     const config = state.turnConfig;
     if (config.mode === 'custom' && config.url && config.username && config.credential) {
       debugLog('using custom turn server', config.url);
-      // Incluir servidores padrão junto com o customizado
-      const defaultServers = parseIceServersFromEnv();
+      // Apenas servidores customizados (locais)
       const customServers = buildCoturnServers(config.url, config.username, config.credential);
-      return [...defaultServers, ...customServers];
+      return customServers;
     }
     const servers = parseIceServersFromEnv();
     debugLog('using env/default ICE servers', servers);

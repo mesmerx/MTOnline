@@ -1034,6 +1034,9 @@ const Board = () => {
                 x: Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, baseX - dragState.offsetX)),
                 y: Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, baseY - dragState.offsetY)),
               };
+            } else if (detectedZone.zone === 'hand') {
+              // Para hand, usar posição { x: 0, y: 0 } - será reordenada automaticamente
+              position = { x: 0, y: 0 };
             } else if (detectedZone.zone === 'cemetery') {
               const cemeteryPos = getCemeteryPosition(detectedZone.ownerId || card.ownerId);
               position = cemeteryPos || { x: 0, y: 0 };
@@ -1041,7 +1044,6 @@ const Board = () => {
               const libraryPos = getLibraryPosition(detectedZone.ownerId || card.ownerId);
               position = libraryPos || { x: 0, y: 0 };
             }
-            // hand não precisa de posição, será calculada automaticamente
             
             addEventLog('CHANGE_ZONE', `Mudando zona: ${card.name} (${card.zone} → ${detectedZone.zone})`, card.id, card.name, {
               from: card.zone,

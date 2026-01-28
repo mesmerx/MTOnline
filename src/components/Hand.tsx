@@ -5,6 +5,7 @@ import type { CardOnBoard } from '../store/useGameStore';
 import CardToken from './CardToken';
 import CounterToken from './CounterToken';
 import type { Counter } from '../store/useGameStore';
+import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT } from './BoardTypes';
 
 type Point = { x: number; y: number };
 
@@ -608,88 +609,85 @@ const Hand = ({
           previewHandOrder,
         });
         
-        // Verificar ANTES se houve reordenação (previewHandOrder não é null)
-        // Se houve reordenação, NÃO deve mudar de zona, mesmo que solte fora
-        // Capturar previewHandOrder no momento do cálculo para evitar problemas de closure
-        const currentPreviewHandOrder = previewHandOrder;
-        const hadReordering = currentPreviewHandOrder !== null;
-        const originalIndex = originalHandOrder?.[draggedCardId];
-        const actuallyReordered = hadReordering && originalIndex !== undefined && originalIndex !== currentPreviewHandOrder;
-        
-        console.log('[Hand] stopDrag: Verificando se houve reordenação:', {
-          hadReordering,
-          actuallyReordered,
-          originalIndex,
-          previewHandOrder,
-          draggedCardId,
-          originalHandOrder: originalHandOrder ? Object.keys(originalHandOrder).length : null,
-        });
+        // PRIMEIRO: Verificar se houve preview de reordenação
+        // Se há previewHandOrder, significa que durante o drag estava dentro da hand
+        // Nesse caso, deve reordenar, não mudar de zona
+        const hadPreviewOrder = currentPreviewHandOrder !== null;
         
         // Verificar se a carta foi solta FORA da área da hand
-        // IMPORTANTE: Só mudar de zona se realmente moveu (handCardMoved) E soltou fora
-        // E TEM UM EVENTO VÁLIDO (não foi apenas um clique)
-        // E NÃO HOUVE REORDENAÇÃO
+        // Se sim, mudar de zona. Se não, reordenar.
         let droppedOutsideHand = false;
         
-        // CRÍTICO: Se houve reordenação, NÃO deve mudar de zona
-        if (actuallyReordered) {
-          console.log('[Hand] stopDrag: Houve reordenação, não mudando de zona');
-          droppedOutsideHand = false;
-        } else if (startedFromHand && handCardMoved && event && dropCursorX !== null && dropCursorY !== null && boardRef.current) {
-          // Só verificar se soltou fora se NÃO houve reordenação
+        // Se há preview de reordenação, assumir que está dentro da hand (não mudar de zona)
+        if (!hadPreviewOrder && startedFromHand && handCardMoved && event && dropCursorX !== null && dropCursorY !== null && boardRef.current) {
           const handArea = getHandArea(playerId);
           if (handArea) {
-            // Verificar se a posição onde soltou está FORA da área da hand
+            // Converter dropCursorX/Y para espaço base antes de comparar
+            const rect = boardRef.current.getBoundingClientRect();
+            let baseX: number;
+            let baseY: number;
+            
+            if (viewMode === 'separated' && convertMouseToSeparatedCoordinates) {
+              // Para separated, precisamos converter usando as coordenadas do evento
+              const coords = convertMouseToSeparatedCoordinates(
+                event.clientX,
+                event.clientY,
+                playerId,
+                rect
+              );
+              if (coords) {
+                baseX = coords.x;
+                baseY = coords.y;
+              } else {
+                // Fallback: usar dropCursorX/Y diretamente (já pode estar no espaço base)
+                baseX = dropCursorX;
+                baseY = dropCursorY;
+              }
+            } else if ((viewMode === 'individual' || viewMode === 'unified') && convertMouseToUnifiedCoordinates) {
+              const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+              baseX = coords.x;
+              baseY = coords.y;
+            } else {
+              // Fallback: assumir que dropCursorX/Y já estão no espaço base
+              baseX = dropCursorX;
+              baseY = dropCursorY;
+            }
+            
+            // Verificar se a posição onde soltou está FORA da área da hand (no espaço base)
             // Adicionar uma pequena margem para facilitar a detecção
-            const margin = 10;
+            const margin = 20;
             const isInsideHand = 
-              dropCursorX >= (handArea.x - margin) && 
-              dropCursorX <= (handArea.x + handArea.width + margin) &&
-              dropCursorY >= (handArea.y - margin) && 
-              dropCursorY <= (handArea.y + handArea.height + margin);
+              baseX >= (handArea.x - margin) && 
+              baseX <= (handArea.x + handArea.width + margin) &&
+              baseY >= (handArea.y - margin) && 
+              baseY <= (handArea.y + handArea.height + margin);
             
             droppedOutsideHand = !isInsideHand;
             
             console.log('[Hand] stopDrag: Verificando se soltou fora da hand:', {
               dropCursorX,
               dropCursorY,
+              baseX,
+              baseY,
               handArea: { x: handArea.x, y: handArea.y, width: handArea.width, height: handArea.height },
               isInsideHand,
               droppedOutsideHand,
               margin,
-              startedFromHand,
-              handCardMoved,
-              hasEvent: !!event,
-              previewHandOrder,
+              hadPreviewOrder,
             });
           } else {
-            // Se não conseguiu calcular a área da hand, NÃO assumir que soltou fora
-            // Pode ser que a hand não esteja visível, então não mudar zona
-            console.log('[Hand] stopDrag: Não conseguiu calcular área da hand, não mudando zona');
+            // Se não conseguiu calcular a área da hand, assumir que está dentro
             droppedOutsideHand = false;
           }
-        } else {
-          console.log('[Hand] stopDrag: Condições não atendidas para verificar zona:', {
-            startedFromHand,
-            handCardMoved,
-            hasEvent: !!event,
-            dropCursorX,
-            dropCursorY,
-            hasBoardRef: !!boardRef.current,
-            previewHandOrder,
-          });
-          // Se não tem evento válido, não mudar zona (foi apenas um clique)
+        } else if (hadPreviewOrder) {
+          // Se há preview de reordenação, está dentro da hand
           droppedOutsideHand = false;
+          console.log('[Hand] stopDrag: Há preview de reordenação, assumindo dentro da hand');
         }
         
-        // Só mudar de zona se:
-        // 1. Começou na hand
-        // 2. REALMENTE moveu (handCardMoved)
-        // 3. Soltou FORA da área da hand
-        // 4. Tem posição de drop válida
-        // 5. TEM EVENTO VÁLIDO (não foi apenas clique)
-        // 6. NÃO HOUVE REORDENAÇÃO (crítico!)
-        if (startedFromHand && handCardMoved && dropPosition && droppedOutsideHand && event && !actuallyReordered && boardRef.current) {
+        // Se soltou FORA da hand, mudar de zona (prioridade sobre reordenação)
+        // IMPORTANTE: Verificar ANTES de qualquer lógica de reordenação
+        if (startedFromHand && handCardMoved && dropPosition && droppedOutsideHand && event && boardRef.current) {
           const rect = boardRef.current.getBoundingClientRect();
           
           // Converter coordenadas para o espaço base antes de detectar zona
@@ -724,29 +722,48 @@ const Hand = ({
           // Usar a função de detecção de zona do Board (espera coordenadas no espaço base)
           const detectedZone = detectZoneAtPosition(baseX, baseY);
           
-          // Se detectou uma zona diferente da hand, mudar
-          if (detectedZone.zone && detectedZone.zone !== 'hand') {
+          // Mudar de zona (sempre que soltou fora da hand, mesmo que detecte hand, usar battlefield)
+          if (detectedZone.zone) {
+            // Se detectou hand mas soltou fora, usar battlefield
+            const targetZone = detectedZone.zone === 'hand' ? 'battlefield' : detectedZone.zone;
             // Ajustar posição baseado na zona detectada
             let finalPosition = dropPosition;
             
-            if (detectedZone.zone === 'battlefield') {
-              finalPosition = {
-                x: Math.max(0, Math.min(rect.width - CARD_WIDTH, dropPosition.x)),
-                y: Math.max(0, Math.min(rect.height - CARD_HEIGHT, dropPosition.y)),
-              };
-            } else if (detectedZone.zone === 'cemetery') {
+            if (targetZone === 'battlefield') {
+              // Converter dropPosition para espaço base se necessário
+              // dropPosition já está em coordenadas relativas ao board, precisa converter para espaço base
+              const rect = boardRef.current?.getBoundingClientRect();
+              if (rect) {
+                // dropPosition está em pixels relativos ao board, precisa converter para espaço base
+                // Usar a mesma lógica de conversão do Board
+                let baseDropX = dropPosition.x;
+                let baseDropY = dropPosition.y;
+                
+                // Se estiver em modo separated, pode precisar de conversão adicional
+                // Por enquanto, assumir que dropPosition já está no espaço correto
+                finalPosition = {
+                  x: Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, baseDropX)),
+                  y: Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, baseDropY)),
+                };
+              } else {
+                finalPosition = {
+                  x: Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, dropPosition.x)),
+                  y: Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, dropPosition.y)),
+                };
+              }
+            } else if (targetZone === 'cemetery') {
               // Posição será calculada pelo store baseado no cemitério
               finalPosition = { x: 0, y: 0 };
-            } else if (detectedZone.zone === 'library') {
+            } else if (targetZone === 'library') {
               // Posição será calculada pelo store baseado no library
               finalPosition = { x: 0, y: 0 };
             }
             
-            console.log('[Hand] stopDrag: Mudando zona de hand para', detectedZone.zone, ':', {
+            console.log('[Hand] stopDrag: Mudando zona de hand para', targetZone, ':', {
               cardId: draggedCard.id,
               cardName: draggedCard.name,
               from: 'hand',
-              to: detectedZone.zone,
+              to: targetZone,
               finalPosition,
             });
             
@@ -777,13 +794,13 @@ const Hand = ({
             }
             
             // Mudar a zona da carta usando a zona detectada
-            addEventLog('CHANGE_ZONE', `Mudando zona: ${draggedCard.name} (hand → ${detectedZone.zone})`, draggedCard.id, draggedCard.name, {
+            addEventLog('CHANGE_ZONE', `Mudando zona: ${draggedCard.name} (hand → ${targetZone})`, draggedCard.id, draggedCard.name, {
               from: 'hand',
-              to: detectedZone.zone,
+              to: targetZone,
               position: finalPosition,
               handIndex: draggedCard.handIndex,
             });
-            changeCardZone(draggedCard.id, detectedZone.zone, finalPosition);
+            changeCardZone(draggedCard.id, targetZone, finalPosition);
             
             // Manter handCardMoved por um tempo para impedir cliques após o movimento
             setTimeout(() => {
@@ -804,6 +821,11 @@ const Hand = ({
           }
         }
         
+        // Verificar se houve reordenação (previewHandOrder não é null e diferente do original)
+        const originalIndex = originalHandOrder?.[draggedCardId];
+        const hadReordering = currentPreviewHandOrder !== null;
+        const actuallyReordered = hadReordering && originalIndex !== undefined && originalIndex !== currentPreviewHandOrder;
+        
         // Log evento de drag end ANTES de reordenar, se realmente moveu
         // IMPORTANTE: Sempre logar quando houver movimento, independente de reordenação
         // Isso garante que o DRAG_END apareça mesmo quando não há reordenação
@@ -813,14 +835,14 @@ const Hand = ({
             handCardMoved,
             previewHandOrder,
             droppedOutsideHand,
+            actuallyReordered,
           });
         }
         
         // Reordenar cartas na hand se soltou DENTRO da área da hand
-        // Só reordenar se realmente moveu E o índice mudou
+        // Só reordenar se realmente moveu E o índice mudou E NÃO soltou fora da hand
         // IMPORTANTE: Só executar uma vez por drag
-        // NOTA: A verificação de reordenação já foi feita acima, então só executar aqui
-        if (actuallyReordered) {
+        if (actuallyReordered && !droppedOutsideHand) {
           // Recalcular a posição final baseada na posição onde a carta foi soltada
           let finalNewIndex = currentPreviewHandOrder;
           

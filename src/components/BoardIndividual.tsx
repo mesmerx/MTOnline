@@ -167,6 +167,10 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
           onMove={moveCounter}
           onModify={modifyCounter}
           onRemove={removeCounterToken}
+          boardRef={boardRef}
+          viewMode={props.viewMode}
+          convertMouseToSeparatedCoordinates={props.convertMouseToSeparatedCoordinates}
+          convertMouseToUnifiedCoordinates={props.convertMouseToUnifiedCoordinates}
         />
       ))}
 
