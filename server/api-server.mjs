@@ -499,14 +499,21 @@ app.get('/api/turn-credentials', (req, res) => {
     .update(username.toString())
     .digest('base64');
 
-  res.json({
+  const response = {
     urls: [
       'turn:turn.mesmer.tv:3478',
       'turns:turn.mesmer.tv:5349'
     ],
     username: username.toString(),
     credential: password
+  };
+
+  console.log('[TURN API] Retornando credenciais:', {
+    username: response.username,
+    urls: response.urls
   });
+
+  res.json(response);
 });
 
 app.listen(PORT, '0.0.0.0', () => {

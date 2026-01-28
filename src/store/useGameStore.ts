@@ -1053,7 +1053,24 @@ export const useGameStore = create<GameStore>((set, get) => {
       config: { iceServers: buildIceServers() },
     };
     debugLog('creating peer instance', peerId ?? 'anonymous', options);
-    return peerId ? new Peer(peerId, options) : new Peer(options);
+    const peer = peerId ? new Peer(peerId, options) : new Peer(options);
+    
+    // DEBUG ICE - Adicionar handler para logar candidatos ICE
+    peer.on('open', () => {
+      // Acessar RTCPeerConnection interno do PeerJS
+      const pc = (peer as any)._pc as RTCPeerConnection | undefined;
+      if (pc) {
+        pc.onicecandidate = (event) => {
+          if (event.candidate) {
+            console.log('[ICE] Candidate:', event.candidate.candidate);
+          } else {
+            console.log('[ICE] Gathering finished');
+          }
+        };
+      }
+    });
+    
+    return peer;
   };
 
   const broadcastToPeers = (message: IncomingMessage) => {
