@@ -501,9 +501,8 @@ app.get('/api/turn-credentials', (req, res) => {
 
   res.json({
     urls: [
-      'stun:turn.mesmer.tv:3478',
-      'turn:turn.mesmer.tv:3478?transport=udp',
-      'turns:turn.mesmer.tv:5349?transport=tcp'
+      'turn:turn.mesmer.tv:3478',
+      'turns:turn.mesmer.tv:5349'
     ],
     username: username.toString(),
     credential: password
