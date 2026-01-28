@@ -113,6 +113,7 @@ const buildCoturnServers = (turnUrl: string, username?: string, credential?: str
 // Cache para credenciais TURN da API
 let turnCredentialsCache: { username: string; credential: string; urls: string[]; expiresAt: number } | null = null;
 let turnCredentialsPromise: Promise<void> | null = null;
+let turnCredentialsInitialized = false;
 
 const fetchTurnCredentials = async (): Promise<{ username: string; credential: string; urls: string[] } | null> => {
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -1046,7 +1047,19 @@ export const useGameStore = create<GameStore>((set, get) => {
     return servers;
   };
 
-  const createPeerInstance = (peerId?: string) => {
+  const createPeerInstance = async (peerId?: string): Promise<Peer> => {
+    // Aguardar credenciais TURN se ainda não foram inicializadas
+    if (!turnCredentialsInitialized && turnCredentialsPromise) {
+      console.log('[TURN] Aguardando credenciais antes de criar peer...');
+      await turnCredentialsPromise;
+    }
+    
+    // Se ainda não há cache e não há promise em andamento, tentar buscar agora
+    if (!turnCredentialsCache && !turnCredentialsPromise) {
+      console.log('[TURN] Buscando credenciais antes de criar peer...');
+      await getTurnCredentials();
+    }
+    
     const options: PeerJSOption = {
       ...resolvePeerEndpoint(),
       debug: 0,
@@ -1401,8 +1414,8 @@ export const useGameStore = create<GameStore>((set, get) => {
             destroyPeer();
             
             // Criar novo peer como host
-            const peer = createPeerInstance(state.roomId);
-            const newState = {
+            createPeerInstance(state.roomId).then((peer) => {
+              const newState = {
               ...baseState(),
               peer,
               isHost: true,
@@ -1444,8 +1457,12 @@ export const useGameStore = create<GameStore>((set, get) => {
               registerHostConn(conn, remoteId, metadata.name || 'Guest');
             });
 
-            peer.on('error', (error) => {
-              debugLog('peer host error', error);
+              peer.on('error', (error) => {
+                debugLog('peer host error', error);
+                set({ status: 'error', error: error.message });
+              });
+            }).catch((error) => {
+              console.error('[TURN] Erro ao criar peer:', error);
               set({ status: 'error', error: error.message });
             });
           } else if (Array.isArray(message.board) && Array.isArray(message.players)) {
@@ -1455,40 +1472,44 @@ export const useGameStore = create<GameStore>((set, get) => {
             destroyPeer();
             
             // Reconectar ao novo host
-            const peer = createPeerInstance();
-            set({
-              ...baseState(),
-              peer,
-              status: 'initializing' as RoomStatus,
-              roomId: state.roomId,
-              roomPassword: state.roomPassword,
-              board: message.board,
-              players: message.players,
-              isHost: false,
-              playerId: state.playerId,
-              playerName: state.playerName,
-            });
-
-            peer.on('open', () => {
-              const connection = peer.connect(state.roomId, {
-                metadata: {
-                  password: state.roomPassword,
-                  name: state.playerName || 'Player',
-                  playerId: state.playerId,
-                },
+            createPeerInstance().then((peer) => {
+              set({
+                ...baseState(),
+                peer,
+                status: 'initializing' as RoomStatus,
+                roomId: state.roomId,
+                roomPassword: state.roomPassword,
+                board: message.board,
+                players: message.players,
+                isHost: false,
+                playerId: state.playerId,
+                playerName: state.playerName,
               });
-              debugLog('client dialing new host', state.roomId);
 
-              registerClientConn(connection);
+              peer.on('open', () => {
+                const connection = peer.connect(state.roomId, {
+                  metadata: {
+                    password: state.roomPassword,
+                    name: state.playerName || 'Player',
+                    playerId: state.playerId,
+                  },
+                });
+                debugLog('client dialing new host', state.roomId);
 
-              connection.on('open', () => {
-                debugLog('client connected to new host');
-                set({ status: 'waiting', hostConnection: connection });
+                registerClientConn(connection);
+
+                connection.on('open', () => {
+                  debugLog('client connected to new host');
+                  set({ status: 'waiting', hostConnection: connection });
+                });
               });
-            });
 
-            peer.on('error', (error) => {
-              debugLog('peer client error', error);
+              peer.on('error', (error) => {
+                debugLog('peer client error', error);
+                set({ status: 'error', error: error.message });
+              });
+            }).catch((error) => {
+              console.error('[TURN] Erro ao criar peer:', error);
               set({ status: 'error', error: error.message });
             });
           }
@@ -1512,8 +1533,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         destroyPeer();
         
         // Criar novo peer como host
-        const peer = createPeerInstance(state.roomId);
-        const newState = {
+        createPeerInstance(state.roomId).then((peer) => {
+          const newState = {
           ...baseState(),
           peer,
           isHost: true,
@@ -1552,8 +1573,12 @@ export const useGameStore = create<GameStore>((set, get) => {
           registerHostConn(conn, remoteId, metadata.name || 'Guest');
         });
 
-        peer.on('error', (error) => {
-          debugLog('peer host error', error);
+          peer.on('error', (error) => {
+            debugLog('peer host error', error);
+            set({ status: 'error', error: error.message });
+          });
+        }).catch((error) => {
+          console.error('[TURN] Erro ao criar peer:', error);
           set({ status: 'error', error: error.message });
         });
         return;
@@ -1827,8 +1852,8 @@ export const useGameStore = create<GameStore>((set, get) => {
     createRoom: (roomId: string, password: string) => {
       destroyPeer();
       const trimmedId = roomId?.trim() || `room-${randomId()}`;
-      const peer = createPeerInstance(trimmedId);
-      debugLog('creating room', trimmedId);
+      createPeerInstance(trimmedId).then((peer) => {
+        debugLog('creating room', trimmedId);
 
       const newState = {
         ...baseState(),
@@ -1871,51 +1896,59 @@ export const useGameStore = create<GameStore>((set, get) => {
         registerHostConn(conn, remoteId, metadata.name || 'Guest');
       });
 
-      peer.on('error', (error) => {
-        debugLog('peer host error', error);
+        peer.on('error', (error) => {
+          debugLog('peer host error', error);
+          set({ status: 'error', error: error.message });
+        });
+      }).catch((error) => {
+        console.error('[TURN] Erro ao criar peer:', error);
         set({ status: 'error', error: error.message });
       });
     },
     joinRoom: (roomId: string, password: string) => {
       destroyPeer();
-      const peer = createPeerInstance();
-      debugLog('joining room', roomId);
+      createPeerInstance().then((peer) => {
+        debugLog('joining room', roomId);
 
-      const newState = {
-        ...baseState(),
-        peer,
-        status: 'initializing' as RoomStatus,
-        roomId,
-        roomPassword: password,
-        isHost: false,
-      };
-      set(newState);
-      const currentState = get();
-      if (currentState) {
-        saveSession({ ...currentState, ...newState });
-      }
+        const newState = {
+          ...baseState(),
+          peer,
+          status: 'initializing' as RoomStatus,
+          roomId,
+          roomPassword: password,
+          isHost: false,
+        };
+        set(newState);
+        const currentState = get();
+        if (currentState) {
+          saveSession({ ...currentState, ...newState });
+        }
 
-      peer.on('open', () => {
-        const connection = peer.connect(roomId, {
-          metadata: {
-            password,
-            name: get().playerName || 'Player',
-            playerId: get().playerId,
-          },
+        peer.on('open', () => {
+          const connection = peer.connect(roomId, {
+            metadata: {
+              password,
+              name: get().playerName || 'Player',
+              playerId: get().playerId,
+            },
+          });
+          debugLog('client dialing host', roomId);
+
+          // Registrar handlers antes de definir hostConnection
+          registerClientConn(connection);
+
+          connection.on('open', () => {
+            debugLog('client connected to host');
+            set({ status: 'waiting', hostConnection: connection });
+          });
         });
-        debugLog('client dialing host', roomId);
 
-        // Registrar handlers antes de definir hostConnection
-        registerClientConn(connection);
-
-        connection.on('open', () => {
-          debugLog('client connected to host');
-          set({ status: 'waiting', hostConnection: connection });
+        peer.on('error', (error) => {
+          debugLog('peer client error', error);
+          set({ status: 'error', error: error.message });
         });
-      });
-
-      peer.on('error', (error) => {
-        debugLog('peer client error', error);
+      }).catch((error) => {
+        console.error('[TURN] Erro ao criar peer:', error);
         set({ status: 'error', error: error.message });
       });
     },
@@ -1976,48 +2009,52 @@ export const useGameStore = create<GameStore>((set, get) => {
           destroyPeer();
           
           // Criar novo peer como host
-          const peer = createPeerInstance(state.roomId);
-          const newState = {
-            ...baseState(),
-            peer,
-            isHost: true,
-            status: 'initializing' as RoomStatus,
-            roomId: state.roomId,
-            roomPassword: state.roomPassword,
-            board: state.board,
-            players: state.players,
-            playerId: state.playerId,
-            playerName: state.playerName,
-          };
-          set(newState);
-          saveSession({ ...newState });
+          createPeerInstance(state.roomId).then((peer) => {
+            const newState = {
+              ...baseState(),
+              peer,
+              isHost: true,
+              status: 'initializing' as RoomStatus,
+              roomId: state.roomId,
+              roomPassword: state.roomPassword,
+              board: state.board,
+              players: state.players,
+              playerId: state.playerId,
+              playerName: state.playerName,
+            };
+            set(newState);
+            saveSession({ ...newState });
 
-          peer.on('open', () => {
-            set((s) => {
-              if (!s) return s;
-              const updatedState = {
-                status: 'connected' as RoomStatus,
-                players: s.players,
-              };
-              saveSession({ ...s, ...updatedState });
-              return updatedState;
+            peer.on('open', () => {
+              set((s) => {
+                if (!s) return s;
+                const updatedState = {
+                  status: 'connected' as RoomStatus,
+                  players: s.players,
+                };
+                saveSession({ ...s, ...updatedState });
+                return updatedState;
+              });
             });
-          });
 
-          peer.on('connection', (conn) => {
-            const metadata = conn.metadata as { password?: string; name?: string; playerId?: string } | undefined;
-            debugLog('incoming connection', metadata);
-            if (!metadata || metadata.password !== get().roomPassword) {
-              conn.send({ type: 'ERROR', message: 'Incorrect password' });
-              conn.close();
-              return;
-            }
-            const remoteId = metadata.playerId || randomId();
-            registerHostConn(conn, remoteId, metadata.name || 'Guest');
-          });
+            peer.on('connection', (conn) => {
+              const metadata = conn.metadata as { password?: string; name?: string; playerId?: string } | undefined;
+              debugLog('incoming connection', metadata);
+              if (!metadata || metadata.password !== get().roomPassword) {
+                conn.send({ type: 'ERROR', message: 'Incorrect password' });
+                conn.close();
+                return;
+              }
+              const remoteId = metadata.playerId || randomId();
+              registerHostConn(conn, remoteId, metadata.name || 'Guest');
+            });
 
-          peer.on('error', (error) => {
-            debugLog('peer host error', error);
+            peer.on('error', (error) => {
+              debugLog('peer host error', error);
+              set({ status: 'error', error: error.message });
+            });
+          }).catch((error) => {
+            console.error('[TURN] Erro ao criar peer:', error);
             set({ status: 'error', error: error.message });
           });
           return;
