@@ -32,6 +32,14 @@ export interface BoardViewProps {
   getPlayerArea: (ownerId: string) => { x: number; y: number; width: number; height: number } | null;
   getLibraryPosition: (playerId: string) => Point | null;
   getCemeteryPosition: (playerId: string) => Point | null;
+  handDragStateRef: RefObject<{
+    draggingHandCard: string | null;
+    handCardMoved: boolean;
+    previewHandOrder: number | null;
+    dragPosition: Point | null;
+    dragStartPosition: Point | null;
+  }>;
+  addEventLog: (type: string, message: string, cardId?: string, cardName?: string, details?: Record<string, unknown>) => void;
   viewMode: 'unified' | 'individual' | 'separated';
   convertMouseToSeparatedCoordinates?: (mouseX: number, mouseY: number, playerId: string, rect: DOMRect) => { x: number; y: number } | null;
   convertMouseToUnifiedCoordinates?: (mouseX: number, mouseY: number, rect: DOMRect) => { x: number; y: number };

@@ -1980,6 +1980,8 @@ const Board = () => {
       getPlayerArea,
       getLibraryPosition,
       getCemeteryPosition,
+      handDragStateRef,
+      addEventLog,
       viewMode,
       convertMouseToSeparatedCoordinates,
       convertMouseToUnifiedCoordinates,

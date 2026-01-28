@@ -305,6 +305,9 @@ export const BoardSeparated = (props: BoardViewProps) => {
                         dragStateRef.current = null;
                         // setIsDragging é gerenciado no Board.tsx principal
                       }}
+                      setLastTouchedCard={setLastTouchedCard}
+                      handDragStateRef={props.handDragStateRef}
+                      addEventLog={props.addEventLog}
                       viewMode={props.viewMode}
                       convertMouseToSeparatedCoordinates={props.convertMouseToSeparatedCoordinates}
                       convertMouseToUnifiedCoordinates={props.convertMouseToUnifiedCoordinates}

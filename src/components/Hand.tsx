@@ -303,10 +303,30 @@ const Hand = ({
       const renderStartIndex = currentScrollIndex;
       
       // Calcular posição visual baseada no cursor dentro da área da hand
+      // As cartas começam em 80px dentro da hand area
       const handAreaLeft = handArea.x;
       const relativeX = cursorX - handAreaLeft;
+      const cardStartOffset = 80; // Offset onde as cartas começam dentro da hand area
+      const adjustedX = relativeX - cardStartOffset;
+      
+      // Se o cursor está antes do início das cartas, usar posição 0
+      if (adjustedX < 0) {
+        const newIndex = renderStartIndex;
+        const clampedNewIndex = Math.max(0, Math.min(totalCards - 1, newIndex));
+        const originalIndex = originalHandOrder?.[currentDraggingCardId] ?? 
+          allCards.findIndex((c) => c.id === currentDraggingCardId);
+        if (originalIndex >= 0 && clampedNewIndex !== originalIndex) {
+          setPreviewHandOrder(clampedNewIndex);
+          handDragStateRef.current.previewHandOrder = clampedNewIndex;
+        } else if (clampedNewIndex === originalIndex) {
+          setPreviewHandOrder(originalIndex);
+          handDragStateRef.current.previewHandOrder = originalIndex;
+        }
+        return;
+      }
+      
       const visibleCardsCount = Math.min(maxRenderCards, totalCards - renderStartIndex);
-      let visualPosition = Math.floor(relativeX / HAND_CARD_LEFT_SPACING);
+      let visualPosition = Math.floor(adjustedX / HAND_CARD_LEFT_SPACING);
       visualPosition = Math.max(0, Math.min(visibleCardsCount - 1, visualPosition));
       
       const newIndex = renderStartIndex + visualPosition;
@@ -811,10 +831,14 @@ const Hand = ({
               const renderStartIndex = currentScrollIndex;
               
               // Calcular posição visual baseada na posição onde soltou
+              // As cartas começam em 80px dentro da hand area
               const handAreaLeft = handArea.x;
               const relativeX = dropCursorX - handAreaLeft;
+              const cardStartOffset = 80; // Offset onde as cartas começam dentro da hand area
+              const adjustedX = relativeX - cardStartOffset;
+              
               const visibleCardsCount = Math.min(maxRenderCards, totalCards - renderStartIndex);
-              let visualPosition = Math.floor(relativeX / HAND_CARD_LEFT_SPACING);
+              let visualPosition = Math.floor(adjustedX / HAND_CARD_LEFT_SPACING);
               visualPosition = Math.max(0, Math.min(visibleCardsCount - 1, visualPosition));
               
               const newIndex = renderStartIndex + visualPosition;
