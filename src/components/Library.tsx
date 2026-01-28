@@ -1,6 +1,8 @@
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { CardOnBoard } from '../store/useGameStore';
 import CardToken from './CardToken';
+import LibrarySearch from './LibrarySearch';
+import { useState } from 'react';
 
 type Point = { x: number; y: number };
 
@@ -21,6 +23,9 @@ interface LibraryProps {
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   handleCardZoom?: (card: CardOnBoard, event: ReactPointerEvent) => void;
   zoomedCard?: string | null;
+  changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point) => void;
+  getCemeteryPosition?: (playerId: string) => Point | null;
+  board?: CardOnBoard[];
 }
 
 const Library = ({
@@ -37,7 +42,12 @@ const Library = ({
   startDrag,
   handleCardZoom,
   zoomedCard,
+  changeCardZone,
+  getCemeteryPosition,
+  board = [],
 }: LibraryProps) => {
+  const [showLibrarySearch, setShowLibrarySearch] = useState(false);
+  
   if (!boardRef.current || players.length === 0) return null;
 
   return (
@@ -149,10 +159,71 @@ const Library = ({
               </div>
             ))}
             <div className="library-count">{sortedLibraryCards.length}</div>
+            
+            {/* Botão Buscar no Deck */}
+            {isCurrentPlayer && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  setShowLibrarySearch(true);
+                }}
+                style={{
+                  position: 'absolute',
+                  top: '20px',
+                  left: '120px',
+                  padding: '4px 8px',
+                  backgroundColor: '#6366f1',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '4px',
+                  cursor: 'pointer',
+                  fontSize: '10px',
+                  fontWeight: '500',
+                  zIndex: 10,
+                }}
+                title="Buscar carta no deck e mover para uma zona"
+              >
+                🔍 Buscar
+              </button>
+            )}
             </div>
           </div>
         );
       })}
+      
+      {/* Busca de cartas no library */}
+      {changeCardZone && getCemeteryPosition && (
+        <LibrarySearch
+          libraryCards={libraryCards}
+          playerId={playerId}
+          isOpen={showLibrarySearch}
+          onClose={() => setShowLibrarySearch(false)}
+          onMoveCard={(cardId, zone) => {
+            const card = board.find((c) => c.id === cardId);
+            if (!card || !changeCardZone) return;
+            
+            let position: Point = { x: 0, y: 0 };
+            
+            if (zone === 'battlefield' && boardRef.current) {
+              const rect = boardRef.current.getBoundingClientRect();
+              position = {
+                x: rect.width / 2 - 150 / 2,
+                y: rect.height / 2 - 210 / 2,
+              };
+            } else if (zone === 'cemetery' && getCemeteryPosition) {
+              const cemeteryPos = getCemeteryPosition(playerId);
+              if (cemeteryPos) {
+                position = cemeteryPos;
+              }
+            } else if (zone === 'hand') {
+              position = { x: 0, y: 0 };
+            }
+            
+            changeCardZone(cardId, zone, position);
+          }}
+          ownerName={ownerName}
+        />
+      )}
     </>
   );
 };

@@ -1,5 +1,5 @@
 import type { RefObject } from 'react';
-import type { CardOnBoard, PlayerSummary } from '../store/useGameStore';
+import type { CardOnBoard, PlayerSummary, Counter, CounterType } from '../store/useGameStore';
 import type { Point } from '../store/useGameStore';
 
 export interface BoardViewProps {
@@ -46,6 +46,12 @@ export interface BoardViewProps {
   viewMode: 'unified' | 'individual' | 'separated';
   convertMouseToSeparatedCoordinates?: (mouseX: number, mouseY: number, playerId: string, rect: DOMRect) => { x: number; y: number } | null;
   convertMouseToUnifiedCoordinates?: (mouseX: number, mouseY: number, rect: DOMRect) => { x: number; y: number };
+  counters: Counter[];
+  moveCounter: (counterId: string, position: Point) => void;
+  modifyCounter: (counterId: string, delta?: number, deltaX?: number, deltaY?: number, setValue?: number, setX?: number, setY?: number) => void;
+  removeCounterToken: (counterId: string) => void;
+  mulligan?: (playerId: string) => void;
+  playerHandCards?: CardOnBoard[];
 }
 
 export const BASE_BOARD_WIDTH = 1920;

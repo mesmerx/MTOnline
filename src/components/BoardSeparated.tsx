@@ -1,4 +1,5 @@
 import CardToken from './CardToken';
+import CounterToken from './CounterToken';
 import Hand from './Hand';
 import Library from './Library';
 import Cemetery from './Cemetery';
@@ -36,6 +37,10 @@ export const BoardSeparated = (props: BoardViewProps) => {
     setContextMenu,
     setLastTouchedCard,
     board,
+    counters,
+    moveCounter,
+    modifyCounter,
+    removeCounterToken,
   } = props;
 
   if (!boardRef.current) return null;
@@ -206,6 +211,24 @@ export const BoardSeparated = (props: BoardViewProps) => {
                     startDrag={startDrag}
                     handleCardZoom={handleCardZoom}
                     zoomedCard={zoomedCard}
+                    changeCardZone={changeCardZone}
+                    getCemeteryPosition={(id) => {
+                      if (id !== player.id) {
+                        return null;
+                      }
+                      const storePos = storeCemeteryPositions[id];
+                      if (storePos) {
+                        return {
+                          x: storePos.x,
+                          y: storePos.y,
+                        };
+                      }
+                      return {
+                        x: BASE_BOARD_WIDTH - 150,
+                        y: BASE_BOARD_HEIGHT / 2 - 70,
+                      };
+                    }}
+                    board={board}
                   />
 
                   <Cemetery
@@ -280,6 +303,20 @@ export const BoardSeparated = (props: BoardViewProps) => {
                     );
                   })}
 
+                  {/* Renderizar contadores independentemente para este player */}
+                  {counters
+                    .filter((counter) => counter.ownerId === player.id)
+                    .map((counter) => (
+                      <CounterToken
+                        key={counter.id}
+                        counter={counter}
+                        isCurrentPlayer={counter.ownerId === playerId}
+                        onMove={moveCounter}
+                        onModify={modifyCounter}
+                        onRemove={removeCounterToken}
+                      />
+                    ))}
+
                   {showHand && player.id === playerId && (
                     <Hand
                       boardRef={boardRef}
@@ -319,6 +356,10 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       viewMode={props.viewMode}
                       convertMouseToSeparatedCoordinates={props.convertMouseToSeparatedCoordinates}
                       convertMouseToUnifiedCoordinates={props.convertMouseToUnifiedCoordinates}
+                      counters={counters}
+                      moveCounter={moveCounter}
+                      modifyCounter={modifyCounter}
+                      removeCounterToken={removeCounterToken}
                     />
                   )}
                 </div>

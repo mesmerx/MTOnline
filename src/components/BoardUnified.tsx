@@ -1,4 +1,5 @@
 import CardToken from './CardToken';
+import CounterToken from './CounterToken';
 import Hand from './Hand';
 import Library from './Library';
 import Cemetery from './Cemetery';
@@ -37,6 +38,10 @@ export const BoardUnified = (props: BoardViewProps) => {
     getPlayerArea,
     getLibraryPosition,
     getCemeteryPosition,
+    counters,
+    moveCounter,
+    modifyCounter,
+    removeCounterToken,
   } = props;
 
   return (
@@ -83,6 +88,9 @@ export const BoardUnified = (props: BoardViewProps) => {
         startDrag={startDrag}
         handleCardZoom={handleCardZoom}
         zoomedCard={zoomedCard}
+        changeCardZone={changeCardZone}
+        getCemeteryPosition={getCemeteryPosition}
+        board={board}
       />
 
       <Cemetery
@@ -140,6 +148,18 @@ export const BoardUnified = (props: BoardViewProps) => {
         );
       })}
 
+      {/* Renderizar todos os contadores independentemente */}
+      {counters.map((counter) => (
+        <CounterToken
+          key={counter.id}
+          counter={counter}
+          isCurrentPlayer={counter.ownerId === playerId}
+          onMove={moveCounter}
+          onModify={modifyCounter}
+          onRemove={removeCounterToken}
+        />
+      ))}
+
       {showHand && (
         <Hand
           boardRef={boardRef}
@@ -169,6 +189,10 @@ export const BoardUnified = (props: BoardViewProps) => {
           viewMode={props.viewMode}
           convertMouseToSeparatedCoordinates={props.convertMouseToSeparatedCoordinates}
           convertMouseToUnifiedCoordinates={props.convertMouseToUnifiedCoordinates}
+          counters={counters}
+          moveCounter={moveCounter}
+          modifyCounter={modifyCounter}
+          removeCounterToken={removeCounterToken}
         />
       )}
     </>

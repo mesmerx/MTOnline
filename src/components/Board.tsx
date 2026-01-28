@@ -1,11 +1,11 @@
-import { useEffect, useRef, useState, useCallback } from 'react';
+import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { CardOnBoard, PlayerSummary } from '../store/useGameStore';
 import CardToken from './CardToken';
+import CounterToken from './CounterToken';
 import Hand from './Hand';
 import Library from './Library';
-import LibrarySearch from './LibrarySearch';
 import Cemetery from './Cemetery';
 import { BoardSeparated } from './BoardSeparated';
 import { BoardIndividual } from './BoardIndividual';
@@ -40,6 +40,7 @@ interface ClickBlockState {
 
 const Board = () => {
   const board = useGameStore((state) => state.board);
+  const counters = useGameStore((state) => state.counters);
   const players = useGameStore((state) => state.players);
   const playerId = useGameStore((state) => state.playerId);
   const storeCemeteryPositions = useGameStore((state) => state.cemeteryPositions);
@@ -54,8 +55,10 @@ const Board = () => {
   const reorderHandCard = useGameStore((state) => state.reorderHandCard);
   const shuffleLibrary = useGameStore((state) => state.shuffleLibrary);
   const mulligan = useGameStore((state) => state.mulligan);
-  const addCounter = useGameStore((state) => state.addCounter);
-  const removeCounter = useGameStore((state) => state.removeCounter);
+  const createCounter = useGameStore((state) => state.createCounter);
+  const moveCounter = useGameStore((state) => state.moveCounter);
+  const modifyCounter = useGameStore((state) => state.modifyCounter);
+  const removeCounterToken = useGameStore((state) => state.removeCounterToken);
   const flipCard = useGameStore((state) => state.flipCard);
   const setPlayerLife = useGameStore((state) => state.setPlayerLife);
   const changePlayerLife = useGameStore((state) => state.changePlayerLife);
@@ -122,10 +125,12 @@ const Board = () => {
     y: number;
     card: CardOnBoard;
   } | null>(null);
+  const [boardContextMenu, setBoardContextMenu] = useState<{ x: number; y: number } | null>(null);
+  const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
+  const [boardContextMenuPosition, setBoardContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [contextSubmenu, setContextSubmenu] = useState<'moveZone' | 'libraryPlace' | null>(null);
   const [contextSubmenuLibrary, setContextSubmenuLibrary] = useState<boolean>(false);
   const [zoomedCard, setZoomedCard] = useState<string | null>(null);
-  const [showLibrarySearch, setShowLibrarySearch] = useState(false);
   
   // Refs para compartilhar com Hand component
   const dragStartedFromHandRef = useRef<boolean>(false);
@@ -197,13 +202,20 @@ const Board = () => {
     });
   }, []);
   
+  // Usar ref para armazenar a função e evitar loops infinitos
+  const addPeerEventLogRef = useRef(addPeerEventLog);
+  addPeerEventLogRef.current = addPeerEventLog;
+  
   // Conectar o logger de eventos de peer ao store
   useEffect(() => {
-    setPeerEventLogger(addPeerEventLog);
+    const logger = (type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => {
+      addPeerEventLogRef.current(type, direction, messageType, actionKind, target, details);
+    };
+    setPeerEventLogger(logger);
     return () => {
       setPeerEventLogger(null);
     };
-  }, [setPeerEventLogger, addPeerEventLog]);
+  }, [setPeerEventLogger]);
   
   const addEventLog = (type: string, message: string, cardId?: string, cardName?: string, details?: Record<string, unknown>) => {
     const log: EventLog = {
@@ -434,10 +446,17 @@ const Board = () => {
     }
   };
   
-  const battlefieldCards = board.filter((c) => c.zone === 'battlefield');
-  const libraryCards = board.filter((c) => c.zone === 'library');
-  const handCards = board.filter((c) => c.zone === 'hand');
-  const cemeteryCards = board.filter((c) => c.zone === 'cemetery');
+  // Memoizar filtros de cartas para evitar recálculos desnecessários
+  const battlefieldCards = useMemo(() => board.filter((c) => c.zone === 'battlefield'), [board]);
+  const libraryCards = useMemo(() => board.filter((c) => c.zone === 'library'), [board]);
+  const handCards = useMemo(() => board.filter((c) => c.zone === 'hand'), [board]);
+  const cemeteryCards = useMemo(() => board.filter((c) => c.zone === 'cemetery'), [board]);
+  
+  // Memoizar handCards do player atual para evitar recálculos
+  const playerHandCards = useMemo(() => 
+    handCards.filter((c) => c.ownerId === playerId), 
+    [handCards, playerId]
+  );
   
   // Ajustar posição de cartas recém-adicionadas para o centro da área do player
   const processedCardsRef = useRef<Set<string>>(new Set());
@@ -453,7 +472,7 @@ const Board = () => {
     );
     
     if (cardsToCenter.length > 0) {
-      const rect = boardRef.current.getBoundingClientRect();
+    const rect = boardRef.current.getBoundingClientRect();
       const playerArea = getPlayerArea(playerId);
       
       if (playerArea) {
@@ -624,16 +643,16 @@ const Board = () => {
     return null;
   };
 
-  const getPlayerArea = (ownerId: string) => {
+  const getPlayerArea = useCallback((ownerId: string) => {
     if (!boardRef.current || allPlayers.length === 0) return null;
     const playerIndex = allPlayers.findIndex((p) => p.id === ownerId);
     if (playerIndex === -1) return null;
 
     // No modo separated, retornar tamanho base (1920x1080) já que o scale é aplicado no container
     if (viewMode === 'separated') {
-      return {
-        x: 0,
-        y: 0,
+    return {
+      x: 0,
+      y: 0,
         width: BASE_BOARD_WIDTH,
         height: BASE_BOARD_HEIGHT,
       };
@@ -646,7 +665,7 @@ const Board = () => {
       width: BASE_BOARD_WIDTH,
       height: BASE_BOARD_HEIGHT,
     };
-  };
+  }, [boardRef, allPlayers, viewMode]);
 
   const getHandArea = (ownerId: string) => {
     if (!boardRef.current || allPlayers.length === 0 || !showHand) return null;
@@ -888,12 +907,12 @@ const Board = () => {
       cursorY = coords.y;
     }
       
-    const x = cursorX - dragState.offsetX;
-    const y = cursorY - dragState.offsetY;
+      const x = cursorX - dragState.offsetX;
+      const y = cursorY - dragState.offsetY;
 
-    // Clamp dentro da área do player
-    let clampedX = x;
-    let clampedY = y;
+      // Clamp dentro da área do player
+      let clampedX = x;
+      let clampedY = y;
 
     if (viewMode === 'separated') {
       // No modo separated, trabalhar com pixels no espaço base (1920x1080)
@@ -928,10 +947,10 @@ const Board = () => {
         clampedX = Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, x));
         clampedY = Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, y));
       }
-    }
+      }
 
-    // Mover a carta apenas se realmente moveu
-    if (dragState.hasMoved) {
+      // Mover a carta apenas se realmente moveu
+      if (dragState.hasMoved) {
       const currentBoard = useGameStore.getState().board;
       const card = currentBoard.find((c) => c.id === dragState.cardId);
       if (card) {
@@ -940,8 +959,8 @@ const Board = () => {
           to: { x: clampedX, y: clampedY },
         });
       }
-      moveCard(dragState.cardId, { x: clampedX, y: clampedY });
-    }
+        moveCard(dragState.cardId, { x: clampedX, y: clampedY });
+      }
     };
 
     const handleUp = (event: PointerEvent) => {
@@ -1001,8 +1020,8 @@ const Board = () => {
           // Se detectou uma zona diferente da atual, mudar
           if (detectedZone.zone && detectedZone.zone !== card.zone) {
             console.log('[Board] handleUp: Mudando zona da carta:', {
-              cardId: card.id,
-              cardName: card.name,
+                cardId: card.id,
+                cardName: card.name,
               from: card.zone,
               to: detectedZone.zone,
             });
@@ -1031,26 +1050,26 @@ const Board = () => {
             });
             
             changeCardZone(card.id, detectedZone.zone, position);
-            
-            // Limpar estados de drag imediatamente
-            dragStateRef.current = null;
-            setIsDragging(false);
-            
-            // Bloquear cliques por um tempo após mudança de zona
-            if (clickBlockTimeoutRef.current) {
-              clearTimeout(clickBlockTimeoutRef.current.timeoutId);
-            }
-            const timeoutId = window.setTimeout(() => {
-              clickBlockTimeoutRef.current = null;
-            }, CLICK_BLOCK_DELAY);
-            clickBlockTimeoutRef.current = { cardId: card.id, timeoutId };
-            
+              
+              // Limpar estados de drag imediatamente
+              dragStateRef.current = null;
+              setIsDragging(false);
+              
+              // Bloquear cliques por um tempo após mudança de zona
+              if (clickBlockTimeoutRef.current) {
+                clearTimeout(clickBlockTimeoutRef.current.timeoutId);
+              }
+              const timeoutId = window.setTimeout(() => {
+                clickBlockTimeoutRef.current = null;
+              }, CLICK_BLOCK_DELAY);
+              clickBlockTimeoutRef.current = { cardId: card.id, timeoutId };
+              
             // Resetar todos os estados de drag
-            requestAnimationFrame(() => {
-              resetAllDragStates();
-            });
-            
-            return;
+              requestAnimationFrame(() => {
+                resetAllDragStates();
+              });
+              
+              return;
           }
         }
       }
@@ -1187,7 +1206,7 @@ const Board = () => {
     if (card.zone === 'hand' && showHand) {
       return;
     }
-    
+
     // Verificar se a carta ainda existe no board atualizado
     const currentBoard = useGameStore.getState().board;
     const currentCard = currentBoard.find((c) => c.id === card.id);
@@ -1421,6 +1440,161 @@ const Board = () => {
     }
   };
 
+  // Calcular posição ajustada do menu do board quando ele é aberto
+  useEffect(() => {
+    if (!boardContextMenu) {
+      setBoardContextMenuPosition(null);
+      return;
+    }
+    
+    // Definir posição inicial imediatamente
+    setBoardContextMenuPosition({ x: boardContextMenu.x, y: boardContextMenu.y });
+    
+    // Ajustar posição após o menu ser renderizado
+    const timeoutId = setTimeout(() => {
+      const menuElement = document.querySelector('[data-board-context-menu]') as HTMLElement;
+      if (menuElement) {
+        const realMenuHeight = menuElement.scrollHeight;
+        const realMenuWidth = menuElement.offsetWidth;
+        const padding = 10;
+        
+        let adjustedX = boardContextMenu.x;
+        let adjustedY = boardContextMenu.y;
+        
+        if (adjustedX + realMenuWidth > window.innerWidth - padding) {
+          adjustedX = window.innerWidth - realMenuWidth - padding;
+        }
+        
+        if (adjustedY + realMenuHeight > window.innerHeight - padding) {
+          const spaceAbove = boardContextMenu.y - padding;
+          const spaceBelow = window.innerHeight - boardContextMenu.y - padding;
+          
+          if (spaceAbove >= realMenuHeight) {
+            adjustedY = boardContextMenu.y - realMenuHeight;
+          } else if (spaceBelow >= realMenuHeight) {
+            adjustedY = window.innerHeight - realMenuHeight - padding;
+          } else {
+            adjustedY = (spaceAbove > spaceBelow) ? padding : (window.innerHeight - realMenuHeight - padding);
+          }
+        }
+        
+        if (adjustedY < padding) adjustedY = padding;
+        if (adjustedX < padding) adjustedX = padding;
+        
+        setBoardContextMenuPosition({ x: adjustedX, y: adjustedY });
+      }
+    }, 0);
+    
+    return () => clearTimeout(timeoutId);
+  }, [boardContextMenu]);
+
+  // Calcular posição ajustada do menu quando ele é aberto
+  useEffect(() => {
+    if (!contextMenu) {
+      setContextMenuPosition(null);
+      return;
+    }
+    
+    // Calcular posição imediatamente com altura estimada, depois ajustar com altura real
+    const estimatedMenuHeight = 600;
+    const estimatedMenuWidth = 220;
+    const padding = 10;
+    
+    let menuX = contextMenu.x;
+    let menuY = contextMenu.y;
+    
+    // Ajustar posição horizontal se o menu sair da tela à direita
+    if (menuX + estimatedMenuWidth > window.innerWidth - padding) {
+      menuX = window.innerWidth - estimatedMenuWidth - padding;
+    }
+    
+    // Calcular espaço disponível
+    const spaceBelow = window.innerHeight - contextMenu.y - padding;
+    const spaceAbove = contextMenu.y - padding;
+    
+    // Ajustar posição vertical
+    if (spaceBelow < estimatedMenuHeight) {
+      // Não cabe abaixo, tentar colocar acima
+      if (spaceAbove >= estimatedMenuHeight) {
+        // Cabe acima, colocar acima
+        menuY = contextMenu.y - estimatedMenuHeight;
+      } else {
+        // Não cabe nem acima nem abaixo, usar o espaço disponível maior
+        if (spaceAbove > spaceBelow) {
+          menuY = padding;
+        } else {
+          menuY = window.innerHeight - estimatedMenuHeight - padding;
+        }
+      }
+    }
+    
+    // Garantir que não fique acima da tela
+    if (menuY < padding) {
+      menuY = padding;
+    }
+    
+    // Garantir que não fique à esquerda da tela
+    if (menuX < padding) {
+      menuX = padding;
+    }
+    
+    // Definir posição inicial
+    setContextMenuPosition({ x: menuX, y: menuY });
+    
+    // Ajustar com altura real após o menu ser renderizado
+    const timeoutId = setTimeout(() => {
+      const menuElement = document.querySelector('[data-context-menu]') as HTMLElement;
+      if (menuElement) {
+        const realMenuHeight = menuElement.scrollHeight;
+        const realMenuWidth = menuElement.offsetWidth;
+        
+        let adjustedX = menuX;
+        let adjustedY = menuY;
+        
+        // Reajustar horizontal se necessário
+        if (adjustedX + realMenuWidth > window.innerWidth - padding) {
+          adjustedX = window.innerWidth - realMenuWidth - padding;
+        }
+        
+        // Reajustar vertical se necessário - garantir que o menu inteiro fique visível
+        const spaceBelow = window.innerHeight - adjustedY - padding;
+        const spaceAbove = adjustedY - padding;
+        
+        if (realMenuHeight > spaceBelow) {
+          // Menu não cabe abaixo, tentar colocar acima
+          if (spaceAbove >= realMenuHeight) {
+            adjustedY = contextMenu.y - realMenuHeight;
+          } else {
+            // Não cabe nem acima nem abaixo, posicionar para maximizar visibilidade
+            if (spaceAbove > spaceBelow) {
+              adjustedY = padding;
+            } else {
+              adjustedY = window.innerHeight - realMenuHeight - padding;
+            }
+          }
+        }
+        
+        // Garantir limites
+        if (adjustedY < padding) adjustedY = padding;
+        if (adjustedX < padding) adjustedX = padding;
+        
+        setContextMenuPosition({ x: adjustedX, y: adjustedY });
+        
+        // Remover overflow se o menu couber completamente na tela
+        const finalSpaceBelow = window.innerHeight - adjustedY - padding;
+        if (realMenuHeight <= finalSpaceBelow) {
+          menuElement.style.overflowY = 'visible';
+          menuElement.style.maxHeight = 'none';
+        } else {
+          menuElement.style.overflowY = 'auto';
+          menuElement.style.maxHeight = `${finalSpaceBelow}px`;
+        }
+      }
+    }, 0);
+    
+    return () => clearTimeout(timeoutId);
+  }, [contextMenu]);
+
   const handleCardContextMenu = (card: CardOnBoard, event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
@@ -1448,7 +1622,7 @@ const Board = () => {
       return;
     }
     
-    // Mostrar menu de contexto
+    // Mostrar menu de contexto (a posição será ajustada no useEffect)
     setContextMenu({
       x: event.clientX,
       y: event.clientY,
@@ -1457,9 +1631,10 @@ const Board = () => {
   };
   
   const handleContextMenuAction = (
-    action: 'cemetery' | 'remove' | 'shuffle' | 'tap' | 'draw' | 'moveZone' | 'libraryPlace' | 'addCounter' | 'removeCounter' | 'flip',
+    action: 'cemetery' | 'remove' | 'shuffle' | 'tap' | 'draw' | 'moveZone' | 'libraryPlace' | 'flip' | 'createCounter',
     targetZone?: 'hand' | 'battlefield' | 'library' | 'cemetery',
-    libraryPlace?: 'top' | 'bottom' | 'random'
+    libraryPlace?: 'top' | 'bottom' | 'random',
+    counterType?: 'numeral' | 'plus'
   ) => {
     if (!contextMenu) return;
     
@@ -1536,24 +1711,6 @@ const Board = () => {
         });
         changeCardZone(card.id, 'library', position, libraryPlace);
       }
-    } else if (action === 'addCounter') {
-      // Adicionar contador
-      if (card.ownerId === playerId) {
-        const newCount = (card.counters ?? 0) + 1;
-        addEventLog('ADD_COUNTER', `Adicionando contador: ${card.name} (${newCount})`, card.id, card.name, {
-          counters: newCount,
-        });
-        addCounter(card.id);
-      }
-    } else if (action === 'removeCounter') {
-      // Remover contador
-      if (card.ownerId === playerId && (card.counters ?? 0) > 0) {
-        const newCount = (card.counters ?? 0) - 1;
-        addEventLog('REMOVE_COUNTER', `Removendo contador: ${card.name} (${newCount})`, card.id, card.name, {
-          counters: newCount,
-        });
-        removeCounter(card.id);
-      }
     } else if (action === 'flip') {
       // Virar carta
       if (card.ownerId === playerId) {
@@ -1563,39 +1720,98 @@ const Board = () => {
         });
         flipCard(card.id);
       }
+    } else if (action === 'createCounter' && counterType) {
+      // Criar contador no board (posição do clique do menu de contexto)
+      if (contextMenu && boardRef.current) {
+        // Converter posição do menu (tela) para posição no board
+        const boardRect = boardRef.current.getBoundingClientRect();
+        const scale = getBoardScale();
+        const offsetX = (boardRect.width - BASE_BOARD_WIDTH * scale) / 2;
+        const offsetY = (boardRect.height - BASE_BOARD_HEIGHT * scale) / 2;
+        
+        // Converter coordenadas da tela para coordenadas do board escalado
+        const boardX = (contextMenu.x - boardRect.left - offsetX) / scale;
+        const boardY = (contextMenu.y - boardRect.top - offsetY) / scale;
+        
+        const position: Point = { x: boardX, y: boardY };
+        addEventLog('CREATE_COUNTER', `Criando contador ${counterType}`, undefined, undefined, {
+          counterType,
+          position,
+        });
+        createCounter(playerId, counterType, position);
+      }
     } else {
       // Cemitério ou Remover - ambos deletam
       if (card.ownerId === playerId) {
         const actionName = action === 'cemetery' ? 'Cemitério' : 'Remover';
         addEventLog('REMOVE_CARD', `${actionName}: ${card.name}`, card.id, card.name, {
-          zone: card.zone,
+        zone: card.zone,
           ownerId: card.ownerId,
           action,
-        });
-        removeCard(card.id);
+      });
+      removeCard(card.id);
       }
     }
     
     setContextMenu(null);
     setContextSubmenu(null);
+    setContextMenuPosition(null);
   };
   
   // Fechar menu ao clicar fora
   useEffect(() => {
-    const handleClickOutside = () => {
+    const handleClickOutside = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      // Verificar se o clique foi fora do menu e submenu
+      // Não fechar se o clique foi em um botão dentro do menu ou submenu
+      const isInsideMenu = target.closest('[data-context-menu]');
+      const isInsideSubmenu = target.closest('[data-context-submenu]');
+      const isInsideBoardMenu = target.closest('[data-board-context-menu]');
+      
+      // Se está dentro do menu ou submenu, não fechar
+      if (isInsideMenu || isInsideSubmenu || isInsideBoardMenu) {
+        return;
+      }
+      
+      // Verificar se o clique foi em um botão que está dentro do menu/submenu
+      // Isso é necessário porque o botão pode estar em um submenu aninhado
+      const clickedButton = target.closest('button');
+      if (clickedButton) {
+        const buttonInMenu = clickedButton.closest('[data-context-menu]');
+        const buttonInSubmenu = clickedButton.closest('[data-context-submenu]');
+        const buttonInBoardMenu = clickedButton.closest('[data-board-context-menu]');
+        if (buttonInMenu || buttonInSubmenu || buttonInBoardMenu) {
+          return;
+        }
+      }
+      
+      // Se clicou fora, fechar tudo
       if (contextMenu) {
         setContextMenu(null);
         setContextSubmenu(null);
+        setContextSubmenuLibrary(false);
+        setContextMenuPosition(null);
+      }
+      
+      if (boardContextMenu) {
+        setBoardContextMenu(null);
+        setBoardContextMenuPosition(null);
       }
     };
     
-    if (contextMenu) {
-      window.addEventListener('click', handleClickOutside);
+    if (contextMenu || boardContextMenu) {
+      // Usar um pequeno delay para não fechar imediatamente quando abrir o submenu
+      // Usar 'click' sem capture phase para dar tempo do evento do botão processar primeiro
+      const timeoutId = setTimeout(() => {
+        document.addEventListener('click', handleClickOutside, false);
+      }, 200);
+      
       return () => {
-        window.removeEventListener('click', handleClickOutside);
+        clearTimeout(timeoutId);
+        document.removeEventListener('click', handleClickOutside, false);
       };
     }
-  }, [contextMenu]);
+  }, [contextMenu, boardContextMenu, contextSubmenu, contextSubmenuLibrary]);
 
   const startLibraryDrag = (targetPlayerId: string, event: ReactPointerEvent) => {
     if (targetPlayerId !== playerId) return;
@@ -1729,8 +1945,8 @@ const Board = () => {
       // Atualizar posição
       if (playerArea) {
         const relativePosition = {
-          x: clampedX - playerArea.x,
-          y: clampedY - playerArea.y,
+            x: clampedX - playerArea.x,
+            y: clampedY - playerArea.y,
         };
         
         setLibraryPositions((prev) => ({
@@ -1771,12 +1987,12 @@ const Board = () => {
         // - NÃO moveu (verificado com estado e ref)
         if (isLibraryStack && !isInteractive && draggingLibrary) {
           libraryClickExecutedRef.current = true;
-          handleLibraryClick(draggingLibrary.playerId);
+        handleLibraryClick(draggingLibrary.playerId);
           // Resetar flag após um pequeno delay
           setTimeout(() => {
             libraryClickExecutedRef.current = false;
           }, 100);
-        }
+      }
       }
       
       setDraggingLibrary(null);
@@ -1785,7 +2001,7 @@ const Board = () => {
     };
 
     const handleUp = (e: PointerEvent) => stopDrag(e);
-    
+
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
     return () => {
@@ -2036,6 +2252,10 @@ const Board = () => {
       viewMode,
       convertMouseToSeparatedCoordinates,
       convertMouseToUnifiedCoordinates,
+      counters,
+      moveCounter,
+      modifyCounter,
+      removeCounterToken,
     };
 
     if (viewMode === 'individual') {
@@ -2302,57 +2522,6 @@ const Board = () => {
             </button>
           </div>
           
-          {/* Botão Buscar no Deck */}
-          <button
-            onClick={() => setShowLibrarySearch(true)}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: '#6366f1',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: '500',
-            }}
-            title="Buscar carta no deck e mover para uma zona"
-          >
-            🔍 Buscar no Deck
-          </button>
-          
-          {/* Botão Mulligan */}
-          <button
-            onClick={() => {
-              const handCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerId);
-              if (handCards.length > 0) {
-                addEventLog('MULLIGAN', `Mulligan: ${handCards.length} cartas da mão para o library`, undefined, undefined, {
-                  playerId,
-                  cardsCount: handCards.length,
-                });
-                mulligan(playerId);
-              }
-            }}
-            disabled={board.filter((c) => c.zone === 'hand' && c.ownerId === playerId).length === 0}
-            style={{
-              padding: '8px 16px',
-              backgroundColor: board.filter((c) => c.zone === 'hand' && c.ownerId === playerId).length > 0 
-                ? '#dc2626' 
-                : '#475569',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: board.filter((c) => c.zone === 'hand' && c.ownerId === playerId).length > 0 
-                ? 'pointer' 
-                : 'not-allowed',
-              fontSize: '12px',
-              fontWeight: '500',
-              opacity: board.filter((c) => c.zone === 'hand' && c.ownerId === playerId).length > 0 ? 1 : 0.5,
-            }}
-            title="Retorna todas as cartas da mão para o library e embaralha"
-          >
-            🔄 Mulligan
-          </button>
-          
           {/* Navegação entre players (modo individual) */}
           {viewMode === 'individual' && allPlayers.length > 1 && (
             <div style={{ display: 'flex', gap: '4px', alignItems: 'center', justifyContent: 'center' }}>
@@ -2412,25 +2581,25 @@ const Board = () => {
             >
               {showDebugMode ? '🔍 Debug ON' : '🔍 Debug OFF'}
             </button>
-            <button
-              onClick={() => {
-                setShowHand(!showHand);
-                setHandButtonEnabled(true);
-              }}
-              disabled={!handButtonEnabled && !showHand}
-              style={{
+        <button
+          onClick={() => {
+            setShowHand(!showHand);
+            setHandButtonEnabled(true);
+          }}
+          disabled={!handButtonEnabled && !showHand}
+          style={{
                 padding: '6px 12px',
-                backgroundColor: showHand ? '#ef4444' : '#10b981',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: (!handButtonEnabled && !showHand) ? 'not-allowed' : 'pointer',
+            backgroundColor: showHand ? '#ef4444' : '#10b981',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: (!handButtonEnabled && !showHand) ? 'not-allowed' : 'pointer',
                 fontSize: '12px',
-                opacity: (!handButtonEnabled && !showHand) ? 0.5 : 1,
-              }}
-            >
-              {showHand ? 'Esconder Hand' : 'Mostrar Hand'}
-            </button>
+            opacity: (!handButtonEnabled && !showHand) ? 0.5 : 1,
+          }}
+        >
+          {showHand ? 'Esconder Hand' : 'Mostrar Hand'}
+        </button>
           </div>
           
           {/* Controle de simulação de players */}
@@ -2483,15 +2652,49 @@ const Board = () => {
       </div>
       <div 
         className="board-surface" 
+        data-board-surface
         ref={boardRef}
+        onContextMenu={(e) => {
+          const target = e.target as HTMLElement;
+          
+          // Verificar se o clique foi em um elemento interativo
+          const isInteractive = target.closest(
+            `.card-token, .battlefield-card, button, .library-stack, .cemetery-stack, .player-area, .hand-card-wrapper, .hand-area, .hand-cards, [data-context-menu], [data-context-submenu], [data-board-context-menu]`
+          );
+          
+          // Verificar se está arrastando
+          const isDragging = dragStateRef.current !== null;
+          
+          // Debug: log para verificar se o evento está sendo capturado
+          console.log('[Board] onContextMenu', {
+            target: target.tagName,
+            className: target.className,
+            isInteractive: !!isInteractive,
+            isDragging,
+            draggingCemetery: !!draggingCemetery,
+            draggingLibrary: !!draggingLibrary,
+          });
+          
+          // Se clicou em lugar vazio, abrir menu do board
+          if (!isInteractive && !draggingCemetery && !draggingLibrary && !isDragging) {
+            e.preventDefault();
+            e.stopPropagation();
+            console.log('[Board] Abrindo menu do board');
+            setBoardContextMenu({ x: e.clientX, y: e.clientY });
+          }
+        }}
         onClick={(e) => {
           const target = e.target as HTMLElement;
           const isInteractive = target.closest(
-            `.card-token, button, .library-stack, .cemetery-stack, .player-area${showHand ? ', .hand-card-wrapper, .hand-area, .hand-cards' : ''}`
+            `.card-token, button, .library-stack, .cemetery-stack, .player-area${showHand ? ', .hand-card-wrapper, .hand-area, .hand-cards' : ''}, [data-context-menu], [data-context-submenu], [data-board-context-menu]`
           );
           
-          // Não resetar se estiver arrastando cemitério ou library
+          // Fechar menu do board se clicar no board (mas não em elementos interativos)
           if (!isInteractive && !draggingCemetery && !draggingLibrary) {
+            if (boardContextMenu) {
+              setBoardContextMenu(null);
+              setBoardContextMenuPosition(null);
+            }
             resetAllDragStates();
           }
         }}
@@ -2506,8 +2709,8 @@ const Board = () => {
           const offsetY = (rect.height - scaledHeight) / 2;
           
           return (
-            <div
-              style={{
+              <div
+                style={{
                 position: 'absolute',
                 left: `${offsetX}px`,
                 top: `${offsetY}px`,
@@ -2516,16 +2719,16 @@ const Board = () => {
                 transform: `scale(${scale})`,
                 transformOrigin: 'top left',
               }}
-            >
+              >
               {renderBoardContent()}
-            </div>
+              </div>
           );
         })()}
-        
+              
         {/* Painel de Log de Eventos - Só mostra se debug mode estiver ativo */}
         {showDebugMode && (
-          <div
-            style={{
+                <div
+                  style={{
               position: 'fixed',
               bottom: '20px',
               left: '20px',
@@ -2641,7 +2844,7 @@ const Board = () => {
                 return (
                   <div
                     key={log.id}
-                    style={{
+                      style={{
                       padding: '6px',
                       backgroundColor: 'rgba(255, 255, 255, 0.05)',
                       borderRadius: '4px',
@@ -2858,8 +3061,8 @@ const Board = () => {
                                         {zone}: {count}
                                       </span>
                                     ))}
-                                  </div>
-                                )}
+                </div>
+              )}
                                 {log.details.playersCount !== undefined && (
                                   <div>Players: {log.details.playersCount} ({Array.isArray(log.details.playerNames) ? (log.details.playerNames as string[]).join(', ') : ''})</div>
                                 )}
@@ -2887,8 +3090,8 @@ const Board = () => {
                               </div>
                             )}
                           </div>
-                        </div>
-                      );
+            </div>
+          );
                     })
                   )}
                 </div>
@@ -3046,8 +3249,8 @@ const Board = () => {
             <div
               style={{
                 position: 'fixed',
-                left: `${contextMenu.x}px`,
-                top: `${contextMenu.y}px`,
+                left: `${contextMenuPosition?.x ?? contextMenu.x}px`,
+                top: `${contextMenuPosition?.y ?? contextMenu.y}px`,
                 backgroundColor: 'rgba(15, 23, 42, 0.95)',
                 border: '1px solid rgba(148, 163, 184, 0.3)',
                 borderRadius: '8px',
@@ -3056,6 +3259,7 @@ const Board = () => {
                 minWidth: '180px',
                 boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
               }}
+              data-context-menu
               onClick={(e) => e.stopPropagation()}
             >
               {contextMenu.card.ownerId === playerId && (
@@ -3115,55 +3319,6 @@ const Board = () => {
                     </>
                   )}
                   
-                  {/* Contadores - para todas as zonas */}
-                  <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
-                  <button
-                    onClick={() => handleContextMenuAction('addCounter')}
-                    style={{
-                      width: '100%',
-                      padding: '8px 12px',
-                      textAlign: 'left',
-                      background: 'transparent',
-                      border: 'none',
-                      color: '#f8fafc',
-                      cursor: 'pointer',
-                      borderRadius: '4px',
-                      fontSize: '14px',
-                    }}
-                    onMouseEnter={(e) => {
-                      e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
-                    }}
-                    onMouseLeave={(e) => {
-                      e.currentTarget.style.backgroundColor = 'transparent';
-                    }}
-                  >
-                    ➕ Adicionar Contador ({(contextMenu.card.counters ?? 0) + 1})
-                  </button>
-                  {(contextMenu.card.counters ?? 0) > 0 && (
-                    <button
-                      onClick={() => handleContextMenuAction('removeCounter')}
-                      style={{
-                        width: '100%',
-                        padding: '8px 12px',
-                        textAlign: 'left',
-                        background: 'transparent',
-                        border: 'none',
-                        color: '#f8fafc',
-                        cursor: 'pointer',
-                        borderRadius: '4px',
-                        fontSize: '14px',
-                      }}
-                      onMouseEnter={(e) => {
-                        e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
-                      }}
-                      onMouseLeave={(e) => {
-                        e.currentTarget.style.backgroundColor = 'transparent';
-                      }}
-                    >
-                      ➖ Remover Contador ({(contextMenu.card.counters ?? 0) - 1})
-                    </button>
-                  )}
-                  <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
                   
                   {/* Draw - apenas para library */}
                   {contextMenu.card.zone === 'library' && (
@@ -3217,10 +3372,61 @@ const Board = () => {
                     </button>
                   )}
                   
+                  {/* Mulligan - apenas para library */}
+                  {contextMenu.card.zone === 'library' && (
+                    <>
+                      <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
+                      <button
+                        onClick={() => {
+                          if (playerHandCards.length > 0) {
+                            addEventLog('MULLIGAN', `Mulligan: ${playerHandCards.length} cartas da mão para o library`, undefined, undefined, {
+                              playerId,
+                              cardsCount: playerHandCards.length,
+                            });
+                            mulligan(playerId);
+                          }
+                          setContextMenu(null);
+                        }}
+                        disabled={playerHandCards.length === 0}
+                        style={{
+                          width: '100%',
+                          padding: '8px 12px',
+                          textAlign: 'left',
+                          background: 'transparent',
+                          border: 'none',
+                          color: playerHandCards.length > 0 ? '#f8fafc' : '#64748b',
+                          cursor: playerHandCards.length > 0 ? 'pointer' : 'not-allowed',
+                          borderRadius: '4px',
+                          fontSize: '14px',
+                          opacity: playerHandCards.length > 0 ? 1 : 0.5,
+                        }}
+                        onMouseEnter={(e) => {
+                          if (playerHandCards.length > 0) {
+                            e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                          }
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                      >
+                        🔄 Mulligan
+                      </button>
+                    </>
+                  )}
+                  
                   {/* Move to - submenu */}
                   <div style={{ position: 'relative' }}>
                     <button
-                      onMouseEnter={() => setContextSubmenu('moveZone')}
+                      onMouseDown={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                      }}
+                      onClick={(e) => {
+                        e.preventDefault();
+                        e.stopPropagation();
+                        setContextSubmenu(contextSubmenu === 'moveZone' ? null : 'moveZone');
+                        setContextSubmenuLibrary(false);
+                      }}
                       style={{
                         width: '100%',
                         padding: '8px 12px',
@@ -3243,10 +3449,10 @@ const Board = () => {
                     {/* Submenu de Mover de Zona */}
                     {contextSubmenu === 'moveZone' && (
                       <div
-                        onMouseEnter={() => setContextSubmenu('moveZone')}
-                        onMouseLeave={() => setContextSubmenu(null)}
-                        style={{
-                          position: 'absolute',
+                        data-context-submenu
+                        onClick={(e) => e.stopPropagation()}
+              style={{
+                position: 'absolute',
                           left: '100%',
                           top: '0',
                           marginLeft: '4px',
@@ -3261,7 +3467,10 @@ const Board = () => {
                       >
                         {contextMenu.card.zone !== 'hand' && (
                           <button
-                            onClick={() => handleContextMenuAction('moveZone', 'hand')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleContextMenuAction('moveZone', 'hand');
+                            }}
                             style={{
                               width: '100%',
                               padding: '8px 12px',
@@ -3285,7 +3494,10 @@ const Board = () => {
                         )}
                         {contextMenu.card.zone !== 'battlefield' && (
                           <button
-                            onClick={() => handleContextMenuAction('moveZone', 'battlefield')}
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleContextMenuAction('moveZone', 'battlefield');
+                            }}
                             style={{
                               width: '100%',
                               padding: '8px 12px',
@@ -3310,7 +3522,16 @@ const Board = () => {
                         {contextMenu.card.zone !== 'library' && (
                           <div style={{ position: 'relative' }}>
                             <button
-                              onMouseEnter={() => setContextSubmenuLibrary(true)}
+                              onMouseDown={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                              }}
+                              onClick={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setContextSubmenuLibrary(!contextSubmenuLibrary);
+                                // Não fechar o submenu "Move to" pois o botão Library está dentro dele
+                              }}
                               style={{
                                 width: '100%',
                                 padding: '8px 12px',
@@ -3325,12 +3546,6 @@ const Board = () => {
                                 justifyContent: 'space-between',
                                 alignItems: 'center',
                               }}
-                              onMouseLeave={(e) => {
-                                // Não fechar se o mouse estiver no submenu
-                                if (!e.relatedTarget || !(e.relatedTarget as HTMLElement).closest('.library-submenu')) {
-                                  setContextSubmenuLibrary(false);
-                                }
-                              }}
                             >
                               <span>📚 Library</span>
                               <span style={{ marginLeft: '8px' }}>▶</span>
@@ -3339,9 +3554,9 @@ const Board = () => {
                             {/* Submenu de Library */}
                             {contextSubmenuLibrary && (
                               <div
+                                data-context-submenu
                                 className="library-submenu"
-                                onMouseEnter={() => setContextSubmenuLibrary(true)}
-                                onMouseLeave={() => setContextSubmenuLibrary(false)}
+                                onClick={(e) => e.stopPropagation()}
                                 style={{
                                   position: 'absolute',
                                   left: '100%',
@@ -3357,7 +3572,10 @@ const Board = () => {
                                 }}
                               >
                                 <button
-                                  onClick={() => handleContextMenuAction('libraryPlace', undefined, 'top')}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleContextMenuAction('libraryPlace', undefined, 'top');
+                                  }}
                                   style={{
                                     width: '100%',
                                     padding: '8px 12px',
@@ -3379,7 +3597,10 @@ const Board = () => {
                                   ⬆️ Top
                                 </button>
                                 <button
-                                  onClick={() => handleContextMenuAction('libraryPlace', undefined, 'random')}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleContextMenuAction('libraryPlace', undefined, 'random');
+                                  }}
                                   style={{
                                     width: '100%',
                                     padding: '8px 12px',
@@ -3401,7 +3622,10 @@ const Board = () => {
                                   🎲 Random
                                 </button>
                                 <button
-                                  onClick={() => handleContextMenuAction('libraryPlace', undefined, 'bottom')}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    handleContextMenuAction('libraryPlace', undefined, 'bottom');
+                                  }}
                                   style={{
                                     width: '100%',
                                     padding: '8px 12px',
@@ -3427,7 +3651,10 @@ const Board = () => {
                           </div>
                         )}
                         <button
-                          onClick={() => handleContextMenuAction('moveZone', 'cemetery')}
+                          onClick={(e) => {
+                            e.stopPropagation();
+                            handleContextMenuAction('moveZone', 'cemetery');
+                          }}
                           style={{
                             width: '100%',
                             padding: '8px 12px',
@@ -3530,47 +3757,119 @@ const Board = () => {
                 showBack={card.zone === 'library'}
               />
             </div>
-          </div>
-        );
+            </div>
+          );
       })()}
       
-      {/* Busca de cartas no library */}
-      <LibrarySearch
-        libraryCards={libraryCards}
-        playerId={playerId}
-        isOpen={showLibrarySearch}
-        onClose={() => setShowLibrarySearch(false)}
-        onMoveCard={(cardId, zone) => {
-          const card = board.find((c) => c.id === cardId);
-          if (!card) return;
+      {/* Menu de contexto do board */}
+      {boardContextMenu && boardContextMenuPosition && (
+        <div
+          data-board-context-menu
+          style={{
+            position: 'fixed',
+            left: `${boardContextMenuPosition.x}px`,
+            top: `${boardContextMenuPosition.y}px`,
+            backgroundColor: 'rgba(30, 41, 59, 0.95)',
+            border: '1px solid rgba(148, 163, 184, 0.3)',
+            borderRadius: '8px',
+            padding: '8px',
+            zIndex: 1000,
+            minWidth: '200px',
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+          }}
+        >
+          <div style={{ fontSize: '12px', color: '#94a3b8', padding: '4px 8px', marginBottom: '4px' }}>
+            Ações do Board
+          </div>
           
-          let position: Point = { x: 0, y: 0 };
+          {/* Criar Contador */}
+          <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
+          <button
+            onClick={() => {
+              if (boardContextMenu && boardRef.current) {
+                const boardRect = boardRef.current.getBoundingClientRect();
+                const scale = getBoardScale();
+                const offsetX = (boardRect.width - BASE_BOARD_WIDTH * scale) / 2;
+                const offsetY = (boardRect.height - BASE_BOARD_HEIGHT * scale) / 2;
+                
+                const boardX = (boardContextMenu.x - boardRect.left - offsetX) / scale;
+                const boardY = (boardContextMenu.y - boardRect.top - offsetY) / scale;
+                
+                const position: Point = { x: boardX, y: boardY };
+                addEventLog('CREATE_COUNTER', `Criando contador numeral`, undefined, undefined, {
+                  counterType: 'numeral',
+                  position,
+                });
+                createCounter(playerId, 'numeral', position);
+              }
+              setBoardContextMenu(null);
+              setBoardContextMenuPosition(null);
+            }}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              textAlign: 'left',
+              background: 'transparent',
+              border: 'none',
+              color: '#f8fafc',
+              cursor: 'pointer',
+              borderRadius: '4px',
+              fontSize: '14px',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+          >
+            🔢 Criar Contador Numeral
+          </button>
+          <button
+            onClick={() => {
+              if (boardContextMenu && boardRef.current) {
+                const boardRect = boardRef.current.getBoundingClientRect();
+                const scale = getBoardScale();
+                const offsetX = (boardRect.width - BASE_BOARD_WIDTH * scale) / 2;
+                const offsetY = (boardRect.height - BASE_BOARD_HEIGHT * scale) / 2;
+                
+                const boardX = (boardContextMenu.x - boardRect.left - offsetX) / scale;
+                const boardY = (boardContextMenu.y - boardRect.top - offsetY) / scale;
+                
+                const position: Point = { x: boardX, y: boardY };
+                addEventLog('CREATE_COUNTER', `Criando contador +X/+Y`, undefined, undefined, {
+                  counterType: 'plus',
+                  position,
+                });
+                createCounter(playerId, 'plus', position);
+              }
+              setBoardContextMenu(null);
+              setBoardContextMenuPosition(null);
+            }}
+            style={{
+              width: '100%',
+              padding: '8px 12px',
+              textAlign: 'left',
+              background: 'transparent',
+              border: 'none',
+              color: '#f8fafc',
+              cursor: 'pointer',
+              borderRadius: '4px',
+              fontSize: '14px',
+            }}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'transparent';
+            }}
+          >
+            ➕ Criar Contador +X/+Y
+          </button>
           
-          if (zone === 'battlefield' && boardRef.current) {
-            const rect = boardRef.current.getBoundingClientRect();
-            position = {
-              x: rect.width / 2 - CARD_WIDTH / 2,
-              y: rect.height / 2 - CARD_HEIGHT / 2,
-            };
-          } else if (zone === 'cemetery') {
-            const cemeteryPos = getCemeteryPosition(playerId);
-            if (cemeteryPos) {
-              position = cemeteryPos;
-            }
-          } else if (zone === 'hand') {
-            // Para hand, a posição será calculada automaticamente
-            position = { x: 0, y: 0 };
-          }
-          
-          addEventLog('MOVE_FROM_LIBRARY', `Movendo carta do library: ${card.name} → ${zone}`, card.id, card.name, {
-            from: 'library',
-            to: zone,
-          });
-          
-          changeCardZone(cardId, zone, position);
-        }}
-        ownerName={ownerName}
-      />
+          {/* Mulligan */}
+        </div>
+      )}
     </div>
   );
 };

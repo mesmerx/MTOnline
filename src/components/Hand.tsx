@@ -1,8 +1,10 @@
-import { useEffect, useRef, useState } from 'react';
+import { useEffect, useRef, useState, useMemo, useCallback } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { CardOnBoard } from '../store/useGameStore';
 import CardToken from './CardToken';
+import CounterToken from './CounterToken';
+import type { Counter } from '../store/useGameStore';
 
 type Point = { x: number; y: number };
 
@@ -44,6 +46,10 @@ interface HandProps {
   viewMode?: 'unified' | 'individual' | 'separated';
   convertMouseToSeparatedCoordinates?: (mouseX: number, mouseY: number, playerId: string, rect: DOMRect) => { x: number; y: number } | null;
   convertMouseToUnifiedCoordinates?: (mouseX: number, mouseY: number, rect: DOMRect) => { x: number; y: number };
+  counters?: Counter[];
+  moveCounter?: (counterId: string, position: Point) => void;
+  modifyCounter?: (counterId: string, delta?: number, deltaX?: number, deltaY?: number, setValue?: number, setX?: number, setY?: number) => void;
+  removeCounterToken?: (counterId: string) => void;
 }
 
 const Hand = ({
@@ -70,6 +76,10 @@ const Hand = ({
   viewMode = 'unified',
   convertMouseToSeparatedCoordinates,
   convertMouseToUnifiedCoordinates,
+  counters = [],
+  moveCounter,
+  modifyCounter,
+  removeCounterToken,
 }: HandProps) => {
   const [handCardMoved, setHandCardMoved] = useState(false);
   const [handScrollIndex, setHandScrollIndex] = useState(0);
@@ -88,16 +98,16 @@ const Hand = ({
   const stopDragExecutedRef = useRef<boolean>(false); // Flag para evitar múltiplas execuções
   const activeDragCardIdRef = useRef<string | null>(null); // Ref para rastrear qual carta está sendo arrastada atualmente
 
-  const handCards = board.filter((c) => c.zone === 'hand');
+  const handCards = useMemo(() => board.filter((c) => c.zone === 'hand'), [board]);
 
-  const getHandArea = (ownerId: string) => {
+  const getHandArea = useCallback((ownerId: string) => {
     if (!boardRef.current || players.length === 0) return null;
     const rect = boardRef.current.getBoundingClientRect();
     const playerIndex = players.findIndex((p) => p.id === ownerId);
     if (playerIndex === -1) return null;
 
     // Calcular área baseada no número real de cartas
-    const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === ownerId);
+    const playerHandCards = handCards.filter((c) => c.ownerId === ownerId);
     const totalCards = playerHandCards.length;
     
     if (totalCards === 0) {
@@ -133,7 +143,7 @@ const Hand = ({
       width: handWidth,
       height: handHeight,
     };
-  };
+  }, [boardRef, players, handCards]);
 
   const prepareHandDrag = (card: CardOnBoard, event: ReactPointerEvent) => {
     if (card.ownerId !== playerId) return;

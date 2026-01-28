@@ -72,8 +72,6 @@ const CardToken = ({
     }
   };
 
-  const counters = card.counters ?? 0;
-
   if (shouldShowBack) {
     return (
       <div
@@ -88,31 +86,6 @@ const CardToken = ({
         onContextMenu={onContextMenu}
       >
         <img src={CARD_BACK_IMAGE} alt="Card back" draggable={false} />
-        {counters > 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              top: '8px',
-              right: '8px',
-              backgroundColor: 'rgba(220, 38, 38, 0.9)',
-              color: 'white',
-              borderRadius: '50%',
-              width: '32px',
-              height: '32px',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              fontSize: '16px',
-              fontWeight: 'bold',
-              border: '2px solid white',
-              boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)',
-              zIndex: 10,
-              pointerEvents: 'none',
-            }}
-          >
-            {counters}
-          </div>
-        )}
       </div>
     );
   }
@@ -134,31 +107,6 @@ const CardToken = ({
       ) : (
         <div className="card-placeholder">
           <span>{card.name}</span>
-        </div>
-      )}
-      {counters > 0 && (
-        <div
-          style={{
-            position: 'absolute',
-            top: '8px',
-            right: '8px',
-            backgroundColor: 'rgba(220, 38, 38, 0.9)',
-            color: 'white',
-            borderRadius: '50%',
-            width: '32px',
-            height: '32px',
-            display: 'flex',
-            alignItems: 'center',
-            justifyContent: 'center',
-            fontSize: '16px',
-            fontWeight: 'bold',
-            border: '2px solid white',
-            boxShadow: '0 2px 8px rgba(0, 0, 0, 0.5)',
-            zIndex: 10,
-            pointerEvents: 'none',
-          }}
-        >
-          {counters}
         </div>
       )}
     </div>

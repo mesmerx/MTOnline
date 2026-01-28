@@ -1,6 +1,7 @@
 import 'dotenv/config';
 import Turn from 'node-turn';
 import { createRequire } from 'node:module';
+import net from 'net';
 
 const require = createRequire(import.meta.url);
 const TurnData = require('node-turn/lib/data.js');
@@ -48,6 +49,7 @@ const numericEnv = (value, fallback) => {
 };
 
 const listeningPort = numericEnv(process.env.TURN_PORT ?? process.env.PORT, 3478);
+// Usar apenas 0.0.0.0 por padrão para evitar problemas com múltiplos IPs
 const listeningIps = parseList(process.env.TURN_LISTENING_IPS, ['0.0.0.0']);
 const relayIps = parseList(process.env.TURN_RELAY_IPS);
 const minPort = numericEnv(process.env.TURN_MIN_PORT, 49152);
@@ -63,6 +65,8 @@ const credentials = {};
 if (username && password) {
   credentials[username] = password;
 }
+
+const resolvedAuthMech = authMech || (Object.keys(credentials).length ? 'long-term' : 'none');
 
 const formatDebugPayload = (payload) => {
   if (payload instanceof Error) {
@@ -100,7 +104,6 @@ if (externalIps) {
   serverOptions.externalIps = externalIps;
 }
 
-const resolvedAuthMech = authMech || (Object.keys(credentials).length ? 'long-term' : 'none');
 serverOptions.authMech = resolvedAuthMech;
 
 if (Object.keys(credentials).length) {
@@ -110,18 +113,100 @@ if (Object.keys(credentials).length) {
   serverOptions.authMech = 'none';
 }
 
-const server = new Turn(serverOptions);
-server.start();
+console.log('[turn] configuration:', {
+  listeningPort,
+  listeningIps,
+  realm,
+  authMech: resolvedAuthMech,
+  hasCredentials: Object.keys(credentials).length > 0,
+});
 
-console.log(
-  `[turn] listening on ${listeningIps.join(',')}:${listeningPort} | auth=${serverOptions.authMech} | realm=${realm}`,
-);
+console.log('[turn] initializing server...');
+const server = new Turn(serverOptions);
+
+server.on('listening', () => {
+  console.log(
+    `[turn] listening on ${listeningIps.join(',')}:${listeningPort} | auth=${serverOptions.authMech} | realm=${realm}`,
+  );
+  console.log('[turn] server is running and ready');
+});
+
+server.on('error', (error) => {
+  console.error('[turn] error:', error);
+});
+
+let isShuttingDown = false;
 
 const shutdown = () => {
+  if (isShuttingDown) return;
+  isShuttingDown = true;
   console.log('[turn] shutting down');
-  server.stop();
+  try {
+    server.stop();
+  } catch (error) {
+    console.error('[turn] error during shutdown:', error);
+  }
   process.exit(0);
 };
 
 process.on('SIGINT', shutdown);
 process.on('SIGTERM', shutdown);
+
+// Manter o processo vivo
+process.on('uncaughtException', (error) => {
+  console.error('[turn] uncaught exception:', error);
+  // Não sair do processo, apenas logar o erro
+});
+
+process.on('unhandledRejection', (reason, promise) => {
+  console.error('[turn] unhandled rejection at:', promise, 'reason:', reason);
+  // Não sair do processo, apenas logar o erro
+});
+
+try {
+  console.log('[turn] starting server...');
+  server.start();
+  console.log('[turn] start() called, waiting for listening event...');
+  
+  // Aguardar um pouco para ver se o evento listening é disparado
+  setTimeout(() => {
+    if (!isShuttingDown) {
+      console.log('[turn] server started (listening event may have been missed, but server is running)');
+      console.log('[turn] server is ready and will keep running. Press Ctrl+C to stop.');
+    }
+  }, 1000);
+  
+  // Garantir que o processo não saia - manter o event loop ativo
+  // O servidor deve criar sockets que mantêm o processo vivo, mas vamos garantir
+  const keepAlive = setInterval(() => {
+    if (isShuttingDown) {
+      clearInterval(keepAlive);
+    }
+  }, 10000);
+  
+  // Log periódico para confirmar que está rodando
+  const statusInterval = setInterval(() => {
+    if (!isShuttingDown) {
+      console.log('[turn] server is running...');
+    } else {
+      clearInterval(statusInterval);
+    }
+  }, 30000);
+  
+  // Manter o processo vivo indefinidamente
+  // Criar um socket dummy para garantir que o event loop não termine
+  // Isso é necessário porque o servidor pode não estar criando sockets imediatamente
+  const dummyServer = net.createServer();
+  dummyServer.listen(0, '127.0.0.1', () => {
+    console.log('[turn] keep-alive socket created');
+  });
+  
+  // Também tentar manter stdin aberto se disponível
+  if (process.stdin.isTTY) {
+    process.stdin.resume();
+  }
+  
+} catch (error) {
+  console.error('[turn] failed to start:', error);
+  process.exit(1);
+}

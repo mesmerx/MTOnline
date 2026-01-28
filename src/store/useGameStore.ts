@@ -31,8 +31,21 @@ export interface CardOnBoard {
   zone: 'battlefield' | 'library' | 'hand' | 'cemetery';
   stackIndex?: number; // Para cartas empilhadas no grimório
   handIndex?: number; // Para ordenar cartas na mão
-  counters?: number; // Contadores na carta
   flipped?: boolean; // Se a carta está virada (mostrando o verso)
+}
+
+export type CounterType = 'numeral' | 'plus';
+
+export interface Counter {
+  id: string;
+  ownerId: string; // ID do jogador que criou o contador
+  type: CounterType;
+  position: Point; // Posição absoluta do contador no board
+  // Para tipo 'numeral'
+  value?: number;
+  // Para tipo 'plus'
+  plusX?: number;
+  plusY?: number;
 }
 
 export interface NewCardPayload {
@@ -58,16 +71,18 @@ type CardAction =
   | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand' | 'cemetery'; position: Point; libraryPlace?: 'top' | 'bottom' | 'random' }
   | { kind: 'shuffleLibrary'; playerId: string }
   | { kind: 'mulligan'; playerId: string }
-  | { kind: 'addCounter'; id: string }
-  | { kind: 'removeCounter'; id: string }
+  | { kind: 'createCounter'; ownerId: string; type: CounterType; position: Point }
+  | { kind: 'moveCounter'; counterId: string; position: Point }
+  | { kind: 'modifyCounter'; counterId: string; delta?: number; deltaX?: number; deltaY?: number; setValue?: number; setX?: number; setY?: number }
+  | { kind: 'removeCounterToken'; counterId: string }
   | { kind: 'setPlayerLife'; playerId: string; life: number }
   | { kind: 'flipCard'; id: string };
 
 type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string }
-  | { type: 'BOARD_STATE'; board: CardOnBoard[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
-  | { type: 'ROOM_STATE'; board: CardOnBoard[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
-  | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
+  | { type: 'BOARD_STATE'; board: CardOnBoard[]; counters?: Counter[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
+  | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
+  | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
   | { type: 'ERROR'; message: string };
 
 type RoomStatus = 'idle' | 'initializing' | 'waiting' | 'connected' | 'error';
@@ -265,6 +280,7 @@ interface GameStore {
   roomPassword: string;
   error?: string;
   board: CardOnBoard[];
+  counters: Counter[];
   players: PlayerSummary[];
   cemeteryPositions: Record<string, Point>;
   libraryPositions: Record<string, Point>;
@@ -300,8 +316,10 @@ interface GameStore {
   reorderHandCard: (cardId: string, newIndex: number) => void;
   shuffleLibrary: (playerId: string) => void;
   mulligan: (playerId: string) => void;
-  addCounter: (cardId: string) => void;
-  removeCounter: (cardId: string) => void;
+  createCounter: (ownerId: string, type: CounterType, position: Point) => void;
+  moveCounter: (counterId: string, position: Point) => void;
+  modifyCounter: (counterId: string, delta?: number, deltaX?: number, deltaY?: number, setValue?: number, setX?: number, setY?: number) => void;
+  removeCounterToken: (counterId: string) => void;
   setPlayerLife: (playerId: string, life: number) => void;
   changePlayerLife: (playerId: string, delta: number) => void;
   resetBoard: () => void;
@@ -457,6 +475,79 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       const changedCard = board.find((c) => c.id === action.id);
       if (!changedCard) return board;
       
+      // Se for library com libraryPlace, calcular stackIndex primeiro e ajustar outras cartas
+      let libraryAdjustments: Array<{ id: string; newStackIndex: number }> = [];
+      let newStackIndex: number | undefined = undefined;
+      
+      if (action.zone === 'library' && action.libraryPlace) {
+        const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === changedCard.ownerId && c.id !== action.id);
+        const sortedCards = [...libraryCards].sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
+        
+        if (action.libraryPlace === 'top') {
+          // Topo = maior índice + 1
+          const maxStackIndex = sortedCards.length > 0 
+            ? Math.max(...sortedCards.map((c) => c.stackIndex ?? 0))
+            : -1;
+          newStackIndex = maxStackIndex + 1;
+        } else if (action.libraryPlace === 'bottom') {
+          // Bottom = menor índice - 1, ou 0 se menor já é 0
+          const minStackIndex = sortedCards.length > 0
+            ? Math.min(...sortedCards.map((c) => c.stackIndex ?? 0))
+            : 0;
+          newStackIndex = minStackIndex - 1;
+          
+          // Se ficou negativo, ajustar todas as outras cartas para cima
+          if (newStackIndex < 0) {
+            libraryAdjustments = sortedCards.map((c) => ({
+              id: c.id,
+              newStackIndex: (c.stackIndex ?? 0) + 1,
+            }));
+            newStackIndex = 0;
+          }
+        } else if (action.libraryPlace === 'random') {
+          // Random = posição aleatória
+          const librarySize = sortedCards.length;
+          
+          if (librarySize === 0) {
+            newStackIndex = 0;
+          } else {
+            // Escolher uma posição aleatória (0 = bottom, librarySize = top)
+            const randomPosition = Math.floor(Math.random() * (librarySize + 1));
+            
+            if (randomPosition === 0) {
+              // Colocar no bottom
+              const minStackIndex = Math.min(...sortedCards.map((c) => c.stackIndex ?? 0));
+              newStackIndex = minStackIndex - 1;
+              if (newStackIndex < 0) {
+                libraryAdjustments = sortedCards.map((c) => ({
+                  id: c.id,
+                  newStackIndex: (c.stackIndex ?? 0) + 1,
+                }));
+                newStackIndex = 0;
+              }
+            } else if (randomPosition === librarySize) {
+              // Colocar no topo
+              const maxStackIndex = Math.max(...sortedCards.map((c) => c.stackIndex ?? 0));
+              newStackIndex = maxStackIndex + 1;
+            } else {
+              // Colocar entre duas cartas
+              // A carta na posição randomPosition-1 está acima, queremos ficar abaixo dela
+              const cardAbove = sortedCards[randomPosition - 1];
+              const targetStackIndex = cardAbove.stackIndex ?? 0;
+              newStackIndex = targetStackIndex;
+              
+              // Mover todas as cartas com stackIndex >= targetStackIndex para cima
+              libraryAdjustments = sortedCards
+                .filter((c) => (c.stackIndex ?? 0) >= targetStackIndex)
+                .map((c) => ({
+                  id: c.id,
+                  newStackIndex: (c.stackIndex ?? 0) + 1,
+                }));
+            }
+          }
+        }
+      }
+      
       let newBoard = board.map((card) => {
         if (card.id === action.id) {
           const updatedCard = {
@@ -497,51 +588,22 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
             };
           }
           
-          // Se mudou para library, calcular stackIndex baseado na posição
+          // Se mudou para library, usar o stackIndex calculado anteriormente
           if (action.zone === 'library') {
-            const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === card.ownerId && c.id !== card.id);
             let stackIndex: number;
             
-            if (action.libraryPlace === 'top') {
-              // Topo = maior índice
+            if (newStackIndex !== undefined) {
+              stackIndex = newStackIndex;
+            } else if (action.libraryPlace === 'top') {
+              // Fallback para top (caso não tenha sido calculado)
+              const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === card.ownerId && c.id !== card.id);
               const maxStackIndex = libraryCards.length > 0 
                 ? Math.max(...libraryCards.map((c) => c.stackIndex ?? 0))
                 : -1;
               stackIndex = maxStackIndex + 1;
-            } else if (action.libraryPlace === 'bottom') {
-              // Bottom = menor índice (0)
-              // Mover todas as outras cartas para cima
-              const minStackIndex = libraryCards.length > 0
-                ? Math.min(...libraryCards.map((c) => c.stackIndex ?? 0))
-                : 1;
-              stackIndex = minStackIndex - 1;
-              // Ajustar outras cartas se necessário
-              if (stackIndex < 0) {
-                newBoard = newBoard.map((c) => {
-                  if (c.zone === 'library' && c.ownerId === card.ownerId && c.id !== card.id) {
-                    return { ...c, stackIndex: (c.stackIndex ?? 0) + 1 };
-                  }
-                  return c;
-                });
-                stackIndex = 0;
-              }
-            } else if (action.libraryPlace === 'random') {
-              // Random = posição aleatória
-              const librarySize = libraryCards.length;
-              const randomIndex = Math.floor(Math.random() * (librarySize + 1));
-              stackIndex = randomIndex;
-              // Ajustar outras cartas se necessário
-              newBoard = newBoard.map((c) => {
-                if (c.zone === 'library' && c.ownerId === card.ownerId && c.id !== card.id) {
-                  const currentIndex = c.stackIndex ?? 0;
-                  if (currentIndex >= randomIndex) {
-                    return { ...c, stackIndex: currentIndex + 1 };
-                  }
-                }
-                return c;
-              });
             } else {
               // Padrão: adicionar no topo
+              const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === card.ownerId && c.id !== card.id);
               const maxStackIndex = libraryCards.length > 0 
                 ? Math.max(...libraryCards.map((c) => c.stackIndex ?? 0))
                 : -1;
@@ -557,6 +619,18 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
           
           return updatedCard;
         }
+        
+        // Aplicar ajustes de stackIndex para outras cartas da library
+        if (libraryAdjustments.length > 0) {
+          const adjustment = libraryAdjustments.find((adj) => adj.id === card.id);
+          if (adjustment) {
+            return {
+              ...card,
+              stackIndex: adjustment.newStackIndex,
+            };
+          }
+        }
+        
         return card;
       });
       
@@ -731,29 +805,6 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       const otherCards = newBoard.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerId));
       return [...otherCards, ...updatedLibraryCards];
     }
-    case 'addCounter': {
-      return board.map((card) => {
-        if (card.id === action.id) {
-          return {
-            ...card,
-            counters: (card.counters ?? 0) + 1,
-          };
-        }
-        return card;
-      });
-    }
-    case 'removeCounter': {
-      return board.map((card) => {
-        if (card.id === action.id) {
-          const currentCounters = card.counters ?? 0;
-          return {
-            ...card,
-            counters: Math.max(0, currentCounters - 1),
-          };
-        }
-        return card;
-      });
-    }
     case 'flipCard': {
       return board.map((card) => {
         if (card.id === action.id) {
@@ -770,6 +821,63 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
   }
 };
 
+const applyCounterAction = (counters: Counter[], action: CardAction): Counter[] => {
+  switch (action.kind) {
+    case 'createCounter': {
+      const newCounter: Counter = {
+        id: randomId(),
+        ownerId: action.ownerId,
+        type: action.type,
+        position: action.position,
+        value: action.type === 'numeral' ? 0 : undefined,
+        plusX: action.type === 'plus' ? 0 : undefined,
+        plusY: action.type === 'plus' ? 0 : undefined,
+      };
+      return [...counters, newCounter];
+    }
+    case 'moveCounter': {
+      return counters.map((counter) =>
+        counter.id === action.counterId ? { ...counter, position: action.position } : counter
+      );
+    }
+    case 'modifyCounter': {
+      return counters.map((counter) => {
+        if (counter.id !== action.counterId) return counter;
+        
+        if (counter.type === 'numeral') {
+          if (action.setValue !== undefined) {
+            return { ...counter, value: action.setValue };
+          }
+          if (action.delta !== undefined) {
+            return { ...counter, value: Math.max(0, (counter.value ?? 0) + action.delta) };
+          }
+        } else if (counter.type === 'plus') {
+          let newPlusX = counter.plusX ?? 0;
+          let newPlusY = counter.plusY ?? 0;
+          
+          if (action.setX !== undefined) newPlusX = action.setX;
+          else if (action.deltaX !== undefined) newPlusX += action.deltaX;
+          
+          if (action.setY !== undefined) newPlusY = action.setY;
+          else if (action.deltaY !== undefined) newPlusY += action.deltaY;
+          
+          return { ...counter, plusX: newPlusX, plusY: newPlusY };
+        }
+        return counter;
+      });
+    }
+    case 'removeCounterToken': {
+      return counters.filter((counter) => counter.id !== action.counterId);
+    }
+    case 'remove': {
+      // Contadores são independentes, não são removidos quando cartas são removidas
+      return counters;
+    }
+    default:
+      return counters;
+  }
+};
+
 export const useGameStore = create<GameStore>((set, get) => {
   let peerEventLogger: ((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => void) | null = null;
   
@@ -780,6 +888,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     roomPassword: '',
     error: undefined,
     board: [] as CardOnBoard[],
+    counters: [] as Counter[],
     players: [] as PlayerSummary[],
     cemeteryPositions: {} as Record<string, Point>,
     libraryPositions: {} as Record<string, Point>,
@@ -867,6 +976,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     broadcastToPeers({ 
       type: 'BOARD_STATE', 
       board: state.board,
+      counters: state.counters,
       cemeteryPositions: state.cemeteryPositions,
       libraryPositions: state.libraryPositions,
     });
@@ -879,7 +989,7 @@ export const useGameStore = create<GameStore>((set, get) => {
   const pushRoomState = () => {
     const state = get();
     if (!state) return;
-    broadcastToPeers({ type: 'ROOM_STATE', board: state.board, players: state.players });
+    broadcastToPeers({ type: 'ROOM_STATE', board: state.board, counters: state.counters, players: state.players });
     // Salvar sessão quando o estado da sala mudar
     if (state.roomId) {
       saveSession(state);
@@ -916,13 +1026,25 @@ export const useGameStore = create<GameStore>((set, get) => {
         };
       }
       
+      // Aplicar ações de contadores
+      const newCounters = applyCounterAction(state.counters, action);
+      
       return {
         board: applyCardAction(state.board, action),
+        counters: newCounters,
         cemeteryPositions: newCemeteryPositions,
         libraryPositions: newLibraryPositions,
       };
     });
-    pushBoardState();
+    
+    // Se for setPlayerLife, usar pushRoomState para propagar os players
+    // Caso contrário, usar pushBoardState
+    const state = get();
+    if (state && action.kind === 'setPlayerLife') {
+      pushRoomState();
+    } else {
+      pushBoardState();
+    }
   };
 
     const registerHostConn = (conn: DataConnection, playerId: string, playerName: string) => {
@@ -1018,7 +1140,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         const currentState = get();
         conn.send({ 
           type: 'ROOM_STATE', 
-          board: currentState.board, 
+          board: currentState.board,
+          counters: currentState.counters,
           players: currentState.players,
           cemeteryPositions: currentState.cemeteryPositions,
           libraryPositions: currentState.libraryPositions,
@@ -1086,6 +1209,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           if (Array.isArray(message.board) && Array.isArray(message.players)) {
             const newState = {
               board: message.board,
+              counters: message.counters || [],
               players: message.players,
               status: 'connected' as RoomStatus,
               error: undefined,
@@ -1106,6 +1230,7 @@ export const useGameStore = create<GameStore>((set, get) => {
             // Preservar posições locais se não vierem no BOARD_STATE ou se estivermos arrastando
             set({ 
               board: message.board,
+              counters: message.counters || currentState?.counters || [],
               cemeteryPositions: message.cemeteryPositions || currentState?.cemeteryPositions || {},
               libraryPositions: message.libraryPositions || currentState?.libraryPositions || {},
             });
@@ -1135,6 +1260,7 @@ export const useGameStore = create<GameStore>((set, get) => {
               roomId: state.roomId,
               roomPassword: state.roomPassword,
               board: message.board,
+              counters: message.counters || [],
               players: message.players,
               playerId: state.playerId,
               playerName: state.playerName,
@@ -1660,6 +1786,7 @@ export const useGameStore = create<GameStore>((set, get) => {
                   type: 'HOST_TRANSFER',
                   newHostId: newHost.id,
                   board: state.board,
+                  counters: state.counters,
                   players: state.players.filter((p) => p.id !== state.playerId),
                 });
               } catch (error) {
@@ -1930,11 +2057,17 @@ export const useGameStore = create<GameStore>((set, get) => {
     mulligan: (playerId: string) => {
       requestAction({ kind: 'mulligan', playerId });
     },
-    addCounter: (cardId: string) => {
-      requestAction({ kind: 'addCounter', id: cardId });
+    createCounter: (ownerId: string, type: CounterType, position: Point) => {
+      requestAction({ kind: 'createCounter', ownerId, type, position });
     },
-    removeCounter: (cardId: string) => {
-      requestAction({ kind: 'removeCounter', id: cardId });
+    moveCounter: (counterId: string, position: Point) => {
+      requestAction({ kind: 'moveCounter', counterId, position });
+    },
+    modifyCounter: (counterId: string, delta?: number, deltaX?: number, deltaY?: number, setValue?: number, setX?: number, setY?: number) => {
+      requestAction({ kind: 'modifyCounter', counterId, delta, deltaX, deltaY, setValue, setX, setY });
+    },
+    removeCounterToken: (counterId: string) => {
+      requestAction({ kind: 'removeCounterToken', counterId });
     },
     flipCard: (cardId: string) => {
       requestAction({ kind: 'flipCard', id: cardId });
