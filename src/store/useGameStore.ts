@@ -255,14 +255,19 @@ const parseIceServersFromEnv = (): RTCIceServer[] => {
       }
     });
   } else {
-    // Fallback: tentar buscar credenciais de forma assíncrona (não bloqueia)
-    getTurnCredentials().then((creds) => {
-      if (creds) {
-        console.log('[TURN] Credenciais obtidas assincronamente, será necessário recriar o peer');
-      }
-    }).catch((error) => {
-      console.warn('[TURN] Erro ao buscar credenciais assincronamente:', error);
-    });
+    // Se não há cache, verificar se já há uma busca em andamento (pré-carregamento)
+    if (!turnCredentialsPromise) {
+      // Iniciar busca se não houver pré-carregamento em andamento
+      turnCredentialsPromise = getTurnCredentials().then(() => {
+        turnCredentialsPromise = null;
+        console.log('[TURN] Credenciais obtidas. Elas estarão disponíveis na próxima criação do peer.');
+      }).catch((error) => {
+        console.warn('[TURN] Erro ao buscar credenciais:', error);
+        turnCredentialsPromise = null;
+      });
+    } else {
+      console.log('[TURN] Busca de credenciais já em andamento (pré-carregamento). Peer criado sem servidores TURN externos por enquanto.');
+    }
   }
 
   return servers;
