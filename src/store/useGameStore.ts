@@ -89,15 +89,24 @@ const buildCoturnServers = (turnUrl: string, username?: string, credential?: str
 
 const parseIceServersFromEnv = (): RTCIceServer[] => {
   const env = import.meta.env;
-  const defaultServers: RTCIceServer[] = [];
+  // Servidores STUN públicos padrão (Google)
+  const defaultServers: RTCIceServer[] = [
+    { urls: 'stun:stun.l.google.com:19302' },
+    { urls: 'stun:stun1.l.google.com:19302' },
+    { urls: 'stun:stun2.l.google.com:19302' },
+    { urls: 'stun:stun3.l.google.com:19302' },
+    { urls: 'stun:stun4.l.google.com:19302' },
+  ];
   const internalIp = env.VITE_INTERNAL_IP;
+
+  let servers = [...defaultServers];
 
   if (env.VITE_PEER_ICE_SERVERS) {
     try {
       const parsed = JSON.parse(env.VITE_PEER_ICE_SERVERS);
       if (Array.isArray(parsed)) {
-        // Filtrar apenas servidores locais
-        return parsed.filter((server: RTCIceServer) => {
+        // Filtrar apenas servidores locais e adicionar aos padrões
+        const localServers = parsed.filter((server: RTCIceServer) => {
           const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
           return urls.some((url: string) => 
             url.includes('127.0.0.1') || 
@@ -112,6 +121,7 @@ const parseIceServersFromEnv = (): RTCIceServer[] => {
             (internalIp && url.includes(`stun:${internalIp}`))
           );
         });
+        servers = [...servers, ...localServers];
       }
     } catch (error) {
       console.warn('Failed to parse VITE_PEER_ICE_SERVERS', error);
@@ -125,10 +135,10 @@ const parseIceServersFromEnv = (): RTCIceServer[] => {
     turnUrl.includes('localhost') ||
     (internalIp && turnUrl.includes(internalIp))
   )) {
-    return [...defaultServers, ...buildCoturnServers(turnUrl, env.VITE_TURN_USERNAME, env.VITE_TURN_CREDENTIAL)];
+    servers = [...servers, ...buildCoturnServers(turnUrl, env.VITE_TURN_USERNAME, env.VITE_TURN_CREDENTIAL)];
   }
 
-  return defaultServers;
+  return servers;
 };
 
 const resolvePeerEndpoint = (): Omit<PeerJSOption, 'config'> => {
@@ -692,7 +702,10 @@ export const useGameStore = create<GameStore>((set, get) => {
     const config = state.turnConfig;
     if (config.mode === 'custom' && config.url && config.username && config.credential) {
       debugLog('using custom turn server', config.url);
-      return buildCoturnServers(config.url, config.username, config.credential);
+      // Incluir servidores padrão junto com o customizado
+      const defaultServers = parseIceServersFromEnv();
+      const customServers = buildCoturnServers(config.url, config.username, config.credential);
+      return [...defaultServers, ...customServers];
     }
     const servers = parseIceServersFromEnv();
     debugLog('using env/default ICE servers', servers);
