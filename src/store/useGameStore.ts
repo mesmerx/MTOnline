@@ -96,6 +96,138 @@ const deriveStunUrlFromTurn = (turnUrl: string): string | undefined => {
   return `${protocol === 'turns' ? 'stuns' : 'stun'}:${rest}`;
 };
 
+/**
+ * Implementação JavaScript pura de HMAC-SHA1
+ */
+const hmacSha1 = (key: string, message: string): string => {
+  // Padding do key para 64 bytes
+  const keyBytes = new TextEncoder().encode(key);
+  let keyArray: number[];
+  if (keyBytes.length > 64) {
+    // Hash do key se for maior que 64 bytes
+    const hash = sha1(keyBytes);
+    keyArray = Array.from(hash);
+    while (keyArray.length < 64) keyArray.push(0);
+  } else {
+    keyArray = Array.from(keyBytes);
+    while (keyArray.length < 64) keyArray.push(0);
+  }
+
+  // XOR com ipad e opad
+  const ipad = Array(64).fill(0x36);
+  const opad = Array(64).fill(0x5c);
+  const oKeyPad = keyArray.map((b, i) => b ^ opad[i]);
+  const iKeyPad = keyArray.map((b, i) => b ^ ipad[i]);
+
+  // HMAC = H(opad || H(ipad || message))
+  const innerHash = sha1(Uint8Array.from([...iKeyPad, ...new TextEncoder().encode(message)]));
+  const hmac = sha1(Uint8Array.from([...oKeyPad, ...innerHash]));
+
+  return btoa(String.fromCharCode(...hmac));
+};
+
+/**
+ * Implementação JavaScript pura de SHA-1
+ */
+const sha1 = (data: Uint8Array): Uint8Array => {
+  let h = [0x67452301, 0xefcdab89, 0x98badcfe, 0x10325476, 0xc3d2e1f0];
+  const k = [0x5a827999, 0x6ed9eba1, 0x8f1bbcdc, 0xca62c1d6];
+
+  const leftRotate = (value: number, amount: number) => {
+    return ((value << amount) | (value >>> (32 - amount))) >>> 0;
+  };
+
+  const processChunk = (chunk: Uint8Array) => {
+    const h0 = [...h];
+    const w: number[] = [];
+    for (let i = 0; i < 16; i++) {
+      w[i] = (chunk[i * 4] << 24) | (chunk[i * 4 + 1] << 16) | (chunk[i * 4 + 2] << 8) | chunk[i * 4 + 3];
+    }
+    for (let i = 16; i < 80; i++) {
+      w[i] = leftRotate(w[i - 3] ^ w[i - 8] ^ w[i - 14] ^ w[i - 16], 1);
+    }
+
+    let [a, b, c, d, e] = h0;
+
+    for (let i = 0; i < 80; i++) {
+      let f: number, k_val: number;
+      if (i < 20) {
+        f = (b & c) | (~b & d);
+        k_val = k[0];
+      } else if (i < 40) {
+        f = b ^ c ^ d;
+        k_val = k[1];
+      } else if (i < 60) {
+        f = (b & c) | (b & d) | (c & d);
+        k_val = k[2];
+      } else {
+        f = b ^ c ^ d;
+        k_val = k[3];
+      }
+
+      const temp = (leftRotate(a, 5) + f + e + k_val + w[i]) >>> 0;
+      e = d;
+      d = c;
+      c = leftRotate(b, 30);
+      b = a;
+      a = temp;
+    }
+
+    h[0] = (h[0] + a) >>> 0;
+    h[1] = (h[1] + b) >>> 0;
+    h[2] = (h[2] + c) >>> 0;
+    h[3] = (h[3] + d) >>> 0;
+    h[4] = (h[4] + e) >>> 0;
+  };
+
+  // Padding
+  const msgLength = data.length;
+  const bitLength = msgLength * 8;
+  const padding = new Uint8Array((64 - ((msgLength + 9) % 64)) % 64);
+  padding[0] = 0x80;
+
+  const totalLength = msgLength + padding.length + 8;
+  const padded = new Uint8Array(totalLength);
+  padded.set(data, 0);
+  padded.set(padding, msgLength);
+
+  // Adicionar length em bits (64 bits, big-endian)
+  for (let i = 0; i < 8; i++) {
+    padded[totalLength - 8 + i] = (bitLength >>> (56 - i * 8)) & 0xff;
+  }
+
+  // Processar chunks
+  for (let i = 0; i < totalLength; i += 64) {
+    processChunk(padded.slice(i, i + 64));
+  }
+
+  // Converter para bytes
+  const result = new Uint8Array(20);
+  for (let i = 0; i < 5; i++) {
+    result[i * 4] = (h[i] >>> 24) & 0xff;
+    result[i * 4 + 1] = (h[i] >>> 16) & 0xff;
+    result[i * 4 + 2] = (h[i] >>> 8) & 0xff;
+    result[i * 4 + 3] = h[i] & 0xff;
+  }
+
+  return result;
+};
+
+/**
+ * Gera credenciais TURN dinamicamente usando o algoritmo do coturn.
+ * O username é um timestamp válido por 1 hora.
+ * O password é gerado usando HMAC-SHA1 com o secret.
+ */
+const generateTurnCredentials = (secret: string): { username: string; password: string } => {
+  // Username: timestamp válido por 1 hora (em segundos)
+  const username = Math.floor(Date.now() / 1000 + 3600).toString();
+  
+  // Password: HMAC-SHA1 do username com o secret, codificado em base64
+  const password = hmacSha1(secret, username);
+  
+  return { username, password };
+};
+
 const buildCoturnServers = (turnUrl: string, username?: string, credential?: string): RTCIceServer[] => {
   const servers: RTCIceServer[] = [];
   const stunUrl = deriveStunUrlFromTurn(turnUrl);
@@ -152,6 +284,30 @@ const parseIceServersFromEnv = (): RTCIceServer[] => {
     (internalIp && turnUrl.includes(internalIp))
   )) {
     servers = [...servers, ...buildCoturnServers(turnUrl, env.VITE_TURN_USERNAME, env.VITE_TURN_CREDENTIAL)];
+  }
+
+  // Adicionar servidor TURN externo turn.mesmer.tv (TCP e TLS)
+  const externalTurnUrl = 'turn:turn.mesmer.tv:3478';
+  const externalTurnsUrl = 'turns:turn.mesmer.tv:5349';
+  // Secret codificado em base64 para ofuscar no código fonte
+  const encodedSecret = 'dHVybl9tZXNtZXJfdHZfcGFyYV9mdW5jaW9uYXJfb25saW5l';
+  try {
+    const secret = atob(encodedSecret);
+    const { username, password } = generateTurnCredentials(secret);
+    // Adicionar servidor TURN TCP
+    const externalServers = buildCoturnServers(externalTurnUrl, username, password);
+    servers = [...servers, ...externalServers];
+    // Adicionar servidor TURN TLS
+    const externalTlsServers = buildCoturnServers(externalTurnsUrl, username, password);
+    servers = [...servers, ...externalTlsServers];
+    console.log('[TURN] Adicionados servidores externos:', {
+      tcp: externalTurnUrl,
+      tls: externalTurnsUrl,
+      username,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (error) {
+    console.warn('[TURN] Falha ao gerar credenciais para servidor externo', error);
   }
 
   return servers;
@@ -890,18 +1046,43 @@ export const useGameStore = create<GameStore>((set, get) => {
     peer: undefined as Peer | undefined,
   });
 
+  const logIceServers = (servers: RTCIceServer[]): void => {
+    console.log('[ICE Servers] Configurando servidores TURN/STUN:');
+    servers.forEach((server, index) => {
+      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
+      urls.forEach((url) => {
+        const isStun = url.startsWith('stun:') || url.startsWith('stuns:');
+        const hasAuth = server.username && server.credential;
+        let authInfo: string;
+        if (isStun) {
+          authInfo = ' (STUN não requer autenticação)';
+        } else if (hasAuth) {
+          authInfo = ` (username: ${server.username})`;
+        } else {
+          authInfo = ' (sem autenticação)';
+        }
+        console.log(`  [${index + 1}] ${url}${authInfo}`);
+      });
+    });
+  };
+
   const buildIceServers = (): RTCIceServer[] => {
     const state = get();
-    if (!state) return parseIceServersFromEnv();
+    if (!state) {
+      const servers = parseIceServersFromEnv();
+      logIceServers(servers);
+      return servers;
+    }
     const config = state.turnConfig;
     if (config.mode === 'custom' && config.url && config.username && config.credential) {
       debugLog('using custom turn server', config.url);
       // Apenas servidores customizados (locais)
       const customServers = buildCoturnServers(config.url, config.username, config.credential);
+      logIceServers(customServers);
       return customServers;
     }
     const servers = parseIceServersFromEnv();
-    debugLog('using env/default ICE servers', servers);
+    logIceServers(servers);
     return servers;
   };
 
