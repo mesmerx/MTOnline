@@ -993,6 +993,47 @@ const Hand = ({
     }
   }, [board, playerId, draggingHandCard]);
 
+  // Navegação com teclado (setas esquerda/direita)
+  useEffect(() => {
+    if (!boardRef.current) return;
+    
+    const handleKeyDown = (event: KeyboardEvent) => {
+      // Ignorar se estiver digitando em um input ou textarea
+      const target = event.target as HTMLElement;
+      if (target.tagName === 'INPUT' || target.tagName === 'TEXTAREA' || target.isContentEditable) {
+        return;
+      }
+      
+      // Verificar se há cartas na hand do jogador
+      const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerId);
+      if (playerHandCards.length === 0) return;
+      
+      const totalCards = playerHandCards.length;
+      const maxScroll = Math.max(0, totalCards - maxRenderCards);
+      
+      if (event.key === 'ArrowLeft') {
+        event.preventDefault();
+        if (handScrollIndex > 0 && !isSliding) {
+          setIsSliding(true);
+          setHandScrollIndex(Math.max(0, handScrollIndex - 1));
+          setTimeout(() => setIsSliding(false), 300);
+        }
+      } else if (event.key === 'ArrowRight') {
+        event.preventDefault();
+        if (handScrollIndex < maxScroll && !isSliding) {
+          setIsSliding(true);
+          setHandScrollIndex(Math.min(maxScroll, handScrollIndex + 1));
+          setTimeout(() => setIsSliding(false), 300);
+        }
+      }
+    };
+    
+    window.addEventListener('keydown', handleKeyDown);
+    return () => {
+      window.removeEventListener('keydown', handleKeyDown);
+    };
+  }, [board, playerId, handScrollIndex, isSliding]);
+
   if (!boardRef.current) return null;
 
   return (
@@ -1320,9 +1361,10 @@ const Hand = ({
                       className="hand-nav-button hand-nav-left"
                       style={{
                         position: 'absolute',
-                        left: '0',
+                        left: '10px',
                         top: '50%',
-                        transform: 'translate(-100%, -50%)',
+                        transform: 'translateY(-50%)',
+                        zIndex: 100,
                       }}
                       onClick={() => {
                         if (!isSliding) {
@@ -1340,13 +1382,14 @@ const Hand = ({
                   <div
                     style={{
                       position: 'absolute',
-                      right: '0',
+                      right: '10px',
                       top: '50%',
-                      transform: 'translate(100%, -50%)',
+                      transform: 'translateY(-50%)',
                       display: 'flex',
                       flexDirection: 'column',
                       alignItems: 'center',
                       gap: '0px',
+                      zIndex: 100,
                     }}
                   >
                     {totalCards > 0 && (

@@ -18,6 +18,8 @@ interface CemeteryProps {
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   startCemeteryDrag: (playerId: string, event: ReactPointerEvent) => void;
   draggingCemetery: { playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
+  handleCardZoom?: (card: CardOnBoard, event: ReactPointerEvent) => void;
+  zoomedCard?: string | null;
 }
 
 const Cemetery = ({
@@ -31,6 +33,8 @@ const Cemetery = ({
   startDrag,
   startCemeteryDrag,
   draggingCemetery,
+  handleCardZoom,
+  zoomedCard,
 }: CemeteryProps) => {
   if (!boardRef.current || players.length === 0) return null;
 
@@ -138,8 +142,13 @@ const Cemetery = ({
                     }}
                     onPointerDown={(e) => {
                       if (index === 0 && card.ownerId === playerId) {
-                        e.stopPropagation();
-                        startDrag(card, e);
+                        if (e.button === 1 && handleCardZoom) {
+                          e.stopPropagation();
+                          handleCardZoom(card, e);
+                        } else if (e.button === 0) {
+                          e.stopPropagation();
+                          startDrag(card, e);
+                        }
                       }
                     }}
                   >

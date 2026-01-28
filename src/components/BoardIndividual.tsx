@@ -24,6 +24,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     ownerName,
     handleCardClick,
     handleCardContextMenu,
+    handleCardZoom,
     startDrag,
     startLibraryDrag,
     startCemeteryDrag,
@@ -37,6 +38,8 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     board,
     getLibraryPosition,
     getCemeteryPosition,
+    zoomedCard,
+    setZoomedCard,
     selectedPlayerIndex,
   } = props;
 
@@ -91,6 +94,8 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         startLibraryDrag={startLibraryDrag}
         draggingLibrary={draggingLibrary}
         startDrag={startDrag}
+        handleCardZoom={handleCardZoom}
+        zoomedCard={zoomedCard}
       />
 
       <Cemetery
@@ -110,6 +115,8 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         startDrag={startDrag}
         startCemeteryDrag={startCemeteryDrag}
         draggingCemetery={draggingCemetery}
+        handleCardZoom={handleCardZoom}
+        zoomedCard={zoomedCard}
       />
 
       {filteredBattlefieldCards.map((card) => {
@@ -132,6 +139,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
               card={card}
               onPointerDown={(event) => {
                 setLastTouchedCard(card);
+                handleCardZoom(card, event);
                 startDrag(card, event);
               }}
               onClick={(event) => handleCardClick(card, event)}

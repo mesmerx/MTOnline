@@ -20,8 +20,11 @@ export const BoardUnified = (props: BoardViewProps) => {
     ownerName,
     handleCardClick,
     handleCardContextMenu,
+    handleCardZoom,
     startDrag,
     startLibraryDrag,
+    zoomedCard,
+    setZoomedCard,
     startCemeteryDrag,
     changeCardZone,
     detectZoneAtPosition,
@@ -78,6 +81,8 @@ export const BoardUnified = (props: BoardViewProps) => {
         startLibraryDrag={startLibraryDrag}
         draggingLibrary={draggingLibrary}
         startDrag={startDrag}
+        handleCardZoom={handleCardZoom}
+        zoomedCard={zoomedCard}
       />
 
       <Cemetery
@@ -97,6 +102,8 @@ export const BoardUnified = (props: BoardViewProps) => {
         startDrag={startDrag}
         startCemeteryDrag={startCemeteryDrag}
         draggingCemetery={draggingCemetery}
+        handleCardZoom={handleCardZoom}
+        zoomedCard={zoomedCard}
       />
 
       {battlefieldCards.map((card) => {
@@ -119,6 +126,7 @@ export const BoardUnified = (props: BoardViewProps) => {
               card={card}
               onPointerDown={(event) => {
                 setLastTouchedCard(card);
+                handleCardZoom(card, event);
                 startDrag(card, event);
               }}
               onClick={(event) => handleCardClick(card, event)}

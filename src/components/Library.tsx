@@ -19,6 +19,8 @@ interface LibraryProps {
   startLibraryDrag: (playerId: string, event: ReactPointerEvent) => void;
   draggingLibrary: { playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
+  handleCardZoom?: (card: CardOnBoard, event: ReactPointerEvent) => void;
+  zoomedCard?: string | null;
 }
 
 const Library = ({
@@ -33,6 +35,8 @@ const Library = ({
   startLibraryDrag,
   draggingLibrary,
   startDrag,
+  handleCardZoom,
+  zoomedCard,
 }: LibraryProps) => {
   if (!boardRef.current || players.length === 0) return null;
 
@@ -122,9 +126,14 @@ const Library = ({
                   zIndex: 5 - index,
                 }}
                 onPointerDown={(e) => {
-                  if (index === 0 && isCurrentPlayer && e.button === 0 && e.shiftKey) {
-                    e.stopPropagation();
-                    startDrag(card, e);
+                  if (index === 0 && isCurrentPlayer) {
+                    if (e.button === 1 && handleCardZoom) {
+                      e.stopPropagation();
+                      handleCardZoom(card, e);
+                    } else if (e.button === 0 && e.shiftKey) {
+                      e.stopPropagation();
+                      startDrag(card, e);
+                    }
                   }
                 }}
               >

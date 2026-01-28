@@ -19,7 +19,10 @@ export interface BoardViewProps {
   ownerName: (card: CardOnBoard) => string;
   handleCardClick: (card: CardOnBoard, event: React.MouseEvent) => void;
   handleCardContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
+  handleCardZoom: (card: CardOnBoard, event: React.PointerEvent) => void;
   startDrag: (card: CardOnBoard, event: React.PointerEvent) => void;
+  zoomedCard: string | null;
+  setZoomedCard: (cardId: string | null) => void;
   startLibraryDrag: (targetPlayerId: string, event: React.PointerEvent) => void;
   startCemeteryDrag: (targetPlayerId: string, event: React.PointerEvent) => void;
   changeCardZone: (cardId: string, newZone: 'battlefield' | 'hand' | 'library' | 'cemetery', position?: Point) => void;

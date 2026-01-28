@@ -9,6 +9,7 @@ import { debugLog } from '../lib/debug';
 export interface PlayerSummary {
   id: string;
   name: string;
+  life?: number;
 }
 
 export interface Point {
@@ -30,6 +31,8 @@ export interface CardOnBoard {
   zone: 'battlefield' | 'library' | 'hand' | 'cemetery';
   stackIndex?: number; // Para cartas empilhadas no grimório
   handIndex?: number; // Para ordenar cartas na mão
+  counters?: number; // Contadores na carta
+  flipped?: boolean; // Se a carta está virada (mostrando o verso)
 }
 
 export interface NewCardPayload {
@@ -53,7 +56,12 @@ type CardAction =
   | { kind: 'replaceLibrary'; cards: CardOnBoard[]; playerId: string }
   | { kind: 'drawFromLibrary'; playerId: string }
   | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand' | 'cemetery'; position: Point; libraryPlace?: 'top' | 'bottom' | 'random' }
-  | { kind: 'shuffleLibrary'; playerId: string };
+  | { kind: 'shuffleLibrary'; playerId: string }
+  | { kind: 'mulligan'; playerId: string }
+  | { kind: 'addCounter'; id: string }
+  | { kind: 'removeCounter'; id: string }
+  | { kind: 'setPlayerLife'; playerId: string; life: number }
+  | { kind: 'flipCard'; id: string };
 
 type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string }
@@ -291,6 +299,11 @@ interface GameStore {
   changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   reorderHandCard: (cardId: string, newIndex: number) => void;
   shuffleLibrary: (playerId: string) => void;
+  mulligan: (playerId: string) => void;
+  addCounter: (cardId: string) => void;
+  removeCounter: (cardId: string) => void;
+  setPlayerLife: (playerId: string, life: number) => void;
+  changePlayerLife: (playerId: string, delta: number) => void;
   resetBoard: () => void;
   setPeerEventLogger: (logger: ((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => void) | null) => void;
 }
@@ -673,6 +686,85 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       const otherCards = board.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerId));
       return [...otherCards, ...updatedLibraryCards];
     }
+    case 'mulligan': {
+      // Pegar todas as cartas da mão do jogador
+      const handCards = board.filter((c) => c.zone === 'hand' && c.ownerId === action.playerId);
+      
+      if (handCards.length === 0) return board;
+      
+      // Pegar cartas do library para calcular o próximo stackIndex
+      const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === action.playerId);
+      const maxStackIndex = libraryCards.length > 0 
+        ? Math.max(...libraryCards.map((c) => c.stackIndex ?? 0))
+        : -1;
+      
+      // Mover todas as cartas da mão para o library (no topo)
+      let newBoard = board.map((card) => {
+        if (card.zone === 'hand' && card.ownerId === action.playerId) {
+          return {
+            ...card,
+            zone: 'library' as const,
+            handIndex: undefined,
+            stackIndex: maxStackIndex + handCards.length - handCards.findIndex(c => c.id === card.id),
+            position: { x: 0, y: 0 },
+          };
+        }
+        return card;
+      });
+      
+      // Embaralhar o library
+      const allLibraryCards = newBoard
+        .filter((c) => c.zone === 'library' && c.ownerId === action.playerId)
+        .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
+      
+      if (allLibraryCards.length === 0) return newBoard;
+      
+      // Embaralhar os stackIndex
+      const shuffled = [...allLibraryCards].sort(() => Math.random() - 0.5);
+      
+      // Atualizar stackIndex de cada carta
+      const updatedLibraryCards = shuffled.map((card, index) => ({
+        ...card,
+        stackIndex: allLibraryCards.length - 1 - index, // Inverter para manter ordem (maior índice = topo)
+      }));
+      
+      const otherCards = newBoard.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerId));
+      return [...otherCards, ...updatedLibraryCards];
+    }
+    case 'addCounter': {
+      return board.map((card) => {
+        if (card.id === action.id) {
+          return {
+            ...card,
+            counters: (card.counters ?? 0) + 1,
+          };
+        }
+        return card;
+      });
+    }
+    case 'removeCounter': {
+      return board.map((card) => {
+        if (card.id === action.id) {
+          const currentCounters = card.counters ?? 0;
+          return {
+            ...card,
+            counters: Math.max(0, currentCounters - 1),
+          };
+        }
+        return card;
+      });
+    }
+    case 'flipCard': {
+      return board.map((card) => {
+        if (card.id === action.id) {
+          return {
+            ...card,
+            flipped: !card.flipped,
+          };
+        }
+        return card;
+      });
+    }
     default:
       return board;
   }
@@ -798,6 +890,14 @@ export const useGameStore = create<GameStore>((set, get) => {
     set((state) => {
       if (!state) return state;
       
+      // Tratar setPlayerLife separadamente (não afeta o board)
+      if (action.kind === 'setPlayerLife') {
+        return {
+          ...state,
+          players: state.players.map((p) => (p.id === action.playerId ? { ...p, life: action.life } : p)),
+        };
+      }
+      
       // Atualizar posições se for moveLibrary ou moveCemetery
       let newCemeteryPositions = state.cemeteryPositions;
       let newLibraryPositions = state.libraryPositions;
@@ -908,7 +1008,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (!state) return state;
       return {
         connections: { ...state.connections, [playerId]: conn },
-        players: [...state.players.filter((player) => player.id !== playerId), { id: playerId, name: playerName }],
+        players: [...state.players.filter((player) => player.id !== playerId), { id: playerId, name: playerName, life: 20 }],
       };
     });
 
@@ -1474,7 +1574,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           if (!state) return state;
           const newState = {
             status: 'connected' as RoomStatus,
-            players: [{ id: state.playerId, name: state.playerName || 'Host' }],
+            players: [{ id: state.playerId, name: state.playerName || 'Host', life: 20 }],
           };
           if (state) {
             saveSession({ ...state, ...newState });
@@ -1826,6 +1926,31 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
     shuffleLibrary: (playerId: string) => {
       requestAction({ kind: 'shuffleLibrary', playerId });
+    },
+    mulligan: (playerId: string) => {
+      requestAction({ kind: 'mulligan', playerId });
+    },
+    addCounter: (cardId: string) => {
+      requestAction({ kind: 'addCounter', id: cardId });
+    },
+    removeCounter: (cardId: string) => {
+      requestAction({ kind: 'removeCounter', id: cardId });
+    },
+    flipCard: (cardId: string) => {
+      requestAction({ kind: 'flipCard', id: cardId });
+    },
+    setPlayerLife: (playerId: string, life: number) => {
+      requestAction({ kind: 'setPlayerLife', playerId, life });
+    },
+    changePlayerLife: (playerId: string, delta: number) => {
+      const state = get();
+      if (!state) return;
+      
+      const player = state.players.find((p) => p.id === playerId);
+      const currentLife = player?.life ?? 20;
+      const newLife = Math.max(0, currentLife + delta);
+      
+      get().setPlayerLife(playerId, newLife);
     },
     resetBoard: () => {
       const state = get();
