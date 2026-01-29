@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
+import { shallow } from 'zustand/shallow';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { CardOnBoard, PlayerSummary, Counter } from '../store/useGameStore';
@@ -37,6 +38,57 @@ interface ClickBlockState {
   cardId: string;
   timeoutId: number;
 }
+
+const createShallowCachedSelector = <T,>(selector: (state: ReturnType<typeof useGameStore.getState>) => T) => {
+  let lastResult: T | null = null;
+  return (state: ReturnType<typeof useGameStore.getState>) => {
+    const nextResult = selector(state);
+    if (lastResult && shallow(nextResult as any, lastResult as any)) {
+      return lastResult;
+    }
+    lastResult = nextResult;
+    return nextResult;
+  };
+};
+
+const selectBoardState = createShallowCachedSelector((state: ReturnType<typeof useGameStore.getState>) => ({
+  board: state.board,
+  counters: state.counters,
+  players: state.players,
+  simulatedPlayers: state.simulatedPlayers,
+  playerId: state.playerId,
+  playerName: state.playerName,
+  cemeteryPositions: state.cemeteryPositions,
+  libraryPositions: state.libraryPositions,
+  moveCard: state.moveCard,
+  moveLibrary: state.moveLibrary,
+  moveCemetery: state.moveCemetery,
+  toggleTap: state.toggleTap,
+  removeCard: state.removeCard,
+  changeCardZone: state.changeCardZone,
+  drawFromLibrary: state.drawFromLibrary,
+  reorderHandCard: state.reorderHandCard,
+  reorderLibraryCard: state.reorderLibraryCard,
+  shuffleLibrary: state.shuffleLibrary,
+  mulligan: state.mulligan,
+  createCounter: state.createCounter,
+  moveCounter: state.moveCounter,
+  modifyCounter: state.modifyCounter,
+  removeCounterToken: state.removeCounterToken,
+  setZoomedCard: state.setZoomedCard,
+  zoomedCard: state.zoomedCard ?? null,
+  flipCard: state.flipCard,
+  changePlayerLife: state.changePlayerLife,
+  changeCommanderDamage: state.changeCommanderDamage,
+  status: state.status,
+  peer: state.peer,
+  connections: state.connections,
+  hostConnection: state.hostConnection,
+  isHost: state.isHost,
+  roomId: state.roomId,
+  setPeerEventLogger: state.setPeerEventLogger,
+  setSimulatedPlayers: state.setSimulatedPlayers,
+}));
 
 interface LifeDisplayProps {
   player: PlayerSummary;
@@ -352,52 +404,54 @@ const LifeDisplay = ({
 };
 
 const Board = () => {
-  const board = useGameStore((state) => state.board);
-  const counters = useGameStore((state) => state.counters);
-  const players = useGameStore((state) => state.players);
-  const simulatedPlayers = useGameStore((state) => state.simulatedPlayers);
-  const playerId = useGameStore((state) => state.playerId);
-  const playerName = useGameStore((state) => state.playerName);
+  const {
+    board,
+    counters,
+    players,
+    simulatedPlayers,
+    playerId,
+    playerName,
+    cemeteryPositions: storeCemeteryPositions,
+    libraryPositions: storeLibraryPositions,
+    moveCard,
+    moveLibrary,
+    moveCemetery,
+    toggleTap,
+    removeCard,
+    changeCardZone,
+    drawFromLibrary,
+    reorderHandCard,
+    reorderLibraryCard,
+    shuffleLibrary,
+    mulligan,
+    createCounter,
+    moveCounter,
+    modifyCounter,
+    removeCounterToken,
+    setZoomedCard: setZoomedCardSync,
+    zoomedCard: zoomedCardSync,
+    flipCard,
+    changePlayerLife,
+    changeCommanderDamage,
+    status,
+    peer,
+    connections,
+    hostConnection,
+    isHost,
+    roomId,
+    setPeerEventLogger,
+    setSimulatedPlayers,
+  } = useGameStore(selectBoardState, shallow);
+  const currentStatus = status ?? 'idle';
   
   // Helper para verificar se um player é simulado
-  const isSimulatedPlayer = (ownerId: string) => {
-    return simulatedPlayers.some(p => p.name === ownerId);
-  };
+  const simulatedPlayerNames = useMemo(() => new Set(simulatedPlayers.map((p) => p.name)), [simulatedPlayers]);
+  const isSimulatedPlayer = useCallback((ownerId: string) => simulatedPlayerNames.has(ownerId), [simulatedPlayerNames]);
   
   // Helper para verificar se pode interagir com uma carta
-  const canInteractWithCard = (cardOwnerId: string) => {
+  const canInteractWithCard = useCallback((cardOwnerId: string) => {
     return cardOwnerId === playerName || isSimulatedPlayer(cardOwnerId);
-  };
-  const storeCemeteryPositions = useGameStore((state) => state.cemeteryPositions);
-  const storeLibraryPositions = useGameStore((state) => state.libraryPositions);
-  const moveCard = useGameStore((state) => state.moveCard);
-  const moveLibrary = useGameStore((state) => state.moveLibrary);
-  const moveCemetery = useGameStore((state) => state.moveCemetery);
-  const toggleTap = useGameStore((state) => state.toggleTap);
-  const removeCard = useGameStore((state) => state.removeCard);
-  const changeCardZone = useGameStore((state) => state.changeCardZone);
-  const drawFromLibrary = useGameStore((state) => state.drawFromLibrary);
-  const reorderHandCard = useGameStore((state) => state.reorderHandCard);
-  const reorderLibraryCard = useGameStore((state) => state.reorderLibraryCard);
-  const shuffleLibrary = useGameStore((state) => state.shuffleLibrary);
-  const mulligan = useGameStore((state) => state.mulligan);
-  const createCounter = useGameStore((state) => state.createCounter);
-  const moveCounter = useGameStore((state) => state.moveCounter);
-  const modifyCounter = useGameStore((state) => state.modifyCounter);
-  const removeCounterToken = useGameStore((state) => state.removeCounterToken);
-  const setZoomedCardSync = useGameStore((state) => state.setZoomedCard);
-  const zoomedCardSync = useGameStore((state) => state.zoomedCard ?? null);
-  const flipCard = useGameStore((state) => state.flipCard);
-  const setPlayerLife = useGameStore((state) => state.setPlayerLife);
-  const changePlayerLife = useGameStore((state) => state.changePlayerLife);
-  const changeCommanderDamage = useGameStore((state) => state.changeCommanderDamage);
-  const status = useGameStore((state) => state?.status ?? 'idle');
-  const peer = useGameStore((state) => state.peer);
-  const connections = useGameStore((state) => state.connections);
-  const hostConnection = useGameStore((state) => state.hostConnection);
-  const isHost = useGameStore((state) => state.isHost);
-  const roomId = useGameStore((state) => state.roomId);
-  const setPeerEventLogger = useGameStore((state) => state.setPeerEventLogger);
+  }, [playerName, isSimulatedPlayer]);
   const boardRef = useRef<HTMLDivElement>(null);
   
   // Sistema centralizado de drag - apenas uma carta pode ser arrastada por vez
@@ -437,7 +491,6 @@ const Board = () => {
   const [handButtonEnabled, setHandButtonEnabled] = useState(false);
   const [showDebugMode, setShowDebugMode] = useState(false);
   const [eventLogMinimized, setEventLogMinimized] = useState(false);
-  const setSimulatedPlayers = useGameStore((state) => state.setSimulatedPlayers);
   const [showSimulatePanel, setShowSimulatePanel] = useState(false);
   const [peerDebugMinimized, setPeerDebugMinimized] = useState(false);
   
@@ -1637,7 +1690,7 @@ const Board = () => {
   };
 
   const instruction =
-    status === 'idle' ? 'Create or join a room to sync the battlefield.' : 'Drag cards, double-click to tap.';
+    currentStatus === 'idle' ? 'Create or join a room to sync the battlefield.' : 'Drag cards, double-click to tap.';
 
   const ownerName = (card: CardOnBoard) => allPlayers.find((player) => player.name === card.ownerId)?.name ?? 'Unknown';
 
@@ -2856,7 +2909,7 @@ const Board = () => {
             fontWeight: '500',
           }}
         >
-          Status: {status}
+          Status: {currentStatus}
         </div>
         
         {/* Controles */}
@@ -3328,7 +3381,7 @@ const Board = () => {
               <div style={{ padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
                 <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Status Geral</div>
                 <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  <div>Status: <span style={{ color: status === 'playing' ? '#10b981' : status === 'waiting' ? '#f59e0b' : '#ef4444' }}>{status}</span></div>
+                  <div>Status: <span style={{ color: currentStatus === 'playing' ? '#10b981' : currentStatus === 'waiting' ? '#f59e0b' : '#ef4444' }}>{currentStatus}</span></div>
                   <div>É Host: <span style={{ color: isHost ? '#10b981' : '#94a3b8' }}>{isHost ? 'Sim' : 'Não'}</span></div>
                   <div>Room ID: <span style={{ opacity: 0.7 }}>{roomId || 'N/A'}</span></div>
                   <div>Player ID: <span style={{ opacity: 0.7 }}>{playerId.slice(0, 8)}...</span></div>

@@ -83,12 +83,14 @@ type CardAction =
   | { kind: 'flipCard'; id: string }
   | { kind: 'setSimulatedPlayers'; count: number }
   | { kind: 'setZoomedCard'; cardId: string | null }
-  | { kind: 'setCommanderDamage'; targetPlayerId: string; attackerPlayerId: string; damage: number };
+  | { kind: 'setCommanderDamage'; targetPlayerId: string; attackerPlayerId: string; damage: number }
+  | { kind: 'adjustCommanderDamage'; targetPlayerId: string; attackerPlayerId: string; delta: number };
 
 type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string; skipEventSave?: boolean }
   | { type: 'BOARD_STATE'; board: CardOnBoard[]; counters?: Counter[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
   | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
+  | { type: 'PLAYER_STATE'; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[] }
   | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
   | { type: 'ERROR'; message: string };
 
@@ -1615,6 +1617,14 @@ export const useGameStore = create<GameStore>((set, get) => {
           details.playersCount = (message as any).players.length;
           details.playerNames = (message as any).players.map((p: any) => p.name);
         }
+      } else if (message.type === 'PLAYER_STATE') {
+        if (Array.isArray((message as any).players)) {
+          details.playersCount = (message as any).players.length;
+          details.playerNames = (message as any).players.map((p: any) => p.name);
+        }
+        if (Array.isArray((message as any).simulatedPlayers)) {
+          details.simulatedCount = (message as any).simulatedPlayers.length;
+        }
       }
       
       peerEventLogger('SENT', 'TO_PEERS', message.type, actionKind, `${openConnections.length} peer(s)`, details);
@@ -1684,6 +1694,42 @@ export const useGameStore = create<GameStore>((set, get) => {
         };
       }
       
+      if (action.kind === 'adjustCommanderDamage') {
+        const applyUpdate = (playersList: PlayerSummary[]) => {
+          let updated = false;
+          const updatedList = playersList.map((p) => {
+            if (p.id !== action.targetPlayerId) {
+              return p;
+            }
+            updated = true;
+            const currentLife = p.life ?? 40;
+            const newLife = Math.max(0, currentLife - action.delta);
+            const currentDamage = p.commanderDamage?.[action.attackerPlayerId] ?? 0;
+            const newDamage = Math.max(0, currentDamage + action.delta);
+            const commanderDamage = {
+              ...(p.commanderDamage || {}),
+              [action.attackerPlayerId]: newDamage,
+            };
+            return { ...p, life: newLife, commanderDamage };
+          });
+          return { updatedList, updated };
+        };
+        
+        const realPlayersUpdate = applyUpdate(state.players);
+        if (realPlayersUpdate.updated) {
+          return {
+            ...state,
+            players: realPlayersUpdate.updatedList,
+          };
+        }
+        
+        const simulatedUpdate = applyUpdate(state.simulatedPlayers);
+        return {
+          ...state,
+          simulatedPlayers: simulatedUpdate.updatedList,
+        };
+      }
+      
       // Tratar setSimulatedPlayers separadamente
       if (action.kind === 'setSimulatedPlayers') {
         const simulatedPlayers: PlayerSummary[] = Array.from({ length: action.count }, (_, i) => ({
@@ -1740,15 +1786,16 @@ export const useGameStore = create<GameStore>((set, get) => {
     const stateAfter = get();
     if (stateAfter) {
       // Fazer broadcast para peers
-      if (action.kind === 'setPlayerLife' || action.kind === 'setCommanderDamage' || action.kind === 'setSimulatedPlayers') {
+      if (
+        action.kind === 'setPlayerLife' ||
+        action.kind === 'setCommanderDamage' ||
+        action.kind === 'setSimulatedPlayers' ||
+        action.kind === 'adjustCommanderDamage'
+      ) {
         broadcastToPeers({ 
-          type: 'ROOM_STATE', 
-          board: stateAfter.board, 
-          counters: stateAfter.counters, 
+          type: 'PLAYER_STATE', 
           players: stateAfter.players,
           simulatedPlayers: stateAfter.simulatedPlayers,
-          cemeteryPositions: stateAfter.cemeteryPositions,
-          libraryPositions: stateAfter.libraryPositions,
         });
       } else {
         broadcastToPeers({ 
@@ -1788,7 +1835,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           debugLog('ignoring action with mismatched actorId', { claimedActor: message.actorId, connectionPlayerId: playerId });
           return;
         }
-        if (message.action.kind === 'setCommanderDamage') {
+        if (message.action.kind === 'setCommanderDamage' || message.action.kind === 'adjustCommanderDamage') {
           const { targetPlayerId, attackerPlayerId } = message.action;
           if (playerId !== targetPlayerId && playerId !== attackerPlayerId) {
             debugLog('player attempted to modify commander damage without permission', { actor: playerId, target: targetPlayerId, attacker: attackerPlayerId });
@@ -1916,7 +1963,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (!message || !message.type) return;
       
       // Filtrar apenas tipos de mensagem válidos do jogo
-      const validTypes = ['ROOM_STATE', 'BOARD_STATE', 'ERROR', 'HOST_TRANSFER'];
+      const validTypes = ['ROOM_STATE', 'BOARD_STATE', 'PLAYER_STATE', 'ERROR', 'HOST_TRANSFER'];
       if (!validTypes.includes(message.type)) {
         return;
       }
@@ -1947,6 +1994,13 @@ export const useGameStore = create<GameStore>((set, get) => {
           if (Array.isArray((message as any).players)) {
             details.playersCount = (message as any).players.length;
             details.playerNames = (message as any).players.map((p: any) => p.name);
+          }
+        } else if (message.type === 'PLAYER_STATE') {
+          if (Array.isArray((message as any).players)) {
+            details.playersCount = (message as any).players.length;
+          }
+          if (Array.isArray((message as any).simulatedPlayers)) {
+            details.simulatedCount = (message as any).simulatedPlayers.length;
           }
         }
         
@@ -2008,6 +2062,17 @@ export const useGameStore = create<GameStore>((set, get) => {
               savePersistedState(stateAfter.roomId, stateAfter.roomPassword, stateAfter.playerName || '', stateAfter.isHost);
             }
             // Sync contínuo vai cuidar da sincronização
+          }
+          break;
+        case 'PLAYER_STATE':
+          if (Array.isArray(message.players)) {
+            set((state) => {
+              if (!state) return state;
+              return {
+                players: message.players,
+                simulatedPlayers: message.simulatedPlayers || state.simulatedPlayers,
+              };
+            });
           }
           break;
         case 'BOARD_STATE':
@@ -2432,6 +2497,34 @@ export const useGameStore = create<GameStore>((set, get) => {
     }
 
     set({ error: 'You must join a room before interacting with the board.' });
+  };
+  
+  const pendingMoveActions = new Map<string, Point>();
+  let moveFlushHandle: number | null = null;
+  const flushPendingMoves = () => {
+    moveFlushHandle = null;
+    if (pendingMoveActions.size === 0) return;
+    const entries = Array.from(pendingMoveActions.entries());
+    pendingMoveActions.clear();
+    entries.forEach(([cardId, position]) => {
+      requestAction({ kind: 'move', id: cardId, position });
+    });
+  };
+  const scheduleMoveFlush = () => {
+    if (moveFlushHandle !== null) return;
+    if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+      moveFlushHandle = window.requestAnimationFrame(() => {
+        flushPendingMoves();
+      });
+    } else {
+      moveFlushHandle = setTimeout(() => {
+        flushPendingMoves();
+      }, 16) as unknown as number;
+    }
+  };
+  const queueMoveAction = (cardId: string, position: Point) => {
+    pendingMoveActions.set(cardId, position);
+    scheduleMoveFlush();
   };
 
   // Estado inicial - não carregar mais de session
@@ -2926,7 +3019,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       requestAction({ kind: 'drawFromLibrary', playerName: get().playerName });
     },
     moveCard: (cardId: string, position: Point) => {
-      requestAction({ kind: 'move', id: cardId, position });
+      queueMoveAction(cardId, position);
     },
     moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point) => {
       const state = get();
@@ -3051,19 +3144,7 @@ export const useGameStore = create<GameStore>((set, get) => {
         return;
       }
       
-      const targetPlayer =
-        state.players.find((p) => p.id === targetPlayerId) ||
-        state.simulatedPlayers.find((p) => p.id === targetPlayerId);
-      const currentDamage = targetPlayer?.commanderDamage?.[attackerPlayerId] ?? 0;
-      const newDamage = Math.max(0, currentDamage + delta);
-      
-      // Quando aumentar commander damage, diminuir a vida
-      // Quando diminuir commander damage, aumentar a vida
-      const currentLife = targetPlayer?.life ?? 40;
-      const newLife = Math.max(0, currentLife - delta);
-      get().setPlayerLife(targetPlayerId, newLife);
-      
-      get().setCommanderDamage(targetPlayerId, attackerPlayerId, newDamage);
+      requestAction({ kind: 'adjustCommanderDamage', targetPlayerId, attackerPlayerId, delta });
     },
     resetBoard: () => {
       const state = get();

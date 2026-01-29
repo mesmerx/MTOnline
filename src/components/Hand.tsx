@@ -57,6 +57,15 @@ interface HandProps {
   getLibraryPosition?: (playerName: string) => Point | null;
 }
 
+const sortHandComparator = (a: CardOnBoard, b: CardOnBoard) => {
+  if (a.handIndex !== undefined && b.handIndex !== undefined) {
+    return a.handIndex - b.handIndex;
+  }
+  if (a.handIndex !== undefined) return -1;
+  if (b.handIndex !== undefined) return 1;
+  return a.id.localeCompare(b.id);
+};
+
 const Hand = ({
   boardRef,
   playerName,
@@ -109,6 +118,22 @@ const Hand = ({
   const activeDragCardIdRef = useRef<string | null>(null); // Ref para rastrear qual carta está sendo arrastada atualmente
 
   const handCards = useMemo(() => board.filter((c) => c.zone === 'hand'), [board]);
+  const handCardsByOwner = useMemo(() => {
+    const map = new Map<string, CardOnBoard[]>();
+    handCards.forEach((card) => {
+      const existing = map.get(card.ownerId);
+      if (existing) {
+        existing.push(card);
+      } else {
+        map.set(card.ownerId, [card]);
+      }
+    });
+    map.forEach((cards, owner) => {
+      map.set(owner, cards.slice().sort(sortHandComparator));
+    });
+    return map;
+  }, [handCards]);
+  const playerHandCards = handCardsByOwner.get(playerName) ?? [];
 
   const getHandArea = useCallback((ownerId: string) => {
     if (!boardRef.current || players.length === 0) return null;
@@ -118,10 +143,8 @@ const Hand = ({
     const player = players.find((p) => p.name === ownerId) || players.find((p) => p.id === ownerId);
     if (!player) return null;
 
-    // Calcular área baseada no número real de cartas
-    // ownerId das cartas é o nome do player, não o ID
-    const playerHandCards = handCards.filter((c) => c.ownerId === player.name);
-    const totalCards = playerHandCards.length;
+    const playerHandCardsForOwner = handCardsByOwner.get(player.name) ?? [];
+    const totalCards = playerHandCardsForOwner.length;
     
     if (totalCards === 0) {
       // Se não há cartas, retornar área padrão
@@ -154,7 +177,7 @@ const Hand = ({
       width: handWidth,
       height: handHeight,
     };
-  }, [boardRef, players, handCards]);
+  }, [boardRef, players, handCardsByOwner]);
 
   const prepareHandDrag = (card: CardOnBoard, event: ReactPointerEvent) => {
     if (card.ownerId !== playerName) return;
@@ -173,16 +196,7 @@ const Hand = ({
     // Resetar flag de execução quando iniciar um novo drag
     stopDragExecutedRef.current = false;
     
-    const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
-    const sortedCards = [...playerHandCards].sort((a, b) => {
-      if (a.handIndex !== undefined && b.handIndex !== undefined) {
-        return a.handIndex - b.handIndex;
-      }
-      if (a.handIndex !== undefined) return -1;
-      if (b.handIndex !== undefined) return 1;
-      return a.id.localeCompare(b.id);
-    });
-    
+    const sortedCards = playerHandCards;
     const originalOrder: Record<string, number> = {};
     sortedCards.forEach((c, idx) => {
       originalOrder[c.id] = c.handIndex ?? idx;
@@ -1152,16 +1166,10 @@ const Hand = ({
     // Se não há drag ativo, sempre atualizar originalHandOrder com a ordem atual do board
     // Isso garante que após uma reordenação, o originalHandOrder seja atualizado
     if (!draggingHandCard) {
-      const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
-      const sortedCards = [...playerHandCards].sort((a, b) => {
-        if (a.handIndex !== undefined && b.handIndex !== undefined) {
-          return a.handIndex - b.handIndex;
-        }
-        if (a.handIndex !== undefined) return -1;
-        if (b.handIndex !== undefined) return 1;
-        return a.id.localeCompare(b.id);
-      });
-      
+      const sortedCards = playerHandCards;
+      if (sortedCards.length === 0 && Object.keys(originalHandOrder ?? {}).length === 0) {
+        return;
+      }
       const currentOrder: Record<string, number> = {};
       sortedCards.forEach((c, idx) => {
         currentOrder[c.id] = c.handIndex ?? idx;
@@ -1181,7 +1189,7 @@ const Hand = ({
         setOriginalHandOrder(currentOrder);
       }
     }
-  }, [board, playerName, draggingHandCard]);
+  }, [playerHandCards, draggingHandCard, originalHandOrder]);
 
   // Navegação com teclado (setas esquerda/direita)
   useEffect(() => {
@@ -1195,7 +1203,6 @@ const Hand = ({
       }
       
       // Verificar se há cartas na hand do jogador
-      const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
       if (playerHandCards.length === 0) return;
       
       const totalCards = playerHandCards.length;
@@ -1222,7 +1229,7 @@ const Hand = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [board, playerName, handScrollIndex, isSliding]);
+  }, [playerHandCards, handScrollIndex, isSliding]);
 
   if (!boardRef.current) return null;
 
@@ -1234,7 +1241,7 @@ const Hand = ({
         const isCurrentPlayer = player.name === playerName;
         const isSimulated = player.id.startsWith('simulated-');
         const canInteract = isCurrentPlayer || isSimulated;
-        const playerHandCards = handCards.filter((c) => c.ownerId === player.name);
+        const playerHandCardsForRender = handCardsByOwner.get(player.name) ?? [];
         
         if (!canInteract) return null;
         
@@ -1254,14 +1261,7 @@ const Hand = ({
           >
             <div className="hand-cards">
               {(() => {
-                let sortedHandCards = [...playerHandCards].sort((a, b) => {
-                  if (a.handIndex !== undefined && b.handIndex !== undefined) {
-                    return a.handIndex - b.handIndex;
-                  }
-                  if (a.handIndex !== undefined) return -1;
-                  if (b.handIndex !== undefined) return 1;
-                  return a.id.localeCompare(b.id);
-                });
+                let sortedHandCards = [...playerHandCardsForRender];
                 
                 let previewOrder: Record<string, number> | null = null;
                 if (draggingHandCard && previewHandOrder !== null && originalHandOrder) {
@@ -1786,4 +1786,3 @@ const Hand = ({
 };
 
 export default Hand;
-
