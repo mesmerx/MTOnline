@@ -30,7 +30,7 @@ export interface CardOnBoard {
   setName?: string;
   position: Point;
   tapped: boolean;
-  zone: 'battlefield' | 'library' | 'hand' | 'cemetery';
+  zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile';
   stackIndex?: number; // Para cartas empilhadas no grimório
   handIndex?: number; // Para ordenar cartas na mão
   flipped?: boolean; // Se a carta está virada (mostrando o verso)
@@ -53,6 +53,7 @@ export interface Counter {
 export interface NewCardPayload {
   name: string;
   imageUrl?: string;
+  backImageUrl?: string;
   oracleText?: string;
   manaCost?: string;
   typeLine?: string;
@@ -65,12 +66,13 @@ type CardAction =
   | { kind: 'move'; id: string; position: Point }
   | { kind: 'moveLibrary'; playerName: string; position: Point }
   | { kind: 'moveCemetery'; playerName: string; position: Point }
+  | { kind: 'moveExile'; playerName: string; position: Point }
   | { kind: 'toggleTap'; id: string }
   | { kind: 'remove'; id: string }
   | { kind: 'addToLibrary'; card: CardOnBoard }
   | { kind: 'replaceLibrary'; cards: CardOnBoard[]; playerName: string }
   | { kind: 'drawFromLibrary'; playerName: string }
-  | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand' | 'cemetery'; position: Point; libraryPlace?: 'top' | 'bottom' | 'random' }
+  | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile'; position: Point; libraryPlace?: 'top' | 'bottom' | 'random' }
   | { kind: 'reorderHand'; cardId: string; newIndex: number; playerName: string }
   | { kind: 'reorderLibrary'; cardId: string; newIndex: number; playerName: string }
   | { kind: 'shuffleLibrary'; playerName: string }
@@ -88,10 +90,11 @@ type CardAction =
 
 type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string; skipEventSave?: boolean }
-  | { type: 'BOARD_STATE'; board: CardOnBoard[]; counters?: Counter[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
-  | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
+  | { type: 'BOARD_STATE'; board: CardOnBoard[]; counters?: Counter[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point> }
+  | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point> }
   | { type: 'PLAYER_STATE'; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; zoomedCard?: string | null }
-  | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
+  | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point> }
+  | { type: 'BOARD_PATCH'; cards: Array<{ id: string; position: Point }> }
   | { type: 'ERROR'; message: string };
 
 type RoomStatus = 'idle' | 'initializing' | 'waiting' | 'connected' | 'error';
@@ -408,6 +411,7 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
   simulatedPlayers: PlayerSummary[];
   cemeteryPositions: Record<string, Point>;
   libraryPositions: Record<string, Point>;
+  exilePositions: Record<string, Point>;
 } | null> => {
   if (!roomId) return null;
   
@@ -433,9 +437,9 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
     let board: CardOnBoard[] = [];
     let counters: Counter[] = [];
     let players: PlayerSummary[] = [];
-    let zoomedCard: string | null = null;
     let cemeteryPositions: Record<string, Point> = {};
     let libraryPositions: Record<string, Point> = {};
+    let exilePositions: Record<string, Point> = {};
     
     // Funções auxiliares para aplicar ações (simplificadas para replay)
     const applyCardActionReplay = (currentBoard: CardOnBoard[], action: CardAction): CardOnBoard[] => {
@@ -576,7 +580,7 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
       // Aplicar ação nos counters
       counters = applyCounterActionReplay(counters, action);
       
-      // Atualizar posições de library e cemetery
+      // Atualizar posições de library, cemetery e exile
       if (action.kind === 'moveCemetery' && 'playerName' in action && 'position' in action) {
         cemeteryPositions = {
           ...cemeteryPositions,
@@ -585,6 +589,11 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
       } else if (action.kind === 'moveLibrary' && 'playerName' in action && 'position' in action) {
         libraryPositions = {
           ...libraryPositions,
+          [action.playerName]: action.position,
+        };
+      } else if (action.kind === 'moveExile' && 'playerName' in action && 'position' in action) {
+        exilePositions = {
+          ...exilePositions,
           [action.playerName]: action.position,
         };
       }
@@ -613,8 +622,10 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
       board,
       counters,
       players,
+      simulatedPlayers: [],
       cemeteryPositions,
       libraryPositions,
+      exilePositions,
     };
   } catch (error) {
     console.warn('[Store] Erro ao carregar eventos do room:', error);
@@ -642,8 +653,10 @@ interface GameStore {
   board: CardOnBoard[];
   counters: Counter[];
   players: PlayerSummary[];
+  simulatedPlayers: PlayerSummary[];
   cemeteryPositions: Record<string, Point>;
   libraryPositions: Record<string, Point>;
+  exilePositions: Record<string, Point>;
   zoomedCard: string | null;
   savedDecks: SavedDeck[];
   turnConfig: TurnConfig;
@@ -670,10 +683,11 @@ interface GameStore {
   drawFromLibrary: () => void;
   moveCard: (cardId: string, position: Point, options?: { persist?: boolean }) => void;
   moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point) => void;
-  moveCemetery: (playerName: string, position: Point) => void;
+  moveCemetery: (playerName: string, position: Point, skipEventSave?: boolean) => void;
+  moveExile: (playerName: string, position: Point, skipEventSave?: boolean) => void;
   toggleTap: (cardId: string) => void;
   removeCard: (cardId: string) => void;
-  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   reorderHandCard: (cardId: string, newIndex: number) => void;
   reorderLibraryCard: (cardId: string, newIndex: number) => void;
   shuffleLibrary: (playerName: string) => void;
@@ -742,12 +756,13 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
     }
     case 'moveLibrary': {
       // Atualizar posição do library do player
-      // Apenas as top 5 cartas visíveis precisam ter posição trackeada
+      // IMPORTANTE: Apenas as top 5 cartas visíveis precisam ter posição trackeada
       // As outras cartas não precisam de posição (são apenas dados)
+      // Isso economiza mensagens peer e processamento
       const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === action.playerName);
       if (libraryCards.length === 0) return board;
       
-      // Ordenar por stackIndex para pegar as top 5 cartas (maiores índices)
+      // Ordenar por stackIndex para pegar as top 5 cartas (maiores índices = topo)
       const sortedCards = [...libraryCards].sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
       const top5Cards = sortedCards.slice(0, 5);
       const topCard = top5Cards[0];
@@ -755,10 +770,14 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       if (!topCard) return board;
       
       // Calcular offset baseado na carta do topo
+      // Se a carta do topo não tiver posição (0,0), usar a posição da ação diretamente
       const currentX = topCard.position.x || 0;
       const currentY = topCard.position.y || 0;
       const offsetX = action.position.x - currentX;
       const offsetY = action.position.y - currentY;
+      
+      // Se não há offset, não precisa atualizar nada
+      if (offsetX === 0 && offsetY === 0) return board;
       
       // Criar um Set com os IDs das top 5 cartas para lookup rápido
       const top5CardIds = new Set(top5Cards.map(c => c.id));
@@ -767,8 +786,25 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
         if (card.zone === 'library' && card.ownerId === action.playerName) {
           // Apenas atualizar posição das top 5 cartas visíveis
           if (top5CardIds.has(card.id)) {
+            const cardIndex = top5Cards.findIndex((c) => c.id === card.id);
             const cardCurrentX = card.position.x || 0;
             const cardCurrentY = card.position.y || 0;
+            // Calcular offset visual do stack (3px por carta)
+            const stackOffsetX = cardIndex * 3;
+            const stackOffsetY = cardIndex * 3;
+            
+            // Se a carta não tinha posição (0,0), usar a posição base + offset do stack
+            if (cardCurrentX === 0 && cardCurrentY === 0) {
+              return {
+                ...card,
+                position: {
+                  x: action.position.x + stackOffsetX,
+                  y: action.position.y + stackOffsetY,
+                },
+              };
+            }
+            
+            // Se já tinha posição, aplicar offset
             return {
               ...card,
               position: {
@@ -777,7 +813,8 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
               },
             };
           }
-          // Cartas não visíveis mantêm posição (0,0) - não precisam ser atualizadas
+          // Cartas não visíveis (abaixo das top 5) mantêm posição (0,0) - não precisam ser atualizadas
+          // Isso economiza mensagens peer e processamento
           return card;
         }
         return card;
@@ -815,7 +852,6 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
             const cardCurrentX = card.position.x || 0;
             const cardCurrentY = card.position.y || 0;
             // Se a carta não tinha posição (0,0), usar a posição base + offset do stack
-            const CEMETERY_CARD_WIDTH = 100;
             const stackOffsetX = cardIndex * 3; // Offset visual do stack
             const stackOffsetY = cardIndex * 3;
             return {
@@ -976,6 +1012,21 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
                 : -1;
               stackIndex = maxStackIndex + 1;
             }
+            
+            const { handIndex, ...rest } = updatedCard as any;
+            return {
+              ...rest,
+              stackIndex,
+            };
+          }
+          
+          // Se mudou para exile, calcular stackIndex (sempre no topo)
+          if (action.zone === 'exile') {
+            const exileCards = board.filter((c) => c.zone === 'exile' && c.ownerId === card.ownerId && c.id !== card.id);
+            const maxStackIndex = exileCards.length > 0 
+              ? Math.max(...exileCards.map((c) => c.stackIndex ?? 0))
+              : -1;
+            const stackIndex = maxStackIndex + 1;
             
             const { handIndex, ...rest } = updatedCard as any;
             return {
@@ -1390,6 +1441,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     simulatedPlayers: [] as PlayerSummary[],
     cemeteryPositions: {} as Record<string, Point>,
     libraryPositions: {} as Record<string, Point>,
+    exilePositions: {} as Record<string, Point>,
     zoomedCard: null as string | null,
     connections: {} as Record<string, DataConnection>,
     hostConnection: undefined as DataConnection | undefined,
@@ -1593,61 +1645,140 @@ export const useGameStore = create<GameStore>((set, get) => {
     }
   };
 
-  const broadcastToPeersImmediate = (message: IncomingMessage) => {
+  // Throttle para mensagens peer - 150ms
+  const MESSAGE_THROTTLE_MS = 150;
+  const messageThrottleQueue: IncomingMessage[] = [];
+  let messageThrottleHandle: number | null = null;
+  let lastMessageTime = 0;
+  
+  const flushMessageQueue = () => {
+    if (messageThrottleQueue.length === 0) return;
     const state = get();
-    if (!state || !state.isHost) return;
+    if (!state || !state.isHost) {
+      messageThrottleQueue.length = 0;
+      return;
+    }
+    
     const connections = state.connections;
     const peerIds = Object.keys(connections);
     const openConnections = Object.values(connections).filter(conn => conn && conn.open);
+    if (openConnections.length === 0) {
+      messageThrottleQueue.length = 0;
+      return;
+    }
     
-    openConnections.forEach((conn) => {
-      try {
-        conn.send(message);
-      } catch (error) {
-        debugLog('failed to send message', error);
+    // Enviar todas as mensagens na fila (ou apenas a última, dependendo do tipo)
+    // Para BOARD_PATCH, enviar apenas a última (mais recente) e combinar cards
+    // Para outras mensagens, enviar todas
+    const messagesToSend: IncomingMessage[] = [];
+    const boardPatchMessages = messageThrottleQueue.filter(m => m.type === 'BOARD_PATCH');
+    const otherMessages = messageThrottleQueue.filter(m => m.type !== 'BOARD_PATCH');
+    
+    // Se há BOARD_PATCH, pegar apenas a última e combinar cards
+    if (boardPatchMessages.length > 0) {
+      const allCards: Array<{ id: string; position: Point }> = [];
+      const cardMap = new Map<string, { id: string; position: Point }>();
+      boardPatchMessages.forEach((msg: any) => {
+        if (Array.isArray(msg.cards)) {
+          msg.cards.forEach((card: { id: string; position: Point }) => {
+            cardMap.set(card.id, card); // Última posição vence
+          });
+        }
+      });
+      allCards.push(...Array.from(cardMap.values()));
+      if (allCards.length > 0) {
+        messagesToSend.push({ type: 'BOARD_PATCH', cards: allCards });
+      }
+    }
+    
+    // Adicionar outras mensagens (manter todas)
+    messagesToSend.push(...otherMessages);
+    
+    // Limpar fila
+    messageThrottleQueue.length = 0;
+    
+    // Enviar mensagens
+    messagesToSend.forEach((message) => {
+      openConnections.forEach((conn) => {
+        try {
+          conn.send(message);
+        } catch (error) {
+          debugLog('failed to send message', error);
+        }
+      });
+      
+      // Log evento
+      if (peerEventLogger && openConnections.length > 0) {
+        const actionKind = (message as any).action?.kind;
+        const details: Record<string, unknown> = {
+          messageType: message.type,
+          targetCount: openConnections.length,
+          peerIds: peerIds,
+        };
+        
+        // Adicionar informações específicas por tipo de mensagem
+        if (message.type === 'BOARD_STATE' && Array.isArray((message as any).board)) {
+          details.boardSize = (message as any).board.length;
+          details.cardsByZone = {
+            battlefield: (message as any).board.filter((c: any) => c.zone === 'battlefield').length,
+            hand: (message as any).board.filter((c: any) => c.zone === 'hand').length,
+            library: (message as any).board.filter((c: any) => c.zone === 'library').length,
+            cemetery: (message as any).board.filter((c: any) => c.zone === 'cemetery').length,
+          };
+        } else if (message.type === 'ROOM_STATE') {
+          if (Array.isArray((message as any).board)) {
+            details.boardSize = (message as any).board.length;
+          }
+          if (Array.isArray((message as any).players)) {
+            details.playersCount = (message as any).players.length;
+            details.playerNames = (message as any).players.map((p: any) => p.name);
+          }
+        } else if (message.type === 'PLAYER_STATE') {
+          if (Array.isArray((message as any).players)) {
+            details.playersCount = (message as any).players.length;
+            details.playerNames = (message as any).players.map((p: any) => p.name);
+          }
+          if (Array.isArray((message as any).simulatedPlayers)) {
+            details.simulatedCount = (message as any).simulatedPlayers.length;
+          }
+          if ('zoomedCard' in (message as any)) {
+            details.zoomedCard = (message as any).zoomedCard || null;
+          }
+        } else if (message.type === 'BOARD_PATCH') {
+          if (Array.isArray((message as any).cards)) {
+            details.cardsCount = (message as any).cards.length;
+          }
+        }
+        
+        peerEventLogger('SENT', 'TO_PEERS', message.type, actionKind, `${openConnections.length} peer(s)`, details);
       }
     });
     
-    // Log evento
-    if (peerEventLogger && openConnections.length > 0) {
-      const actionKind = (message as any).action?.kind;
-      const details: Record<string, unknown> = {
-        messageType: message.type,
-        targetCount: openConnections.length,
-        peerIds: peerIds,
-      };
-      
-      // Adicionar informações específicas por tipo de mensagem
-      if (message.type === 'BOARD_STATE' && Array.isArray((message as any).board)) {
-        details.boardSize = (message as any).board.length;
-        details.cardsByZone = {
-          battlefield: (message as any).board.filter((c: any) => c.zone === 'battlefield').length,
-          hand: (message as any).board.filter((c: any) => c.zone === 'hand').length,
-          library: (message as any).board.filter((c: any) => c.zone === 'library').length,
-          cemetery: (message as any).board.filter((c: any) => c.zone === 'cemetery').length,
-        };
-      } else if (message.type === 'ROOM_STATE') {
-        if (Array.isArray((message as any).board)) {
-          details.boardSize = (message as any).board.length;
-        }
-        if (Array.isArray((message as any).players)) {
-          details.playersCount = (message as any).players.length;
-          details.playerNames = (message as any).players.map((p: any) => p.name);
-        }
-      } else if (message.type === 'PLAYER_STATE') {
-        if (Array.isArray((message as any).players)) {
-          details.playersCount = (message as any).players.length;
-          details.playerNames = (message as any).players.map((p: any) => p.name);
-        }
-        if (Array.isArray((message as any).simulatedPlayers)) {
-          details.simulatedCount = (message as any).simulatedPlayers.length;
-        }
-        if ('zoomedCard' in (message as any)) {
-          details.zoomedCard = (message as any).zoomedCard || null;
-        }
+    lastMessageTime = Date.now();
+  };
+
+  const broadcastToPeersImmediate = (message: IncomingMessage) => {
+    const state = get();
+    if (!state || !state.isHost) return;
+    
+    const now = Date.now();
+    const timeSinceLastMessage = now - lastMessageTime;
+    
+    // Adicionar mensagem à fila
+    messageThrottleQueue.push(message);
+    
+    // Se já passou o throttle time, enviar imediatamente
+    if (timeSinceLastMessage >= MESSAGE_THROTTLE_MS) {
+      flushMessageQueue();
+    } else {
+      // Agendar envio após o throttle time
+      if (messageThrottleHandle === null) {
+        const delay = MESSAGE_THROTTLE_MS - timeSinceLastMessage;
+        messageThrottleHandle = window.setTimeout(() => {
+          flushMessageQueue();
+          messageThrottleHandle = null;
+        }, delay);
       }
-      
-      peerEventLogger('SENT', 'TO_PEERS', message.type, actionKind, `${openConnections.length} peer(s)`, details);
     }
   };
   const broadcastBoardPatch = (cards: Array<{ id: string; position: Point }>) => {
@@ -2139,17 +2270,59 @@ export const useGameStore = create<GameStore>((set, get) => {
           break;
         case 'BOARD_PATCH':
           if (Array.isArray(message.cards) && message.cards.length > 0) {
-            set((state) => {
-              if (!state) return state;
-              const updatedBoard = state.board.map((card) => {
-                const patch = message.cards.find((c) => c.id === card.id);
-                return patch ? { ...card, position: patch.position } : card;
+            // Throttle no receptor: aplicar no máximo 30fps (33ms)
+            // Guardar apenas a última posição recebida (descartar eventos antigos)
+            const now = Date.now();
+            const lastPatchTime = (window as any).__lastBoardPatchTime || 0;
+            const PATCH_APPLY_INTERVAL = 1000 / 30; // 30fps
+            
+            if (now - lastPatchTime >= PATCH_APPLY_INTERVAL) {
+              (window as any).__lastBoardPatchTime = now;
+              
+              set((state) => {
+                if (!state) return state;
+                // Aplicar apenas a última posição de cada carta (descartar eventos antigos)
+                const updatedBoard = state.board.map((card) => {
+                  const patch = message.cards.find((c) => c.id === card.id);
+                  return patch ? { ...card, position: patch.position } : card;
+                });
+                return {
+                  ...state,
+                  board: updatedBoard,
+                };
               });
-              return {
-                ...state,
-                board: updatedBoard,
-              };
-            });
+            } else {
+              // Se ainda não passou o intervalo, agendar para aplicar no próximo frame
+              // Mas descartar este evento e usar apenas o último recebido
+              if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+                // Adicionar ao array de patches pendentes (será aplicado no próximo frame)
+                (window as any).__pendingBoardPatch = message.cards;
+                
+                if (!(window as any).__boardPatchRafScheduled) {
+                  (window as any).__boardPatchRafScheduled = true;
+                  window.requestAnimationFrame(() => {
+                    (window as any).__boardPatchRafScheduled = false;
+                    const lastPatch = (window as any).__pendingBoardPatch;
+                    if (lastPatch && Array.isArray(lastPatch) && lastPatch.length > 0) {
+                      (window as any).__pendingBoardPatch = null;
+                      (window as any).__lastBoardPatchTime = Date.now();
+                      
+                      set((state) => {
+                        if (!state) return state;
+                        const updatedBoard = state.board.map((card) => {
+                          const patch = lastPatch.find((c: any) => c.id === card.id);
+                          return patch ? { ...card, position: patch.position } : card;
+                        });
+                        return {
+                          ...state,
+                          board: updatedBoard,
+                        };
+                      });
+                    }
+                  });
+                }
+              }
+            }
           }
           break;
         case 'HOST_TRANSFER':
@@ -2563,27 +2736,49 @@ export const useGameStore = create<GameStore>((set, get) => {
     set({ error: 'You must join a room before interacting with the board.' });
   };
   
-  type PendingMove = { position: Point; lastPersist: number };
+  type PendingMove = { position: Point; lastPersist: number; lastSent: number };
   const pendingMoveActions = new Map<string, PendingMove>();
   let moveFlushHandle: number | null = null;
   let movePersistHandle: number | null = null;
   const MOVE_PERSIST_INTERVAL = 1000;
-  const flushPendingMoves = () => {
+  const MOVE_SEND_INTERVAL = 1000 / 30; // 30fps para envio durante drag
+  let lastSendTime = 0;
+  
+  const flushPendingMoves = (timestamp: number) => {
     moveFlushHandle = null;
     if (pendingMoveActions.size === 0) return;
+    
+    // Throttle: enviar no máximo 30fps (33ms entre envios)
+    const timeSinceLastSend = timestamp - lastSendTime;
+    if (timeSinceLastSend < MOVE_SEND_INTERVAL) {
+      // Agendar para o próximo frame
+      if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
+        moveFlushHandle = window.requestAnimationFrame(flushPendingMoves);
+      } else {
+        moveFlushHandle = setTimeout(() => {
+          flushPendingMoves(Date.now());
+        }, MOVE_SEND_INTERVAL - timeSinceLastSend) as unknown as number;
+      }
+      return;
+    }
+    
+    lastSendTime = timestamp;
+    
+    // Enviar apenas a última posição de cada carta (colapsar N eventos em 1)
     pendingMoveActions.forEach((entry, cardId) => {
+      // Atualizar lastSent para evitar envios duplicados
+      entry.lastSent = timestamp;
       requestAction({ kind: 'move', id: cardId, position: entry.position }, true);
     });
   };
+  
   const scheduleMoveFlush = () => {
     if (moveFlushHandle !== null) return;
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-      moveFlushHandle = window.requestAnimationFrame(() => {
-        flushPendingMoves();
-      });
+      moveFlushHandle = window.requestAnimationFrame(flushPendingMoves);
     } else {
       moveFlushHandle = setTimeout(() => {
-        flushPendingMoves();
+        flushPendingMoves(Date.now());
       }, 16) as unknown as number;
     }
   };
@@ -2622,14 +2817,20 @@ export const useGameStore = create<GameStore>((set, get) => {
   };
 
   const queueMoveAction = (cardId: string, position: Point) => {
+    // Atualizar visual localmente imediatamente (feedback visual)
     applyLocalMove(cardId, position);
+    
+    // Guardar apenas a última posição (colapsar N eventos em 1 estado final)
     const existing = pendingMoveActions.get(cardId);
     if (existing) {
+      // Atualizar apenas a posição, mantendo lastPersist e lastSent
       existing.position = position;
     } else {
-      pendingMoveActions.set(cardId, { position, lastPersist: 0 });
+      pendingMoveActions.set(cardId, { position, lastPersist: 0, lastSent: 0 });
       ensureMovePersistInterval();
     }
+    
+    // Agendar envio (será throttled para 30fps)
     scheduleMoveFlush();
   };
   const commitMoveAction = (cardId: string | null, position?: Point) => {
@@ -3198,13 +3399,37 @@ export const useGameStore = create<GameStore>((set, get) => {
         requestAction({ kind: 'moveCemetery', playerName, position }, skipEventSave);
       }
     },
+    moveExile: (playerName: string, position: Point, skipEventSave = false) => {
+      const state = get();
+      if (!state) return;
+      
+      // Se for host, aplicar ação diretamente (sem requestAction)
+      if (state.isHost) {
+        handleHostAction({ kind: 'moveExile', playerName, position }, skipEventSave);
+      } else {
+        // Se for cliente, atualizar localmente primeiro para feedback imediato
+        set((s) => {
+          if (!s) return s;
+          return {
+            ...s,
+            exilePositions: {
+              ...s.exilePositions,
+              [playerName]: position,
+            },
+          };
+        });
+        
+        // Sempre enviar para o host, mesmo durante drag
+        requestAction({ kind: 'moveExile', playerName, position }, skipEventSave);
+      }
+    },
     toggleTap: (cardId: string) => {
       requestAction({ kind: 'toggleTap', id: cardId });
     },
     removeCard: (cardId: string) => {
       requestAction({ kind: 'remove', id: cardId });
     },
-    changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => {
+    changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => {
       requestAction({ kind: 'changeZone', id: cardId, zone, position, libraryPlace });
     },
     reorderHandCard: (cardId: string, newIndex: number) => {

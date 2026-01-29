@@ -3,9 +3,9 @@ import CounterToken from './CounterToken';
 import Hand from './Hand';
 import Library from './Library';
 import Cemetery from './Cemetery';
+import Exile from './Exile';
 import type { BoardViewProps } from './BoardTypes';
 import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT, CARD_WIDTH, CARD_HEIGHT } from './BoardTypes';
-import { useGameStore } from '../store/useGameStore';
 
 export const BoardSeparated = (props: BoardViewProps) => {
   const {
@@ -16,12 +16,15 @@ export const BoardSeparated = (props: BoardViewProps) => {
     battlefieldCards,
     libraryCards,
     cemeteryCards,
+    exileCards,
     storeLibraryPositions,
     storeCemeteryPositions,
+    storeExilePositions,
     showHand,
     dragStateRef,
     draggingLibrary,
     draggingCemetery,
+    draggingExile,
     ownerName,
     handleCardClick,
     handleCardContextMenu,
@@ -29,8 +32,8 @@ export const BoardSeparated = (props: BoardViewProps) => {
     startDrag,
     startLibraryDrag,
     zoomedCard,
-    setZoomedCard,
     startCemeteryDrag,
+    startExileDrag,
     changeCardZone,
     detectZoneAtPosition,
     reorderHandCard,
@@ -45,8 +48,6 @@ export const BoardSeparated = (props: BoardViewProps) => {
     removeCounterToken,
     getCemeteryPosition,
     getLibraryPosition,
-    flipCard,
-    addEventLog,
   } = props;
 
   if (!boardRef.current) return null;
@@ -262,6 +263,9 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       };
                     }}
                     ownerName={ownerName}
+                    changeCardZone={changeCardZone}
+                    getLibraryPosition={getLibraryPosition}
+                    board={board}
                     onCemeteryContextMenu={(card, e) => {
                       setContextMenu({
                         x: e.clientX,
@@ -275,6 +279,51 @@ export const BoardSeparated = (props: BoardViewProps) => {
                     handleCardZoom={handleCardZoom}
                     zoomedCard={zoomedCard}
                   />
+
+                  {(() => {
+                    const playerExileCards = exileCards.filter(c => c.ownerId === player.name);
+                    return (
+                      <Exile
+                        boardRef={boardRef}
+                        playerName={playerName}
+                        exileCards={playerExileCards}
+                        players={[player]}
+                        getExilePosition={(playerName) => {
+                          if (playerName !== player.name) {
+                            return null;
+                          }
+                          const storePos = storeExilePositions[playerName];
+                          if (storePos) {
+                            return {
+                              x: storePos.x,
+                              y: storePos.y,
+                            };
+                          }
+                          return {
+                            x: BASE_BOARD_WIDTH - 150 - 120,
+                            y: BASE_BOARD_HEIGHT / 2 - 70,
+                          };
+                        }}
+                        ownerName={ownerName}
+                        onExileContextMenu={(card, e) => {
+                          setContextMenu({
+                            x: e.clientX,
+                            y: e.clientY,
+                            card,
+                          });
+                        }}
+                        startDrag={startDrag}
+                        startExileDrag={startExileDrag}
+                        draggingExile={draggingExile}
+                        handleCardZoom={handleCardZoom}
+                        zoomedCard={zoomedCard}
+                        changeCardZone={changeCardZone}
+                        getLibraryPosition={getLibraryPosition}
+                        getCemeteryPosition={getCemeteryPosition}
+                        board={board}
+                      />
+                    );
+                  })()}
 
                   {playerBattlefieldCards.map((card) => {
                     const isDragging = dragStateRef.current?.cardId === card.id;
@@ -368,9 +417,8 @@ export const BoardSeparated = (props: BoardViewProps) => {
 
                   {showHand && player.id === playerId && (
                     <Hand
-                      boardRef={boardRef}
-                      playerId={playerId}
-                      playerName={playerName}
+                        boardRef={boardRef}
+                        playerName={playerName}
                       board={board}
                       players={[player]}
                       getPlayerArea={(ownerId) => {

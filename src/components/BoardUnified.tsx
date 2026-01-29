@@ -3,6 +3,7 @@ import CounterToken from './CounterToken';
 import Hand from './Hand';
 import Library from './Library';
 import Cemetery from './Cemetery';
+import Exile from './Exile';
 import type { BoardViewProps } from './BoardTypes';
 import { CARD_WIDTH, CARD_HEIGHT } from './BoardTypes';
 
@@ -15,10 +16,12 @@ export const BoardUnified = (props: BoardViewProps) => {
     battlefieldCards,
     libraryCards,
     cemeteryCards,
+    exileCards,
     showHand,
     dragStateRef,
     draggingLibrary,
     draggingCemetery,
+    draggingExile,
     ownerName,
     handleCardClick,
     handleCardContextMenu,
@@ -26,8 +29,8 @@ export const BoardUnified = (props: BoardViewProps) => {
     startDrag,
     startLibraryDrag,
     zoomedCard,
-    setZoomedCard,
     startCemeteryDrag,
+    startExileDrag,
     changeCardZone,
     detectZoneAtPosition,
     reorderHandCard,
@@ -39,12 +42,12 @@ export const BoardUnified = (props: BoardViewProps) => {
     getPlayerArea,
     getLibraryPosition,
     getCemeteryPosition,
+    getExilePosition,
     counters,
     moveCounter,
     modifyCounter,
     removeCounterToken,
     flipCard,
-    addEventLog,
   } = props;
 
   return (
@@ -116,6 +119,34 @@ export const BoardUnified = (props: BoardViewProps) => {
         draggingCemetery={draggingCemetery}
         handleCardZoom={handleCardZoom}
         zoomedCard={zoomedCard}
+        changeCardZone={changeCardZone}
+        getLibraryPosition={getLibraryPosition}
+        board={board}
+      />
+
+      <Exile
+        boardRef={boardRef}
+        playerName={playerName}
+        exileCards={exileCards}
+        players={allPlayers}
+        getExilePosition={getExilePosition}
+        ownerName={ownerName}
+        onExileContextMenu={(card, e) => {
+          setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            card,
+          });
+        }}
+        startDrag={startDrag}
+        startExileDrag={startExileDrag}
+        draggingExile={draggingExile}
+        handleCardZoom={handleCardZoom}
+        zoomedCard={zoomedCard}
+        changeCardZone={changeCardZone}
+        getLibraryPosition={getLibraryPosition}
+        getCemeteryPosition={getCemeteryPosition}
+        board={board}
       />
 
       {battlefieldCards.map((card) => {
@@ -209,7 +240,6 @@ export const BoardUnified = (props: BoardViewProps) => {
       {showHand && (
         <Hand
           boardRef={boardRef}
-          playerId={playerId}
           playerName={playerName}
           board={board}
           players={allPlayers}

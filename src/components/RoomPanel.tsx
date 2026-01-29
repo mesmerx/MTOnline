@@ -7,7 +7,6 @@ const RoomPanel = () => {
   const playerName = useGameStore((state) => state.playerName);
   const setPlayerName = useGameStore((state) => state.setPlayerName);
   const status = useGameStore((state) => state.status);
-  const selfId = useGameStore((state) => state.playerId);
   const roomId = useGameStore((state) => state.roomId);
   const isHost = useGameStore((state) => state.isHost);
   const players = useGameStore((state) => state.players);

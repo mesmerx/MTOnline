@@ -1,50 +1,45 @@
 import type { CardOnBoard } from '../store/useGameStore';
 import CardSearchBase from './CardSearchBase';
 
-interface HandSearchProps {
-  handCards: CardOnBoard[];
+interface ExileSearchProps {
+  exileCards: CardOnBoard[];
   playerName: string;
   isOpen: boolean;
   onClose: () => void;
   onMoveCard: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', libraryPlace?: 'top' | 'bottom' | 'random') => void;
   ownerName: (card: CardOnBoard) => string;
-  reorderHandCard?: (cardId: string, newIndex: number) => void;
 }
 
-const HandSearch = ({
-  handCards,
+const ExileSearch = ({
+  exileCards,
   playerName,
   isOpen,
   onClose,
   onMoveCard,
   ownerName,
-  reorderHandCard,
-}: HandSearchProps) => {
+}: ExileSearchProps) => {
   return (
     <CardSearchBase
-      cards={handCards}
+      cards={exileCards}
       playerName={playerName}
       isOpen={isOpen}
       onClose={onClose}
       onMoveCard={onMoveCard}
       ownerName={ownerName}
-      title="🔍 Buscar Carta na Mão"
+      title="🔍 Buscar Carta no Exílio"
       placeholder="Digite o nome da carta..."
       showAllWhenEmpty={true}
       sortCards={(cards) => {
         return [...cards].sort((a, b) => {
-          const indexA = a.handIndex ?? 0;
-          const indexB = b.handIndex ?? 0;
-          return indexA - indexB;
+          return (b.stackIndex ?? 0) - (a.stackIndex ?? 0); // Ordem reversa (topo primeiro)
         });
       }}
-      onReorder={reorderHandCard}
-      availableZones={['battlefield', 'library', 'cemetery', 'exile']}
+      availableZones={['battlefield', 'library', 'hand', 'cemetery']}
       defaultMaxCards={0}
       ignoreMaxCardsLimit={true}
     />
   );
 };
 
-export default HandSearch;
+export default ExileSearch;
 

@@ -544,6 +544,13 @@ app.post('/api/rooms/:roomId/events', (req, res) => {
   }
 
   try {
+    // Garantir que a sala existe antes de inserir o evento (para satisfazer a FOREIGN KEY constraint)
+    db.prepare(`
+      INSERT INTO rooms (room_id, board_state, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(room_id) DO NOTHING
+    `).run(roomId, JSON.stringify({}));
+
     const eventDataJson = JSON.stringify(eventData);
 
     db.prepare(`

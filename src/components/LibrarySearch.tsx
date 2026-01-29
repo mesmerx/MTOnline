@@ -6,7 +6,7 @@ interface LibrarySearchProps {
   playerName: string;
   isOpen: boolean;
   onClose: () => void;
-  onMoveCard: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  onMoveCard: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', libraryPlace?: 'top' | 'bottom' | 'random') => void;
   ownerName: (card: CardOnBoard) => string;
   reorderLibraryCard?: (cardId: string, newIndex: number) => void;
 }
@@ -37,7 +37,7 @@ const LibrarySearch = ({
         });
       }}
       onReorder={reorderLibraryCard}
-      availableZones={['battlefield', 'hand', 'cemetery', 'library']}
+      availableZones={['battlefield', 'hand', 'cemetery', 'exile']}
       showMaxCardsInput={true}
       defaultMaxCards={0}
     />

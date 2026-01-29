@@ -8,7 +8,7 @@ interface CounterTokenProps {
   onModify: (counterId: string, delta?: number, deltaX?: number, deltaY?: number, setValue?: number, setX?: number, setY?: number) => void;
   onRemove: (counterId: string) => void;
   onContextMenu?: (counter: Counter, event: React.MouseEvent) => void;
-  boardRef?: React.RefObject<HTMLDivElement>;
+  boardRef?: React.RefObject<HTMLDivElement | null>;
   viewMode?: 'unified' | 'individual' | 'separated';
   convertMouseToSeparatedCoordinates?: (mouseX: number, mouseY: number, playerId: string, rect: DOMRect) => { x: number; y: number } | null;
   convertMouseToUnifiedCoordinates?: (mouseX: number, mouseY: number, rect: DOMRect) => { x: number; y: number };
@@ -207,82 +207,9 @@ const CounterToken: React.FC<CounterTokenProps> = ({
     ? String(counter.value ?? 0)
     : `+${counter.plusX ?? 0}/+${counter.plusY ?? 0}`;
 
-  // Função para renderizar d4 (tetraedro 3D)
-  const renderD4 = (value: number) => {
-    return (
-      <div style={{
-        width: '100%',
-        height: '100%',
-        display: 'flex',
-        alignItems: 'center',
-        justifyContent: 'center',
-        perspective: '200px',
-      }}>
-        <div style={{
-          width: '32px',
-          height: '32px',
-          position: 'relative',
-          transformStyle: 'preserve-3d',
-          transform: 'rotateX(20deg) rotateY(-20deg)',
-        }}>
-          {/* Face frontal */}
-          <div style={{
-            position: 'absolute',
-            width: 0,
-            height: 0,
-            borderLeft: '16px solid transparent',
-            borderRight: '16px solid transparent',
-            borderBottom: '28px solid #ffffff',
-            borderTop: 'none',
-            transform: 'translateZ(8px)',
-            filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.3))',
-          }}>
-            <div style={{
-              position: 'absolute',
-              top: '12px',
-              left: '-8px',
-              color: '#000000',
-              fontSize: '12px',
-              fontWeight: 'bold',
-              textAlign: 'center',
-              width: '16px',
-            }}>
-              {value}
-            </div>
-          </div>
-          {/* Face esquerda */}
-          <div style={{
-            position: 'absolute',
-            width: 0,
-            height: 0,
-            borderLeft: '16px solid transparent',
-            borderRight: '16px solid transparent',
-            borderBottom: '28px solid #e5e5e5',
-            borderTop: 'none',
-            transform: 'rotateY(-120deg) translateZ(8px)',
-            filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))',
-          }} />
-          {/* Face direita */}
-          <div style={{
-            position: 'absolute',
-            width: 0,
-            height: 0,
-            borderLeft: '16px solid transparent',
-            borderRight: '16px solid transparent',
-            borderBottom: '28px solid #d0d0d0',
-            borderTop: 'none',
-            transform: 'rotateY(120deg) translateZ(8px)',
-            filter: 'drop-shadow(0 2px 4px rgba(0,0,0,0.2))',
-          }} />
-        </div>
-      </div>
-    );
-  };
-
-
   // Função para renderizar d6 (cubo simples com pontos)
   const renderD6 = (value: number) => {
-    const dots: number[][] = {
+    const dots: Record<number, number[][]> = {
       1: [[1, 1]],
       2: [[0, 0], [2, 2]],
       3: [[0, 0], [1, 1], [2, 2]],
@@ -291,7 +218,7 @@ const CounterToken: React.FC<CounterTokenProps> = ({
       6: [[0, 0], [0, 1], [0, 2], [2, 0], [2, 1], [2, 2]],
     };
     
-    const positions = dots[value as keyof typeof dots] || [];
+    const positions = dots[value] || [];
     
     return (
       <div style={{
@@ -305,7 +232,7 @@ const CounterToken: React.FC<CounterTokenProps> = ({
         gridTemplateRows: 'repeat(3, 1fr)',
         padding: '4px',
       }}>
-        {positions.map(([row, col], index) => (
+        {Array.isArray(positions) && positions.map(([row, col], index) => (
           <div
             key={index}
             style={{

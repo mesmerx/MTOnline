@@ -9,14 +9,14 @@ interface CardSearchBaseProps {
   playerName: string;
   isOpen: boolean;
   onClose: () => void;
-  onMoveCard: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  onMoveCard: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', libraryPlace?: 'top' | 'bottom' | 'random') => void;
   ownerName: (card: CardOnBoard) => string;
   title: string;
   placeholder?: string;
   showAllWhenEmpty?: boolean;
   sortCards?: (cards: CardOnBoard[]) => CardOnBoard[];
   onReorder?: (cardId: string, newIndex: number) => void;
-  availableZones?: ('battlefield' | 'library' | 'hand' | 'cemetery')[];
+  availableZones?: ('battlefield' | 'library' | 'hand' | 'cemetery' | 'exile')[];
   showMaxCardsInput?: boolean; // Controla se mostra o input de quantidade máxima
   defaultMaxCards?: number | null; // Valor padrão para maxCardsToShow (null = todas, 0 = nenhuma, número = esse número)
   ignoreMaxCardsLimit?: boolean; // Se true, sempre mostra todas as cartas, ignorando maxCardsToShow
@@ -44,7 +44,7 @@ const CardSearchBase = ({
   const [selectedCard, setSelectedCard] = useState<CardOnBoard | null>(null);
   const [showZoneMenu, setShowZoneMenu] = useState(false);
   const [showPlacementMenu, setShowPlacementMenu] = useState(false);
-  const [pendingZone, setPendingZone] = useState<'library' | 'cemetery' | null>(null);
+  const [pendingZone, setPendingZone] = useState<'library' | 'cemetery' | 'exile' | null>(null);
   const [draggedCardId, setDraggedCardId] = useState<string | null>(null);
   const [dragOverIndex, setDragOverIndex] = useState<number | null>(null);
   const [zoomedCard, setZoomedCard] = useState<string | null>(null);
@@ -122,7 +122,7 @@ const CardSearchBase = ({
     console.log('[CardSearchBase] Menu deve estar visível agora');
   };
 
-  const handleMoveToZone = (zone: 'battlefield' | 'library' | 'hand' | 'cemetery') => {
+  const handleMoveToZone = (zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile') => {
     console.log('[CardSearchBase] handleMoveToZone chamado:', {
       zone,
       selectedCard: selectedCard?.id,
@@ -133,8 +133,8 @@ const CardSearchBase = ({
       return;
     }
     
-    // Se for library ou cemetery, mostrar menu de posicionamento
-    if (zone === 'library' || zone === 'cemetery') {
+    // Se for library, cemetery ou exile, mostrar menu de posicionamento
+    if (zone === 'library' || zone === 'cemetery' || zone === 'exile') {
       setPendingZone(zone);
       setShowZoneMenu(false);
       setShowPlacementMenu(true);
@@ -212,9 +212,70 @@ const CardSearchBase = ({
     const targetCard = filteredCards[targetIndex];
     
     if (draggedCard && targetCard) {
-      // Para hand, usar handIndex; para library, usar stackIndex
-      const newIndex = targetCard.handIndex ?? targetCard.stackIndex ?? targetIndex;
-      onReorder(draggedCardId, newIndex);
+      // Para hand, usar handIndex diretamente
+      if (targetCard.handIndex !== undefined) {
+        // Hand: usar handIndex diretamente
+        onReorder(draggedCardId, targetCard.handIndex);
+      } else {
+        // Library: precisamos calcular o índice na lista completa ordenada
+        // (não apenas no filteredCards, que pode estar filtrado pela busca)
+        // Primeiro, obter todas as cartas do player ordenadas (sem filtro de busca)
+        const allPlayerCards = cards.filter((c) => c.ownerId === playerName);
+        const sortedAllCards = sortCards ? sortCards([...allPlayerCards]) : allPlayerCards;
+        
+        // Encontrar os índices na lista completa ordenada
+        const draggedIndexInFullList = sortedAllCards.findIndex((c) => c.id === draggedCard.id);
+        const targetIndexInFullList = sortedAllCards.findIndex((c) => c.id === targetCard.id);
+        
+        if (draggedIndexInFullList !== -1 && targetIndexInFullList !== -1) {
+          // Ajustar o índice baseado na direção do movimento
+          // IMPORTANTE: O applyCardAction faz:
+          //   1. splice(oldIndex, 1) - remove a carta do índice oldIndex
+          //   2. splice(newIndex, 0, movedCard) - insere no índice newIndex
+          // 
+          // Exemplo: [A(0), B(1), C(2)]
+          // Movendo B(1) -> A(0): 
+          //   - splice(1, 1): [A, C]
+          //   - splice(0, 0, B): [B, A, C] ✓
+          // 
+          // Movendo A(0) -> B(1):
+          //   - splice(0, 1): [B, C] (B agora está no idx 0, C no idx 1)
+          //   - splice(1, 0, A): [B, A, C] ✓
+          // 
+          // Se movendo para cima (draggedIndex > targetIndex):
+          //   - Queremos inserir ANTES da carta alvo
+          //   - Como removemos do índice maior primeiro, os índices menores não mudam
+          //   - Então usamos targetIndexInFullList diretamente
+          // 
+          // Se movendo para baixo (draggedIndex < targetIndex):
+          //   - Queremos inserir APÓS a carta alvo
+          //   - Como removemos do índice menor primeiro, a carta alvo move para o índice anterior
+          //   - Mas queremos inserir APÓS ela, então usamos targetIndexInFullList (que é onde ela estava antes)
+          let newIndex: number;
+          if (draggedIndexInFullList > targetIndexInFullList) {
+            // Movendo para cima: inserir ANTES da carta alvo
+            newIndex = targetIndexInFullList;
+          } else {
+            // Movendo para baixo: inserir APÓS a carta alvo
+            // Após remover do índice menor, a carta alvo está no índice targetIndexInFullList - 1
+            // Queremos inserir após ela, então usamos targetIndexInFullList (onde ela estava originalmente)
+            newIndex = targetIndexInFullList;
+          }
+          console.log('[CardSearchBase] Reorder library:', {
+            draggedCard: draggedCard.name,
+            targetCard: targetCard.name,
+            draggedIndexInFullList,
+            targetIndexInFullList,
+            newIndex,
+            direction: draggedIndexInFullList > targetIndexInFullList ? 'up' : 'down',
+          });
+          onReorder(draggedCardId, newIndex);
+        } else {
+          // Fallback: usar targetIndex se não encontrar na lista completa
+          console.warn('[CardSearchBase] Could not find cards in full list, using targetIndex:', targetIndex);
+          onReorder(draggedCardId, targetIndex);
+        }
+      }
     }
 
     setDraggedCardId(null);
@@ -710,7 +771,7 @@ const CardSearchBase = ({
             }}
           >
             <div style={{ marginBottom: '12px', color: '#f8fafc', fontSize: '14px', fontWeight: '500' }}>
-              Como colocar {selectedCard.name} no {pendingZone === 'library' ? 'Deck' : 'Cemitério'}?
+              Como colocar {selectedCard.name} no {pendingZone === 'library' ? 'Deck' : pendingZone === 'cemetery' ? 'Cemitério' : 'Exílio'}?
             </div>
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
               <button

@@ -3,9 +3,9 @@ import CounterToken from './CounterToken';
 import Hand from './Hand';
 import Library from './Library';
 import Cemetery from './Cemetery';
+import Exile from './Exile';
 import type { BoardViewProps } from './BoardTypes';
 import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT, CARD_WIDTH, CARD_HEIGHT } from './BoardTypes';
-import { useGameStore } from '../store/useGameStore';
 
 interface BoardIndividualProps extends BoardViewProps {
   selectedPlayerIndex: number;
@@ -20,10 +20,12 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     battlefieldCards,
     libraryCards,
     cemeteryCards,
+    exileCards,
     showHand,
     dragStateRef,
     draggingLibrary,
     draggingCemetery,
+    draggingExile,
     ownerName,
     handleCardClick,
     handleCardContextMenu,
@@ -31,6 +33,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     startDrag,
     startLibraryDrag,
     startCemeteryDrag,
+    startExileDrag,
     changeCardZone,
     detectZoneAtPosition,
     reorderHandCard,
@@ -41,8 +44,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     board,
     getLibraryPosition,
     getCemeteryPosition,
-    zoomedCard,
-    setZoomedCard,
+    getExilePosition,
     selectedPlayerIndex,
     counters,
     moveCounter,
@@ -59,6 +61,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
   const filteredBattlefieldCards = battlefieldCards.filter(c => c.ownerId === selectedPlayerName);
   const filteredLibraryCards = libraryCards.filter(c => c.ownerId === selectedPlayerName);
   const filteredCemeteryCards = cemeteryCards.filter(c => c.ownerId === selectedPlayerName);
+  const filteredExileCards = exileCards.filter(c => c.ownerId === selectedPlayerName);
 
   return (
     <>
@@ -103,7 +106,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         draggingLibrary={draggingLibrary}
         startDrag={startDrag}
         handleCardZoom={handleCardZoom}
-        zoomedCard={zoomedCard}
+          zoomedCard={props.zoomedCard}
         changeCardZone={changeCardZone}
         getCemeteryPosition={getCemeteryPosition}
         board={board}
@@ -128,7 +131,35 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         startCemeteryDrag={startCemeteryDrag}
         draggingCemetery={draggingCemetery}
         handleCardZoom={handleCardZoom}
-        zoomedCard={zoomedCard}
+          zoomedCard={props.zoomedCard}
+        changeCardZone={changeCardZone}
+        getLibraryPosition={getLibraryPosition}
+        board={board}
+      />
+
+      <Exile
+        boardRef={boardRef}
+        playerName={playerName}
+        exileCards={filteredExileCards}
+        players={filteredPlayers}
+        getExilePosition={getExilePosition}
+        ownerName={ownerName}
+        onExileContextMenu={(card, e) => {
+          setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            card,
+          });
+        }}
+        startDrag={startDrag}
+        startExileDrag={startExileDrag}
+        draggingExile={draggingExile}
+        handleCardZoom={handleCardZoom}
+          zoomedCard={props.zoomedCard}
+        changeCardZone={changeCardZone}
+        getLibraryPosition={getLibraryPosition}
+        getCemeteryPosition={getCemeteryPosition}
+        board={board}
       />
 
       {filteredBattlefieldCards.map((card) => {
@@ -222,7 +253,6 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
       {showHand && selectedPlayerId === playerId && (
         <Hand
           boardRef={boardRef}
-          playerId={playerId}
           playerName={playerName}
           board={board}
           players={filteredPlayers}

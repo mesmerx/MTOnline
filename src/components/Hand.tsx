@@ -3,7 +3,6 @@ import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useGameStore } from '../store/useGameStore';
 import type { CardOnBoard } from '../store/useGameStore';
 import CardToken from './CardToken';
-import CounterToken from './CounterToken';
 import type { Counter } from '../store/useGameStore';
 import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT } from './BoardTypes';
 import HandSearch from './HandSearch';
@@ -28,8 +27,8 @@ interface HandProps {
   handleCardContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   ownerName: (card: CardOnBoard) => string;
-  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
-  detectZoneAtPosition: (x: number, y: number) => { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | null; ownerId?: string };
+  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  detectZoneAtPosition: (x: number, y: number) => { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | null; ownerId?: string };
   reorderHandCard: (cardId: string, newIndex: number) => void;
   dragStartedFromHandRef: React.MutableRefObject<boolean>;
   handCardPlacedRef: React.MutableRefObject<boolean>;
@@ -90,10 +89,6 @@ const Hand = ({
   viewMode = 'unified',
   convertMouseToSeparatedCoordinates,
   convertMouseToUnifiedCoordinates,
-  counters = [],
-  moveCounter,
-  modifyCounter,
-  removeCounterToken,
   getCemeteryPosition,
   getLibraryPosition,
 }: HandProps) => {
@@ -105,13 +100,12 @@ const Hand = ({
   const [previewHandOrder, setPreviewHandOrder] = useState<number | null>(null);
   const [dragPosition, setDragPosition] = useState<Point | null>(null);
   const [dragStartPosition, setDragStartPosition] = useState<Point | null>(null);
-  const [dragOffset, setDragOffset] = useState<Point | null>(null); // Offset do mouse em relação ao centro da carta
   const [zoomedCard, setZoomedCard] = useState<string | null>(null);
   const [hoveredHandCard, setHoveredHandCard] = useState<string | null>(null);
   const [initialHoverIndex, setInitialHoverIndex] = useState<number | null>(null);
   const [originalHandOrder, setOriginalHandOrder] = useState<Record<string, number> | null>(null);
   const [pendingHandDrag, setPendingHandDrag] = useState<{ cardId: string; startX: number; startY: number } | null>(null);
-  const [maxCardsToShow, setMaxCardsToShow] = useState<number>(0); // 0 = mostrar todas
+  const [maxCardsToShow] = useState<number>(0); // 0 = mostrar todas
   
   const dragUpdateRef = useRef<number>(0);
   const stopDragExecutedRef = useRef<boolean>(false); // Flag para evitar múltiplas execuções
@@ -254,7 +248,6 @@ const Hand = ({
     const offsetX = startX - cardCenterX;
     const offsetY = startY - cardCenterY;
     const dragOffsetValue = { x: offsetX, y: offsetY };
-    setDragOffset(dragOffsetValue);
     // Usar a posição real da carta na mão como posição inicial para evitar "pulo"
     setDragPosition({ x: cardRealX, y: cardRealY });
     setDragStartPosition({ x: startX, y: startY }); // Manter posição do cursor para cálculo de movimento
@@ -1733,6 +1726,12 @@ const Hand = ({
               const libraryPos = getLibraryPosition(playerName);
               if (libraryPos) {
                 position = libraryPos;
+              }
+            } else if (zone === 'exile' && getCemeteryPosition) {
+              // Usar getCemeteryPosition temporariamente, depois adicionar getExilePosition
+              const exilePos = getCemeteryPosition(playerName);
+              if (exilePos) {
+                position = exilePos;
               }
             }
             

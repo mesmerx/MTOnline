@@ -23,9 +23,10 @@ interface LibraryProps {
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   handleCardZoom?: (card: CardOnBoard, event: ReactPointerEvent) => void;
   zoomedCard?: string | null;
-  changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   getCemeteryPosition?: (playerName: string) => Point | null;
   board?: CardOnBoard[];
+  reorderLibraryCard?: (cardId: string, newIndex: number) => void;
 }
 
 const Library = ({
@@ -41,7 +42,6 @@ const Library = ({
   draggingLibrary,
   startDrag,
   handleCardZoom,
-  zoomedCard,
   changeCardZone,
   getCemeteryPosition,
   board = [],
@@ -255,6 +255,12 @@ const Library = ({
               }
             } else if (zone === 'hand') {
               position = { x: 0, y: 0 };
+            } else if (zone === 'exile' && getCemeteryPosition) {
+              // Usar getCemeteryPosition temporariamente, depois adicionar getExilePosition
+              const exilePos = getCemeteryPosition(playerName);
+              if (exilePos) {
+                position = exilePos;
+              }
             }
             
             changeCardZone(cardId, zone, position, libraryPlace);

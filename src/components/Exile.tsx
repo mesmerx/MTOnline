@@ -2,71 +2,73 @@ import { useState } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import type { CardOnBoard } from '../store/useGameStore';
 import CardToken from './CardToken';
-import CemeterySearch from './CemeterySearch';
+import ExileSearch from './ExileSearch';
 
 type Point = { x: number; y: number };
 
-const CEMETERY_CARD_WIDTH = 100;
-const CEMETERY_CARD_HEIGHT = 140;
+const EXILE_CARD_WIDTH = 100;
+const EXILE_CARD_HEIGHT = 140;
 
-interface CemeteryProps {
+interface ExileProps {
   boardRef: React.RefObject<HTMLDivElement | null>;
   playerName: string;
-  cemeteryCards: CardOnBoard[];
+  exileCards: CardOnBoard[];
   players: Array<{ id: string; name: string }>;
-  getCemeteryPosition: (playerName: string) => Point | null;
+  getExilePosition: (playerName: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
-  onCemeteryContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
+  onExileContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
-  startCemeteryDrag: (playerName: string, event: ReactPointerEvent) => void;
-  draggingCemetery: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
+  startExileDrag: (playerName: string, event: ReactPointerEvent) => void;
+  draggingExile: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   handleCardZoom?: (card: CardOnBoard, event: ReactPointerEvent) => void;
   zoomedCard?: string | null;
   changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   getLibraryPosition?: (playerName: string) => Point | null;
+  getCemeteryPosition?: (playerName: string) => Point | null;
   board?: CardOnBoard[];
 }
 
-const Cemetery = ({
+const Exile = ({
   boardRef,
   playerName,
-  cemeteryCards,
+  exileCards,
   players,
-  getCemeteryPosition,
+  getExilePosition,
   ownerName,
-  onCemeteryContextMenu,
+  onExileContextMenu,
   startDrag,
-  startCemeteryDrag,
-  draggingCemetery,
+  startExileDrag,
+  draggingExile,
   handleCardZoom,
   changeCardZone,
   getLibraryPosition,
+  getCemeteryPosition,
   board = [],
-}: CemeteryProps) => {
-  const [showCemeterySearch, setShowCemeterySearch] = useState(false);
+}: ExileProps) => {
+  const [showExileSearch, setShowExileSearch] = useState(false);
   
   if (!boardRef.current || players.length === 0 || !playerName) return null;
 
   // Agrupar cartas por owner
-  const cemeteryByOwner = players.map((player) => {
-    const playerCemeteryCards = cemeteryCards.filter((c) => c.ownerId === player.name);
-    const sortedCemeteryCards = [...playerCemeteryCards].sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
-    return { player, cards: sortedCemeteryCards };
+  const exileByOwner = players.map((player) => {
+    const playerExileCards = exileCards.filter((c) => c.ownerId === player.name);
+    const sortedExileCards = [...playerExileCards].sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
+    return { player, cards: sortedExileCards };
   });
 
   return (
     <>
-      {cemeteryByOwner.map(({ player, cards }) => {
-        const cemeteryPos = getCemeteryPosition(player.name);
-        if (!cemeteryPos) return null;
+      {exileByOwner.map(({ player, cards }) => {
+        const exilePos = getExilePosition(player.name);
+        if (!exilePos) return null;
 
         return (
           <div
             key={player.name}
             style={{
               position: 'absolute',
-              left: `${cemeteryPos.x}px`,
-              top: `${cemeteryPos.y - 20}px`,
+              left: `${exilePos.x}px`,
+              top: `${exilePos.y - 20}px`,
             }}
           >
             {/* Label com nome do dono */}
@@ -86,22 +88,22 @@ const Cemetery = ({
                 zIndex: 100,
               }}
             >
-              {player.name} - Cemitério
+              {player.name} - Exílio
             </div>
-            {/* Botão Buscar no Cemitério */}
-            {player.name === playerName && changeCardZone !== undefined && getCemeteryPosition !== undefined && getLibraryPosition !== undefined && (
+            {/* Botão Buscar no Exílio */}
+            {player.name === playerName && changeCardZone && getCemeteryPosition && getLibraryPosition && (
               <button
                 onClick={(e) => {
                   e.stopPropagation();
                   e.preventDefault();
-                  setShowCemeterySearch(true);
+                  setShowExileSearch(true);
                 }}
                 onPointerDown={(e) => {
                   e.stopPropagation();
                 }}
                 style={{
                   position: 'absolute',
-                  top: `${20 + CEMETERY_CARD_HEIGHT + 5}px`,
+                  top: `${20 + EXILE_CARD_HEIGHT + 5}px`,
                   left: '0px',
                   padding: '4px 8px',
                   backgroundColor: '#6366f1',
@@ -113,28 +115,28 @@ const Cemetery = ({
                   fontWeight: '500',
                   zIndex: 1000,
                   pointerEvents: 'auto',
-                  width: `${CEMETERY_CARD_WIDTH}px`,
+                  width: `${EXILE_CARD_WIDTH}px`,
                   textAlign: 'center',
                 }}
-                title="Buscar carta no cemitério e mover para uma zona"
+                title="Buscar carta no exílio e mover para uma zona"
               >
                 🔍 Buscar
               </button>
             )}
             <div
-              className={`cemetery-stack ${player.name === playerName ? 'draggable' : ''}`}
+              className={`exile-stack ${player.name === playerName ? 'draggable' : ''}`}
               style={{
                 position: 'absolute',
                 left: '0px',
                 top: '20px',
-                width: `${CEMETERY_CARD_WIDTH}px`,
-                height: `${CEMETERY_CARD_HEIGHT}px`,
-                cursor: player.name === playerName ? (draggingCemetery && draggingCemetery.playerName === player.name ? 'grabbing' : 'grab') : 'pointer',
+                width: `${EXILE_CARD_WIDTH}px`,
+                height: `${EXILE_CARD_HEIGHT}px`,
+                cursor: player.name === playerName ? (draggingExile && draggingExile.playerName === player.name ? 'grabbing' : 'grab') : 'pointer',
                 pointerEvents: 'auto',
               }}
             onPointerDown={(e) => {
-              console.log('[Cemetery] onPointerDown', { 
-                cemeteryOwnerName: player.name, 
+              console.log('[Exile] onPointerDown', { 
+                exileOwnerName: player.name, 
                 currentPlayerName: playerName, 
                 matches: player.name === playerName,
                 button: e.button,
@@ -143,10 +145,7 @@ const Cemetery = ({
                 allPlayers: players.map(p => ({ id: p.id, name: p.name }))
               });
               
-              // Verificar se o player dono do cemitério é o player atual
-              // IMPORTANTE: Cada player só pode mover seu próprio cemitério
-              // O playerName passado como prop é o nome do player atual do store
-              // O player.name é o nome do dono do cemitério
+              // Verificar se o player dono do exílio é o player atual
               const isOwner = player.name === playerName;
               // Permitir que qualquer player possa mexer em players simulados
               const isSimulated = player.id.startsWith('simulated-');
@@ -164,14 +163,14 @@ const Cemetery = ({
                   startDrag(topCard, e);
                 } else {
                   // Caso contrário, arrastar o stack inteiro
-                  console.log('[Cemetery] Chamando startCemeteryDrag', player.name);
+                  console.log('[Exile] Chamando startExileDrag', player.name);
                   e.preventDefault();
                   e.stopPropagation();
-                  startCemeteryDrag(player.name, e);
+                  startExileDrag(player.name, e);
                 }
               } else {
-                console.log('[Cemetery] Bloqueado - não é o player atual', {
-                  cemeteryOwnerId: player.name,
+                console.log('[Exile] Bloqueado - não é o player atual', {
+                  exileOwnerId: player.name,
                   currentPlayerName: playerName,
                   playersCount: players.length
                 });
@@ -182,7 +181,7 @@ const Cemetery = ({
                 e.preventDefault();
                 e.stopPropagation();
                 const topCard = cards[0];
-                onCemeteryContextMenu(topCard, e);
+                onExileContextMenu(topCard, e);
               }
             }}
           >
@@ -212,7 +211,6 @@ const Cemetery = ({
                           startDrag(card, e);
                         }
                         // Caso contrário, deixar o evento propagar para o container (para arrastar o stack)
-                        // Não chamar stopPropagation aqui
                       } else {
                         // Para outras cartas, sempre bloquear propagação
                         e.stopPropagation();
@@ -224,22 +222,22 @@ const Cemetery = ({
                       onPointerDown={() => {}}
                       onDoubleClick={() => {}}
                       ownerName={ownerName(card)}
-                      width={CEMETERY_CARD_WIDTH}
-                      height={CEMETERY_CARD_HEIGHT}
+                      width={EXILE_CARD_WIDTH}
+                      height={EXILE_CARD_HEIGHT}
                       showBack={false}
                     />
                   </div>
                 ))}
-                <div className="cemetery-count">{cards.length}</div>
+                <div className="exile-count">{cards.length}</div>
               </>
             ) : (
               <>
-                {/* Mostrar área vazia do cemitério */}
+                {/* Mostrar área vazia do exílio */}
                 <div
                   style={{
                     position: 'absolute',
-                    width: `${CEMETERY_CARD_WIDTH}px`,
-                    height: `${CEMETERY_CARD_HEIGHT}px`,
+                    width: `${EXILE_CARD_WIDTH}px`,
+                    height: `${EXILE_CARD_HEIGHT}px`,
                     left: '0px',
                     top: '0px',
                     border: '2px dashed rgba(148, 163, 184, 0.5)',
@@ -251,9 +249,9 @@ const Cemetery = ({
                     pointerEvents: 'none',
                   }}
                 >
-                  <span style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: '16px' }}>⚰️</span>
+                  <span style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: '16px' }}>🚫</span>
                 </div>
-                <div className="cemetery-count" style={{ opacity: 0.5, pointerEvents: 'none' }}>0</div>
+                <div className="exile-count" style={{ opacity: 0.5, pointerEvents: 'none' }}>0</div>
               </>
             )}
             </div>
@@ -261,13 +259,13 @@ const Cemetery = ({
         );
       })}
       
-      {/* Busca de cartas no cemitério */}
+      {/* Busca de cartas no exílio */}
       {changeCardZone && getCemeteryPosition && getLibraryPosition && (
-        <CemeterySearch
-          cemeteryCards={cemeteryCards}
+        <ExileSearch
+          exileCards={exileCards}
           playerName={playerName}
-          isOpen={showCemeterySearch}
-          onClose={() => setShowCemeterySearch(false)}
+          isOpen={showExileSearch}
+          onClose={() => setShowExileSearch(false)}
           onMoveCard={(cardId, zone, libraryPlace) => {
             const card = board.find((c) => c.id === cardId);
             if (!card || !changeCardZone) return;
@@ -285,6 +283,9 @@ const Cemetery = ({
             } else if (zone === 'library') {
               const libraryPos = getLibraryPosition(playerName);
               position = libraryPos || { x: 0, y: 0 };
+            } else if (zone === 'exile') {
+              const exilePos = getExilePosition(playerName);
+              position = exilePos || { x: 0, y: 0 };
             }
             
             changeCardZone(cardId, zone, position, libraryPlace);
@@ -296,5 +297,5 @@ const Cemetery = ({
   );
 };
 
-export default Cemetery;
+export default Exile;
 
