@@ -13,7 +13,8 @@ interface CardTokenProps {
   ownerName?: string;
   width?: number;
   height?: number;
-  showBack?: boolean;
+  showBack?: boolean; // Para outros casos: mostrar verso genérico se não tiver imagem
+  forceShowFront?: boolean; // Forçar mostrar a frente mesmo se for library
 }
 
 const CARD_BACK_IMAGE = '/Magic_card_back.webp';
@@ -31,9 +32,13 @@ const CardToken = ({
   width = 150,
   height = 210,
   showBack = false,
+  forceShowFront = false,
 }: CardTokenProps) => {
-  // Se a carta tem a propriedade flipped, usar ela; caso contrário, usar showBack
-  const shouldShowBack = card.flipped !== undefined ? card.flipped : showBack;
+  // No library, sempre mostrar o verso genérico (magic_card_back), exceto se forceShowFront for true
+  // No board/hand, mostrar o verso se flipped === true e backImageUrl existir
+  const isLibrary = card.zone === 'library';
+  const shouldShowBack = forceShowFront ? false : (isLibrary ? true : (!!card.flipped && !!card.backImageUrl));
+  const imageToShow = shouldShowBack && card.backImageUrl ? card.backImageUrl : card.imageUrl;
   // Converter touch events para pointer events para compatibilidade
   const handleTouchStart = (e: React.TouchEvent) => {
     if (onTouchStart) {
@@ -72,7 +77,27 @@ const CardToken = ({
     }
   };
 
-  if (shouldShowBack) {
+  // Se for library e não forçar mostrar frente, sempre mostrar o verso genérico
+  if (isLibrary && !forceShowFront) {
+    return (
+      <div
+        className={classNames('card-token', 'card-back')}
+        style={{ width, height, touchAction: 'none', position: 'relative' }}
+        onPointerDown={onPointerDown}
+        onMouseDown={onMouseDown}
+        onTouchStart={handleTouchStart}
+        onTouchEnd={handleTouchEnd}
+        onDoubleClick={onDoubleClick}
+        onClick={onClick}
+        onContextMenu={onContextMenu}
+      >
+        <img src={CARD_BACK_IMAGE} alt="Card back" draggable={false} />
+      </div>
+    );
+  }
+
+  // Se showBack é true (para outros casos), mostrar o verso genérico se não tiver imagem
+  if (showBack && !imageToShow) {
     return (
       <div
         className={classNames('card-token', 'card-back')}
@@ -102,8 +127,8 @@ const CardToken = ({
       onClick={onClick}
       onContextMenu={onContextMenu}
     >
-      {card.imageUrl ? (
-        <img src={card.imageUrl} alt={card.name} draggable={false} />
+      {imageToShow ? (
+        <img src={imageToShow} alt={card.name} draggable={false} />
       ) : (
         <div className="card-placeholder">
           <span>{card.name}</span>

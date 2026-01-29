@@ -38,8 +38,28 @@ db.exec(`
     FOREIGN KEY (user_id) REFERENCES users(id) ON DELETE CASCADE
   );
 
+  CREATE TABLE IF NOT EXISTS rooms (
+    room_id TEXT PRIMARY KEY,
+    board_state TEXT NOT NULL,
+    updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+  );
+
+  CREATE TABLE IF NOT EXISTS room_events (
+    id INTEGER PRIMARY KEY AUTOINCREMENT,
+    room_id TEXT NOT NULL,
+    event_type TEXT NOT NULL,
+    event_data TEXT NOT NULL,
+    player_id TEXT,
+    player_name TEXT,
+    created_at DATETIME DEFAULT CURRENT_TIMESTAMP,
+    FOREIGN KEY (room_id) REFERENCES rooms(room_id) ON DELETE CASCADE
+  );
+
   CREATE INDEX IF NOT EXISTS idx_decks_user_id ON decks(user_id);
   CREATE INDEX IF NOT EXISTS idx_decks_is_public ON decks(is_public);
+  CREATE INDEX IF NOT EXISTS idx_rooms_updated_at ON rooms(updated_at);
+  CREATE INDEX IF NOT EXISTS idx_room_events_room_id ON room_events(room_id);
+  CREATE INDEX IF NOT EXISTS idx_room_events_created_at ON room_events(created_at);
 `);
 
 // Adicionar coluna is_public se não existir (migração)

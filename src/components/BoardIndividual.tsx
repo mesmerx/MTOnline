@@ -5,6 +5,7 @@ import Library from './Library';
 import Cemetery from './Cemetery';
 import type { BoardViewProps } from './BoardTypes';
 import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT, CARD_WIDTH, CARD_HEIGHT } from './BoardTypes';
+import { useGameStore } from '../store/useGameStore';
 
 interface BoardIndividualProps extends BoardViewProps {
   selectedPlayerIndex: number;
@@ -15,6 +16,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     boardRef,
     allPlayers,
     playerId,
+    playerName,
     battlefieldCards,
     libraryCards,
     cemeteryCards,
@@ -51,11 +53,12 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
   const selectedPlayer = allPlayers[selectedPlayerIndex];
   if (!selectedPlayer) return null;
 
+  const selectedPlayerName = selectedPlayer.name;
   const selectedPlayerId = selectedPlayer.id;
   const filteredPlayers = [selectedPlayer];
-  const filteredBattlefieldCards = battlefieldCards.filter(c => c.ownerId === selectedPlayerId);
-  const filteredLibraryCards = libraryCards.filter(c => c.ownerId === selectedPlayerId);
-  const filteredCemeteryCards = cemeteryCards.filter(c => c.ownerId === selectedPlayerId);
+  const filteredBattlefieldCards = battlefieldCards.filter(c => c.ownerId === selectedPlayerName);
+  const filteredLibraryCards = libraryCards.filter(c => c.ownerId === selectedPlayerName);
+  const filteredCemeteryCards = cemeteryCards.filter(c => c.ownerId === selectedPlayerName);
 
   return (
     <>
@@ -73,7 +76,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
 
       <Library
         boardRef={boardRef}
-        playerId={playerId}
+        playerName={playerName}
         libraryCards={filteredLibraryCards}
         players={filteredPlayers}
         getPlayerArea={(id) => {
@@ -101,11 +104,15 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         startDrag={startDrag}
         handleCardZoom={handleCardZoom}
         zoomedCard={zoomedCard}
+        changeCardZone={changeCardZone}
+        getCemeteryPosition={getCemeteryPosition}
+        board={board}
+        reorderLibraryCard={props.reorderLibraryCard}
       />
 
       <Cemetery
         boardRef={boardRef}
-        playerId={playerId}
+        playerName={playerName}
         cemeteryCards={filteredCemeteryCards}
         players={filteredPlayers}
         getCemeteryPosition={getCemeteryPosition}
@@ -154,6 +161,44 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
               height={CARD_HEIGHT}
               showBack={false}
             />
+            {/* Botão de flip embaixo da carta (apenas se tiver backImageUrl) */}
+            {card.backImageUrl && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  props.flipCard(card.id);
+                }}
+                style={{
+                  position: 'absolute',
+                  bottom: '-24px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  width: '40px',
+                  height: '32px',
+                  padding: '4px 6px',
+                  backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                  border: '1px solid rgba(148, 163, 184, 0.3)',
+                  borderRadius: '4px',
+                  color: '#f8fafc',
+                  cursor: 'pointer',
+                  fontSize: '18px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 2,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.9)';
+                }}
+                title="Transform"
+              >
+                🔄
+              </button>
+            )}
           </div>
         );
       })}
@@ -163,7 +208,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         <CounterToken
           key={counter.id}
           counter={counter}
-          isCurrentPlayer={counter.ownerId === playerId}
+          isCurrentPlayer={counter.ownerId === playerName}
           onMove={moveCounter}
           onModify={modifyCounter}
           onRemove={removeCounterToken}
@@ -178,6 +223,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         <Hand
           boardRef={boardRef}
           playerId={playerId}
+          playerName={playerName}
           board={board}
           players={filteredPlayers}
           getPlayerArea={(id) => {
@@ -217,6 +263,8 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
           moveCounter={moveCounter}
           modifyCounter={modifyCounter}
           removeCounterToken={removeCounterToken}
+          getCemeteryPosition={getCemeteryPosition}
+          getLibraryPosition={getLibraryPosition}
         />
       )}
     </>

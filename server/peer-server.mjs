@@ -11,8 +11,12 @@ const server = PeerServer({
   port,
   secure: false,
   path,
-  proxied: true,
+  proxied: false, // Mudado para false - proxied pode causar problemas com WebSocket em desenvolvimento
   allow_discovery: true,
+  corsOptions: {
+    origin: '*', // Permitir todas as origens para desenvolvimento
+    credentials: true,
+  },
 });
 
 server.on('connection', (client) => {

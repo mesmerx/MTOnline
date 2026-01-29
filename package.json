@@ -10,10 +10,10 @@
     "api:server": "node server/api-server.mjs",
     "peer:server": "node server/peer-server.mjs",
     "turn:server": "node server/turn-server.mjs",
-    "dev:all": "concurrently \"pnpm api:server\" \"pnpm peer:server\" \"pnpm turn:server\" \"pnpm dev\"",
+    "dev:all": "concurrently \"pnpm api:server\" \"pnpm peer:server\"  \"pnpm dev\"",
     "download-cards": "node server/download-cards.mjs",
-    "test": "vitest run",
-    "test:watch": "vitest"
+    "test": "tsc --noEmit && vitest run",
+    "test:watch": "tsc --noEmit && vitest"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

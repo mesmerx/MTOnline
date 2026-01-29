@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useGameStore } from '../store/useGameStore';
-import type { CardOnBoard, PlayerSummary } from '../store/useGameStore';
+import type { CardOnBoard, PlayerSummary, Counter } from '../store/useGameStore';
 import CardToken from './CardToken';
 import CounterToken from './CounterToken';
 import Hand from './Hand';
@@ -42,7 +42,19 @@ const Board = () => {
   const board = useGameStore((state) => state.board);
   const counters = useGameStore((state) => state.counters);
   const players = useGameStore((state) => state.players);
+  const simulatedPlayers = useGameStore((state) => state.simulatedPlayers);
   const playerId = useGameStore((state) => state.playerId);
+  const playerName = useGameStore((state) => state.playerName);
+  
+  // Helper para verificar se um player é simulado
+  const isSimulatedPlayer = (ownerId: string) => {
+    return simulatedPlayers.some(p => p.name === ownerId);
+  };
+  
+  // Helper para verificar se pode interagir com uma carta
+  const canInteractWithCard = (cardOwnerId: string) => {
+    return cardOwnerId === playerName || isSimulatedPlayer(cardOwnerId);
+  };
   const storeCemeteryPositions = useGameStore((state) => state.cemeteryPositions);
   const storeLibraryPositions = useGameStore((state) => state.libraryPositions);
   const moveCard = useGameStore((state) => state.moveCard);
@@ -53,15 +65,19 @@ const Board = () => {
   const changeCardZone = useGameStore((state) => state.changeCardZone);
   const drawFromLibrary = useGameStore((state) => state.drawFromLibrary);
   const reorderHandCard = useGameStore((state) => state.reorderHandCard);
+  const reorderLibraryCard = useGameStore((state) => state.reorderLibraryCard);
   const shuffleLibrary = useGameStore((state) => state.shuffleLibrary);
   const mulligan = useGameStore((state) => state.mulligan);
   const createCounter = useGameStore((state) => state.createCounter);
   const moveCounter = useGameStore((state) => state.moveCounter);
   const modifyCounter = useGameStore((state) => state.modifyCounter);
   const removeCounterToken = useGameStore((state) => state.removeCounterToken);
+  const setZoomedCardSync = useGameStore((state) => state.setZoomedCard);
+  const zoomedCardSync = useGameStore((state) => state.zoomedCard ?? null);
   const flipCard = useGameStore((state) => state.flipCard);
   const setPlayerLife = useGameStore((state) => state.setPlayerLife);
   const changePlayerLife = useGameStore((state) => state.changePlayerLife);
+  const changeCommanderDamage = useGameStore((state) => state.changeCommanderDamage);
   const status = useGameStore((state) => state?.status ?? 'idle');
   const peer = useGameStore((state) => state.peer);
   const connections = useGameStore((state) => state.connections);
@@ -79,43 +95,47 @@ const Board = () => {
   
   // Estados para library e hand (sincronizar com store)
   const [libraryPositions, setLibraryPositions] = useState<Record<string, Point>>({});
-  const [draggingLibrary, setDraggingLibrary] = useState<{ playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
+  const [draggingLibrary, setDraggingLibrary] = useState<{ playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
   const [libraryMoved, setLibraryMoved] = useState(false);
   const libraryMovedRef = useRef<boolean>(false);
   const libraryClickExecutedRef = useRef<boolean>(false);
   
   // Estados para cemetery (sincronizar com store)
   const [cemeteryPositions, setCemeteryPositions] = useState<Record<string, Point>>({});
+  const [draggingCemetery, setDraggingCemetery] = useState<{ playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
   
   // Sincronizar posições do store com estado local
+  // IMPORTANTE: Ignorar atualizações do store durante o drag para evitar que sobrescreva mudanças locais
   useEffect(() => {
+    // Se estamos arrastando o cemitério, não atualizar o estado local
+    // para evitar que atualizações remotas (com latência) sobrescrevam o drag local
+    if (draggingCemetery) {
+      return;
+    }
     setCemeteryPositions(storeCemeteryPositions);
-  }, [storeCemeteryPositions]);
+  }, [storeCemeteryPositions, draggingCemetery]);
   
   useEffect(() => {
     setLibraryPositions(storeLibraryPositions);
   }, [storeLibraryPositions]);
-  const [draggingCemetery, setDraggingCemetery] = useState<{ playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
   const [cemeteryMoved, setCemeteryMoved] = useState(false);
   const cemeteryMovedRef = useRef<boolean>(false);
   const [showHand, setShowHand] = useState(true);
   const [handButtonEnabled, setHandButtonEnabled] = useState(false);
   const [showDebugMode, setShowDebugMode] = useState(false);
   const [eventLogMinimized, setEventLogMinimized] = useState(false);
-  const [simulatePlayers, setSimulatePlayers] = useState<number>(0);
+  const setSimulatedPlayers = useGameStore((state) => state.setSimulatedPlayers);
   const [showSimulatePanel, setShowSimulatePanel] = useState(false);
   const [peerDebugMinimized, setPeerDebugMinimized] = useState(false);
   
-  // Gerar players simulados
-  const simulatedPlayers: PlayerSummary[] = Array.from({ length: simulatePlayers }, (_, i) => ({
-    id: `simulated-${i + 1}`,
-    name: `Player ${i + 1}`,
-  }));
-
   // Combinar players reais com simulados
-  const allPlayers = simulatePlayers > 0 
-    ? [...players, ...simulatedPlayers]
-    : players;
+  const allPlayers = useMemo(() => {
+    return simulatedPlayers.length > 0 
+      ? [...players, ...simulatedPlayers]
+      : players;
+  }, [players, simulatedPlayers]);
+  
+  const simulatePlayers = simulatedPlayers.length;
   
   // Modos de visualização: 'unified' (todos juntos), 'individual' (um por vez), 'separated' (boards separados)
   const [viewMode, setViewMode] = useState<'unified' | 'individual' | 'separated'>('unified');
@@ -128,9 +148,11 @@ const Board = () => {
   const [boardContextMenu, setBoardContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [boardContextMenuPosition, setBoardContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
-  const [contextSubmenu, setContextSubmenu] = useState<'moveZone' | 'libraryPlace' | null>(null);
+  const [contextSubmenu, setContextSubmenu] = useState<'moveZone' | 'libraryPlace' | 'cascade' | null>(null);
   const [contextSubmenuLibrary, setContextSubmenuLibrary] = useState<boolean>(false);
   const [zoomedCard, setZoomedCard] = useState<string | null>(null);
+  // Usar zoom sincronizado do store quando disponível (para cascade), senão usar o local
+  const effectiveZoomedCard = zoomedCardSync ?? zoomedCard;
   
   // Refs para compartilhar com Hand component
   const dragStartedFromHandRef = useRef<boolean>(false);
@@ -143,11 +165,13 @@ const Board = () => {
     previewHandOrder: number | null;
     dragPosition: Point | null;
     dragStartPosition: Point | null;
+    dragOffset: Point | null;
   }>({
     draggingHandCard: null,
     handCardMoved: false,
     previewHandOrder: null,
     dragPosition: null,
+    dragOffset: null,
     dragStartPosition: null,
   });
   
@@ -454,8 +478,8 @@ const Board = () => {
   
   // Memoizar handCards do player atual para evitar recálculos
   const playerHandCards = useMemo(() => 
-    handCards.filter((c) => c.ownerId === playerId), 
-    [handCards, playerId]
+    handCards.filter((c) => c.ownerId === playerName), 
+    [handCards, playerName]
   );
   
   // Ajustar posição de cartas recém-adicionadas para o centro da área do player
@@ -465,7 +489,7 @@ const Board = () => {
     
     const cardsToCenter = battlefieldCards.filter(
       (card) => 
-        card.ownerId === playerId && 
+        card.ownerId === playerName && 
         card.position.x === -1 && 
         card.position.y === -1 &&
         !processedCardsRef.current.has(card.id)
@@ -473,7 +497,7 @@ const Board = () => {
     
     if (cardsToCenter.length > 0) {
     const rect = boardRef.current.getBoundingClientRect();
-      const playerArea = getPlayerArea(playerId);
+      const playerArea = getPlayerArea(playerName);
       
       if (playerArea) {
         const CARD_WIDTH = 150;
@@ -495,7 +519,7 @@ const Board = () => {
         processedCardsRef.current.delete(id);
       }
     });
-  }, [board, playerId, moveCard]);
+  }, [board, playerName, moveCard]);
 
   // Tamanho base do board em 1080p (importado de BoardTypes.ts)
   
@@ -513,11 +537,11 @@ const Board = () => {
   const convertMouseToSeparatedCoordinates = (
     mouseX: number,
     mouseY: number,
-    playerId: string,
+    playerName: string,
     rect: DOMRect
   ): { x: number; y: number } | null => {
     const windowInfo = getPlayerWindowAtPosition(mouseX, mouseY);
-    if (!windowInfo || windowInfo.player.id !== playerId) {
+    if (!windowInfo || windowInfo.player.name !== playerName) {
       return null;
     }
 
@@ -643,9 +667,9 @@ const Board = () => {
     return null;
   };
 
-  const getPlayerArea = useCallback((ownerId: string) => {
+  const getPlayerArea = useCallback((ownerName: string) => {
     if (!boardRef.current || allPlayers.length === 0) return null;
-    const playerIndex = allPlayers.findIndex((p) => p.id === ownerId);
+    const playerIndex = allPlayers.findIndex((p) => p.name === ownerName);
     if (playerIndex === -1) return null;
 
     // No modo separated, retornar tamanho base (1920x1080) já que o scale é aplicado no container
@@ -667,20 +691,20 @@ const Board = () => {
     };
   }, [boardRef, allPlayers, viewMode]);
 
-  const getHandArea = (ownerId: string) => {
+  const getHandArea = (ownerName: string) => {
     if (!boardRef.current || allPlayers.length === 0 || !showHand) return null;
-    const playerIndex = allPlayers.findIndex((p) => p.id === ownerId);
+    const playerIndex = allPlayers.findIndex((p) => p.name === ownerName);
     if (playerIndex === -1) return null;
 
     const HAND_CARD_LEFT_SPACING = 120;
     const maxRenderCards = 9;
     
-    const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === ownerId);
+    const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === ownerName);
     const totalCards = playerHandCards.length;
     
     // Usar o espaço base (1920x1080)
     if (totalCards === 0) {
-      const handHeight = 168 + 20; // HAND_CARD_HEIGHT + margin
+      const handHeight = 168 + 5; // HAND_CARD_HEIGHT + margem inferior pequena
       const handY = BASE_BOARD_HEIGHT - handHeight;
       return {
         x: 0,
@@ -694,11 +718,9 @@ const Board = () => {
     const handWidth = (visibleCardsCount * HAND_CARD_LEFT_SPACING) + 40;
     const handX = (BASE_BOARD_WIDTH - handWidth) / 2;
     
-    const curveHeight = 8;
-    const HOVER_LIFT_PX = 10;
-    const baseHandHeight = 168 + curveHeight + HOVER_LIFT_PX + 10; // HAND_CARD_HEIGHT + extras
-    const marginY = baseHandHeight * 0.1;
-    const handHeight = baseHandHeight + (marginY * 2);
+    // Reduzir margens para evitar espaço vazio no topo
+    // Margem inferior pequena (5px) e margem superior mínima (2px) apenas para o arco
+    const handHeight = 168 + 5 + 2; // HAND_CARD_HEIGHT + margem inferior + margem superior mínima
     const handY = BASE_BOARD_HEIGHT - handHeight;
 
     return {
@@ -709,8 +731,8 @@ const Board = () => {
     };
   };
 
-  const getCemeteryPosition = (playerId: string): Point | null => {
-    const area = getPlayerArea(playerId);
+  const getCemeteryPosition = (playerName: string): Point | null => {
+    const area = getPlayerArea(playerName);
     if (!area) return null;
     
     const CEMETERY_CARD_WIDTH = 100;
@@ -718,18 +740,18 @@ const Board = () => {
     
     // Primeiro, verificar se há posição no store (sincronizada entre peers)
     // As posições no store já estão no espaço base
-    if (storeCemeteryPositions[playerId]) {
-      return storeCemeteryPositions[playerId];
+    if (storeCemeteryPositions[playerName]) {
+      return storeCemeteryPositions[playerName];
     }
     
     // Segundo, verificar se há posição salva localmente
-    if (cemeteryPositions[playerId]) {
-      return cemeteryPositions[playerId];
+    if (cemeteryPositions[playerName]) {
+      return cemeteryPositions[playerName];
     }
     
     // Terceiro, verificar se há cartas no board com posição (vindo dos peers)
     const playerCemeteryCards = cemeteryCards
-      .filter((c) => c.ownerId === playerId)
+      .filter((c) => c.ownerId === playerName)
       .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0))
       .slice(0, 5);
     
@@ -744,7 +766,7 @@ const Board = () => {
     }
     
     // Caso contrário, posição padrão no espaço base com offset baseado no índice do jogador
-    const playerIndex = players.findIndex((p) => p.id === playerId);
+    const playerIndex = players.findIndex((p) => p.name === playerName);
     const offsetX = playerIndex * (CEMETERY_CARD_WIDTH + 20);
     return {
       x: area.x + (area.width / 2) - CEMETERY_CARD_WIDTH / 2 + offsetX,
@@ -763,7 +785,7 @@ const Board = () => {
     
     // Verificar se está dentro da área do cemitério (considerando todos os players)
     for (const player of allPlayers) {
-      const cemeteryPos = getCemeteryPosition(player.id);
+      const cemeteryPos = getCemeteryPosition(player.name);
       if (cemeteryPos) {
         if (
           x >= cemeteryPos.x - 10 &&
@@ -771,14 +793,14 @@ const Board = () => {
           y >= cemeteryPos.y - 10 &&
           y <= cemeteryPos.y + CEMETERY_STACK_HEIGHT
         ) {
-          return { zone: 'cemetery', ownerId: player.id };
+          return { zone: 'cemetery', ownerId: player.name };
         }
       }
     }
     
     // Verificar hand
     if (showHand) {
-      const handArea = getHandArea(playerId);
+      const handArea = getHandArea(playerName);
       if (handArea) {
         if (
           x >= handArea.x &&
@@ -786,14 +808,14 @@ const Board = () => {
           y >= handArea.y &&
           y <= handArea.y + handArea.height
         ) {
-          return { zone: 'hand', ownerId: playerId };
+          return { zone: 'hand', ownerId: playerName };
         }
       }
     }
     
     // Verificar library
     for (const player of allPlayers) {
-      const libraryPos = getLibraryPosition(player.id);
+      const libraryPos = getLibraryPosition(player.name);
       if (libraryPos) {
         const LIBRARY_CARD_WIDTH = 100;
         const LIBRARY_CARD_HEIGHT = 140;
@@ -803,7 +825,7 @@ const Board = () => {
           y >= libraryPos.y &&
           y <= libraryPos.y + LIBRARY_CARD_HEIGHT
         ) {
-          return { zone: 'library', ownerId: player.id };
+          return { zone: 'library', ownerId: player.name };
         }
       }
     }
@@ -812,12 +834,12 @@ const Board = () => {
     return { zone: 'battlefield' };
   };
 
-  const getLibraryPosition = (ownerId: string) => {
-    const area = getPlayerArea(ownerId);
+  const getLibraryPosition = (ownerName: string) => {
+    const area = getPlayerArea(ownerName);
     if (!area) return null;
     
     const playerLibraryCards = libraryCards
-      .filter((c) => c.ownerId === ownerId)
+      .filter((c) => c.ownerId === ownerName)
       .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0))
       .slice(0, 5);
     
@@ -831,10 +853,10 @@ const Board = () => {
     }
     
     // Se há posição salva no store, usar ela (já está no espaço base)
-    if (storeLibraryPositions[ownerId]) {
+    if (storeLibraryPositions[ownerName]) {
       return {
-        x: storeLibraryPositions[ownerId].x,
-        y: storeLibraryPositions[ownerId].y,
+        x: storeLibraryPositions[ownerName].x,
+        y: storeLibraryPositions[ownerName].y,
       };
     }
     
@@ -987,7 +1009,7 @@ const Board = () => {
         const currentBoard = useGameStore.getState().board;
         const card = currentBoard.find((c) => c.id === dragState.cardId);
         
-        if (card && card.ownerId === playerId) {
+        if (card && card.ownerId === playerName) {
           const rect = boardRef.current.getBoundingClientRect();
           
           // Converter coordenadas para o espaço base antes de detectar zona
@@ -1090,7 +1112,7 @@ const Board = () => {
           if (rect) {
             const cursorX = event.clientX - rect.left;
             const cursorY = event.clientY - rect.top;
-            const handArea = getHandArea(playerId);
+            const handArea = getHandArea(playerName);
             const isInHandArea = handArea && 
               cursorX >= handArea.x && 
               cursorX <= handArea.x + handArea.width &&
@@ -1149,7 +1171,7 @@ const Board = () => {
           playerId,
         });
         
-        if (card && card.zone === 'battlefield' && card.ownerId === playerId) {
+        if (card && card.zone === 'battlefield' && card.ownerId === playerName) {
           console.log('[Board] handleUp: Fazendo tap na carta:', {
             cardId: card.id,
             cardName: card.name,
@@ -1163,7 +1185,7 @@ const Board = () => {
             ownerId: card?.ownerId,
             playerId,
             isBattlefield: card?.zone === 'battlefield',
-            isOwner: card?.ownerId === playerId,
+            isOwner: card?.ownerId === playerName,
           });
         }
         
@@ -1192,14 +1214,14 @@ const Board = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
     };
-  }, [isDragging, showHand, playerId, moveCard, changeCardZone, getPlayerArea, getHandArea, viewMode, players]);
+  }, [isDragging, showHand, playerName, moveCard, changeCardZone, getPlayerArea, getHandArea, viewMode, players]);
 
   const startDrag = (card: CardOnBoard, event: ReactPointerEvent) => {
     // Ignorar botão direito e botão do meio
     if (event.button === 1 || event.button === 2) return;
     
     // Só pode mover suas próprias cartas
-    if (card.ownerId !== playerId) return;
+    if (card.ownerId !== playerName) return;
     if ((event.target as HTMLElement).closest('button')) return;
     event.preventDefault();
     if (!boardRef.current) return;
@@ -1304,12 +1326,13 @@ const Board = () => {
   const instruction =
     status === 'idle' ? 'Create or join a room to sync the battlefield.' : 'Drag cards, double-click to tap.';
 
-  const ownerName = (card: CardOnBoard) => allPlayers.find((player) => player.id === card.ownerId)?.name ?? 'Unknown';
+  const ownerName = (card: CardOnBoard) => allPlayers.find((player) => player.name === card.ownerId)?.name ?? 'Unknown';
 
-  const handleLibraryClick = (targetPlayerId: string) => {
-    if (targetPlayerId === playerId) {
+  const handleLibraryClick = (targetPlayerName: string) => {
+    // targetPlayerName é o nome do player (não o ID)
+    if (targetPlayerName === playerName) {
       addEventLog('DRAW_FROM_LIBRARY', 'Comprando carta da library', undefined, undefined, {
-        playerId: targetPlayerId,
+        playerName: targetPlayerName,
       });
       drawFromLibrary();
     }
@@ -1367,6 +1390,9 @@ const Board = () => {
       return;
     }
 
+    // O menu de contexto é tratado pelo onContextMenu, não pelo onClick
+    // O clique normal na hand vai direto para o board (ver código abaixo)
+
     // Verificar se a carta mudou de zona
     const currentBoard = useGameStore.getState().board;
     const currentCard = currentBoard.find((c) => c.id === card.id);
@@ -1394,7 +1420,7 @@ const Board = () => {
     event.stopPropagation();
 
     // Se a carta está no board, fazer tap/untap
-    if (card.zone === 'battlefield' && card.ownerId === playerId) {
+    if (card.zone === 'battlefield' && canInteractWithCard(card.ownerId)) {
       console.log('[Board] Fazendo tap na carta:', {
         cardId: card.id,
         cardName: card.name,
@@ -1409,9 +1435,9 @@ const Board = () => {
     }
 
     // Se está na mão, colocar no board
-    if (card.zone === 'hand' && card.ownerId === playerId && showHand) {
+    if (card.zone === 'hand' && canInteractWithCard(card.ownerId) && showHand) {
       console.log('[Board] Colocando carta da mão no board:', card.id);
-      const playerArea = getPlayerArea(playerId);
+      const playerArea = getPlayerArea(playerName);
       if (playerArea) {
         const position = {
           x: playerArea.x + playerArea.width / 2 - CARD_WIDTH / 2,
@@ -1434,6 +1460,7 @@ const Board = () => {
     if (event.button === 1) {
       event.preventDefault();
       event.stopPropagation();
+      // Para zoom local (middle click), usar estado local
       if (zoomedCard === card.id) {
         setZoomedCard(null);
       } else {
@@ -1632,8 +1659,144 @@ const Board = () => {
     });
   };
   
+  // Função para converter manaCost string para número (CMC - Converted Mana Cost)
+  const parseManaCost = (manaCost?: string): number => {
+    if (!manaCost || manaCost.trim() === '') return 0;
+    
+    // Remover chaves e contar números e símbolos
+    // Ex: "{2}{R}" -> 2 + 1 = 3, "{X}{R}{G}" -> 0 + 1 + 1 = 2 (X conta como 0)
+    const matches = manaCost.match(/\{(\d+|[XWUBRGC]|W\/U|W\/B|U\/B|U\/R|B\/R|B\/G|R\/G|R\/W|G\/W|G\/U|2\/W|2\/U|2\/B|2\/R|2\/G)\}/g);
+    if (!matches) return 0;
+    
+    let total = 0;
+    for (const match of matches) {
+      const content = match.slice(1, -1); // Remove { e }
+      if (content === 'X') {
+        // X conta como 0 no CMC
+        continue;
+      } else if (/^\d+$/.test(content)) {
+        // Número
+        total += parseInt(content, 10);
+      } else {
+        // Símbolo de mana (W, U, B, R, G, C, híbridos, etc) conta como 1
+        total += 1;
+      }
+    }
+    
+    return total;
+  };
+
+  // Função para executar cascade
+  const handleCascade = async (showEachCard: boolean) => {
+    if (!contextMenu) return;
+    
+    const { card } = contextMenu;
+    if (card.zone !== 'library' || !canInteractWithCard(card.ownerId)) return;
+    
+    // Fechar submenu
+    setContextSubmenu(null);
+    
+    // Perguntar o valor do cascade
+    const cascadeValueStr = window.prompt('Digite o valor do Cascade:');
+    if (!cascadeValueStr) {
+      setContextMenu(null);
+      return;
+    }
+    
+    const cascadeValue = parseInt(cascadeValueStr, 10);
+    if (isNaN(cascadeValue) || cascadeValue < 0) {
+      alert('Valor inválido. Digite um número maior ou igual a 0.');
+      setContextMenu(null);
+      return;
+    }
+    
+    setContextMenu(null);
+    
+    // Obter cartas do library do jogador, ordenadas por stackIndex (descendente - topo primeiro)
+    const currentBoard = useGameStore.getState().board;
+    const libraryCards = currentBoard
+      .filter((c) => c.zone === 'library' && c.ownerId === card.ownerId)
+      .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
+    
+    if (libraryCards.length === 0) {
+      alert('Não há cartas no deck.');
+      return;
+    }
+    
+    const revealedCards: CardOnBoard[] = [];
+    
+    // Revelar cartas uma por uma até encontrar uma carta com CMC <= cascadeValue
+    for (const libraryCard of libraryCards) {
+      const cardMana = parseManaCost(libraryCard.manaCost);
+      revealedCards.push(libraryCard);
+      
+      // Se mostrar cada carta, fazer zoom e pausa
+      if (showEachCard) {
+        // Mostrar carta temporariamente (sincronizado para todos os jogadores)
+        setZoomedCardSync(libraryCard.id);
+        addEventLog('CASCADE_REVEAL', `Cascade: Revelando ${libraryCard.name} (CMC: ${cardMana})`, libraryCard.id, libraryCard.name, {
+          cardMana,
+          cascadeValue,
+        });
+        
+        // Pausa para ver a carta (1 segundo)
+        await new Promise((resolve) => setTimeout(resolve, 1000));
+      } else {
+        // Apenas logar sem mostrar
+        addEventLog('CASCADE_REVEAL', `Cascade: Revelando ${libraryCard.name} (CMC: ${cardMana})`, libraryCard.id, libraryCard.name, {
+          cardMana,
+          cascadeValue,
+        });
+      }
+      
+      // Se o CMC desta carta for <= cascadeValue, parar (jogar esta carta)
+      if (cardMana <= cascadeValue) {
+        break;
+      }
+    }
+    
+    // Fechar zoom se estava mostrando cartas
+    if (showEachCard) {
+      setZoomedCardSync(null);
+    }
+    
+    if (revealedCards.length === 0) {
+      alert('Nenhuma carta foi revelada.');
+      return;
+    }
+    
+    // A última carta vai para o board
+    const lastCard = revealedCards[revealedCards.length - 1];
+    const otherCards = revealedCards.slice(0, -1);
+    
+    // Calcular posição no board (centro do board em coordenadas base)
+    const position: Point = {
+      x: BASE_BOARD_WIDTH / 2 - CARD_WIDTH / 2,
+      y: BASE_BOARD_HEIGHT / 2 - CARD_HEIGHT / 2,
+    };
+    
+    // Mover última carta para o board
+    const lastCardMana = parseManaCost(lastCard.manaCost);
+    addEventLog('CASCADE_PLAY', `Cascade: Jogando ${lastCard.name} no board (CMC: ${lastCardMana})`, lastCard.id, lastCard.name, {
+      cardMana: lastCardMana,
+      cascadeValue,
+    });
+    changeCardZone(lastCard.id, 'battlefield', position);
+    
+    // Mover outras cartas para o fundo do deck
+    for (const otherCard of otherCards) {
+      const libraryPos = getLibraryPosition(card.ownerId);
+      const libraryPosition = libraryPos || { x: 0, y: 0 };
+      addEventLog('CASCADE_BOTTOM', `Cascade: ${otherCard.name} vai para o fundo do deck`, otherCard.id, otherCard.name);
+      changeCardZone(otherCard.id, 'library', libraryPosition, 'bottom');
+    }
+    
+    // Pequena pausa antes de finalizar
+    await new Promise((resolve) => setTimeout(resolve, 500));
+  };
+
   const handleContextMenuAction = (
-    action: 'cemetery' | 'remove' | 'shuffle' | 'tap' | 'draw' | 'moveZone' | 'libraryPlace' | 'flip' | 'createCounter',
+    action: 'cemetery' | 'remove' | 'shuffle' | 'tap' | 'draw' | 'moveZone' | 'libraryPlace' | 'flip' | 'createCounter' | 'cascade',
     targetZone?: 'hand' | 'battlefield' | 'library' | 'cemetery',
     libraryPlace?: 'top' | 'bottom' | 'random',
     counterType?: 'numeral' | 'plus'
@@ -1644,15 +1807,15 @@ const Board = () => {
     
     if (action === 'shuffle') {
       // Shuffle apenas se for library e for do jogador
-      if (card.zone === 'library' && card.ownerId === playerId) {
+      if (card.zone === 'library' && canInteractWithCard(card.ownerId)) {
         addEventLog('SHUFFLE_LIBRARY', `Embaralhando library`, undefined, undefined, {
-          playerId: card.ownerId,
+          playerName: card.ownerId,
         });
         shuffleLibrary(card.ownerId);
       }
     } else if (action === 'tap') {
       // Tap/Untap
-    if (card.ownerId === playerId) {
+    if (canInteractWithCard(card.ownerId)) {
         addEventLog('TOGGLE_TAP', `${card.tapped ? 'Untap' : 'Tap'}: ${card.name}`, card.id, card.name, {
           from: card.tapped ? 'tapped' : 'untapped',
           to: card.tapped ? 'untapped' : 'tapped',
@@ -1661,15 +1824,15 @@ const Board = () => {
       }
     } else if (action === 'draw') {
       // Draw - apenas para library
-      if (card.zone === 'library' && card.ownerId === playerId) {
+      if (card.zone === 'library' && canInteractWithCard(card.ownerId)) {
         addEventLog('DRAW_FROM_LIBRARY', 'Comprando carta da library', undefined, undefined, {
-          playerId: card.ownerId,
+          playerName: card.ownerId,
         });
         drawFromLibrary();
       }
     } else if (action === 'moveZone' && targetZone) {
       // Mover de zona (não inclui library aqui)
-      if (card.ownerId === playerId && card.zone !== targetZone) {
+      if (card.ownerId === playerName && card.zone !== targetZone) {
         if (targetZone === 'cemetery') {
           // Cemitério = mover para cemitério (não remover)
           const cemeteryPos = getCemeteryPosition(card.ownerId);
@@ -1702,7 +1865,7 @@ const Board = () => {
       }
     } else if (action === 'libraryPlace' && libraryPlace) {
       // Mover para library em posição específica
-      if (card.ownerId === playerId) {
+      if (canInteractWithCard(card.ownerId)) {
         const libraryPos = getLibraryPosition(card.ownerId);
         const position = libraryPos || { x: 0, y: 0 };
         
@@ -1714,10 +1877,10 @@ const Board = () => {
         changeCardZone(card.id, 'library', position, libraryPlace);
       }
     } else if (action === 'flip') {
-      // Virar carta
-      if (card.ownerId === playerId) {
+      // Transform card
+      if (canInteractWithCard(card.ownerId)) {
         const newFlipped = !card.flipped;
-        addEventLog('FLIP_CARD', `${newFlipped ? 'Virando' : 'Desvirando'} carta: ${card.name}`, card.id, card.name, {
+        addEventLog('FLIP_CARD', `Transform card: ${card.name}`, card.id, card.name, {
           flipped: newFlipped,
         });
         flipCard(card.id);
@@ -1740,11 +1903,11 @@ const Board = () => {
           counterType,
           position,
         });
-        createCounter(playerId, counterType, position);
+        createCounter(playerName, counterType, position);
       }
     } else {
       // Cemitério ou Remover - ambos deletam
-      if (card.ownerId === playerId) {
+      if (canInteractWithCard(card.ownerId)) {
         const actionName = action === 'cemetery' ? 'Cemitério' : 'Remover';
         addEventLog('REMOVE_CARD', `${actionName}: ${card.name}`, card.id, card.name, {
         zone: card.zone,
@@ -1815,11 +1978,16 @@ const Board = () => {
     }
   }, [contextMenu, boardContextMenu, contextSubmenu, contextSubmenuLibrary]);
 
-  const startLibraryDrag = (targetPlayerId: string, event: ReactPointerEvent) => {
-    if (targetPlayerId !== playerId) return;
+  const startLibraryDrag = (targetPlayerName: string, event: ReactPointerEvent) => {
+    if (targetPlayerName !== playerName) return;
     if ((event.target as HTMLElement).closest('button')) return;
     // Não iniciar drag com botão direito (button 2)
     if (event.button === 2) return;
+    // Se Shift estiver pressionado, não iniciar drag do stack (deixar o Library component lidar com carta individual)
+    if (event.shiftKey) {
+      console.log('[Board] startLibraryDrag: Shift pressionado, ignorando drag do stack');
+      return;
+    }
     event.preventDefault();
     if (!boardRef.current) return;
 
@@ -1828,7 +1996,7 @@ const Board = () => {
     libraryMovedRef.current = false;
 
     const rect = boardRef.current.getBoundingClientRect();
-    const libraryPos = getLibraryPosition(targetPlayerId);
+    const libraryPos = getLibraryPosition(targetPlayerName);
     if (!libraryPos) return;
 
     // Converter coordenadas do mouse baseado no modo
@@ -1838,7 +2006,7 @@ const Board = () => {
       const coords = convertMouseToSeparatedCoordinates(
         event.clientX,
         event.clientY,
-        targetPlayerId,
+        targetPlayerName,
         rect
       );
       if (!coords) {
@@ -1861,7 +2029,7 @@ const Board = () => {
 
     setLibraryMoved(false);
     setDraggingLibrary({
-      playerId: targetPlayerId,
+      playerName: targetPlayerName,
       offsetX,
       offsetY,
       startX: event.clientX,
@@ -1909,7 +2077,7 @@ const Board = () => {
         const coords = convertMouseToSeparatedCoordinates(
           event.clientX,
           event.clientY,
-          draggingLibrary.playerId,
+          draggingLibrary.playerName,
           rect
         );
         if (!coords) {
@@ -1929,7 +2097,7 @@ const Board = () => {
       const y = cursorY - draggingLibrary.offsetY;
 
       // Clamp dentro da área
-      const playerArea = getPlayerArea(draggingLibrary.playerId);
+      const playerArea = getPlayerArea(draggingLibrary.playerName);
       let clampedX = x;
       let clampedY = y;
       
@@ -1953,10 +2121,10 @@ const Board = () => {
         
         setLibraryPositions((prev) => ({
           ...prev,
-          [draggingLibrary.playerId]: relativePosition,
+          [draggingLibrary.playerName]: relativePosition,
         }));
 
-        moveLibrary(draggingLibrary.playerId, relativePosition, { x: clampedX, y: clampedY });
+        moveLibrary(draggingLibrary.playerName, relativePosition, { x: clampedX, y: clampedY });
       }
     };
 
@@ -1967,12 +2135,10 @@ const Board = () => {
       
       // Log movimento do library se realmente moveu
       if (actuallyMoved) {
-        const player = allPlayers.find(p => p.id === draggingLibrary.playerId);
-        const playerName = player?.name || draggingLibrary.playerId;
+        const playerName = draggingLibrary.playerName;
         addEventLog('MOVE_LIBRARY', `Movendo library: ${playerName}`, undefined, undefined, {
-          playerId: draggingLibrary.playerId,
           playerName,
-          position: libraryPositions[draggingLibrary.playerId],
+          position: libraryPositions[draggingLibrary.playerName],
         });
       }
       
@@ -1989,7 +2155,7 @@ const Board = () => {
         // - NÃO moveu (verificado com estado e ref)
         if (isLibraryStack && !isInteractive && draggingLibrary) {
           libraryClickExecutedRef.current = true;
-        handleLibraryClick(draggingLibrary.playerId);
+        handleLibraryClick(draggingLibrary.playerName);
           // Resetar flag após um pequeno delay
           setTimeout(() => {
             libraryClickExecutedRef.current = false;
@@ -2010,11 +2176,11 @@ const Board = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
     };
-  }, [draggingLibrary, moveLibrary, playerId, libraryMoved, viewMode, players]);
+  }, [draggingLibrary, moveLibrary, playerName, libraryMoved, viewMode, players]);
 
   // Sistema de drag para cemitério
-  const startCemeteryDrag = (targetPlayerId: string, event: ReactPointerEvent) => {
-    console.log('[Board] startCemeteryDrag chamado', { targetPlayerId, currentPlayerId: playerId, matches: targetPlayerId === playerId });
+  const startCemeteryDrag = (targetPlayerName: string, event: ReactPointerEvent) => {
+    console.log('[Board] startCemeteryDrag chamado', { targetPlayerName, currentPlayerName: playerName, matches: targetPlayerName === playerName });
     
     if ((event.target as HTMLElement).closest('button')) {
       console.log('[Board] Bloqueado - botão');
@@ -2036,13 +2202,13 @@ const Board = () => {
     cemeteryMovedRef.current = false;
 
     const rect = boardRef.current.getBoundingClientRect();
-    let cemeteryPos = getCemeteryPosition(targetPlayerId);
+    let cemeteryPos = getCemeteryPosition(targetPlayerName);
     
     // Se não encontrou posição, calcular uma posição padrão
     if (!cemeteryPos) {
       const CEMETERY_CARD_WIDTH = 100;
       const CEMETERY_CARD_HEIGHT = 140;
-      const playerIndex = allPlayers.findIndex((p) => p.id === targetPlayerId);
+      const playerIndex = allPlayers.findIndex((p) => p.name === targetPlayerName);
       const offsetX = playerIndex * (CEMETERY_CARD_WIDTH + 20);
       cemeteryPos = {
         x: rect.width / 2 - CEMETERY_CARD_WIDTH / 2 + offsetX,
@@ -2057,7 +2223,7 @@ const Board = () => {
       const coords = convertMouseToSeparatedCoordinates(
         event.clientX,
         event.clientY,
-        targetPlayerId,
+        targetPlayerName,
         rect
       );
       if (!coords) {
@@ -2081,7 +2247,7 @@ const Board = () => {
 
     setCemeteryMoved(false);
     setDraggingCemetery({
-      playerId: targetPlayerId,
+      playerName: targetPlayerName,
       offsetX,
       offsetY,
       startX: event.clientX,
@@ -2127,7 +2293,7 @@ const Board = () => {
         const coords = convertMouseToSeparatedCoordinates(
           event.clientX,
           event.clientY,
-          draggingCemetery.playerId,
+          draggingCemetery.playerName,
           rect
         );
         if (!coords) {
@@ -2149,7 +2315,7 @@ const Board = () => {
       // Clamp dentro da área - se estiver fora, limitar aos limites
       const CEMETERY_CARD_WIDTH = 100;
       const CEMETERY_CARD_HEIGHT = 140;
-      const playerArea = getPlayerArea(draggingCemetery.playerId);
+      const playerArea = getPlayerArea(draggingCemetery.playerName);
       const maxX = playerArea ? playerArea.x + playerArea.width - CEMETERY_CARD_WIDTH : rect.width - CEMETERY_CARD_WIDTH;
       const maxY = playerArea ? playerArea.y + playerArea.height - CEMETERY_CARD_HEIGHT : rect.height - CEMETERY_CARD_HEIGHT;
       const minX = playerArea ? playerArea.x : 0;
@@ -2161,23 +2327,29 @@ const Board = () => {
       // Atualizar posição local imediatamente para feedback visual
       setCemeteryPositions((prev) => ({
         ...prev,
-        [draggingCemetery.playerId]: { x: clampedX, y: clampedY },
+        [draggingCemetery.playerName]: { x: clampedX, y: clampedY },
       }));
 
-      // Sincronizar com os peers - isso vai atualizar o store e enviar para outros players
-      moveCemetery(draggingCemetery.playerId, { x: clampedX, y: clampedY });
+      // Sincronizar com os peers durante o drag (sem salvar evento)
+      // skipEventSave = true para não salvar eventos intermediários
+      moveCemetery(draggingCemetery.playerName, { x: clampedX, y: clampedY }, true);
     };
 
     const stopDrag = () => {
-      // Log movimento do cemetery se realmente moveu
-      if (cemeteryMovedRef.current) {
-        const player = players.find(p => p.id === draggingCemetery.playerId);
-        const playerName = player?.name || draggingCemetery.playerId;
-        addEventLog('MOVE_CEMETERY', `Movendo cemetery: ${playerName}`, undefined, undefined, {
-          playerId: draggingCemetery.playerId,
-          playerName,
-          position: cemeteryPositions[draggingCemetery.playerId],
-        });
+      // Se realmente moveu, salvar a posição final no banco
+      if (cemeteryMovedRef.current && draggingCemetery) {
+        const playerName = draggingCemetery.playerName;
+        const finalPosition = cemeteryPositions[playerName];
+        
+        if (finalPosition) {
+          // Salvar posição final no banco (skipEventSave = false)
+          moveCemetery(playerName, finalPosition, false);
+          
+          addEventLog('MOVE_CEMETERY', `Movendo cemetery: ${playerName}`, undefined, undefined, {
+            playerName,
+            position: finalPosition,
+          });
+        }
       }
       setDraggingCemetery(null);
       setCemeteryMoved(false);
@@ -2193,7 +2365,7 @@ const Board = () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
     };
-  }, [draggingCemetery, moveCemetery, playerId, cemeteryMoved, viewMode, players, getPlayerArea]);
+  }, [draggingCemetery, moveCemetery, playerName, cemeteryMoved, viewMode, players, getPlayerArea, cemeteryPositions, addEventLog]);
 
   // Rastrear posição do mouse para debug
   useEffect(() => {
@@ -2221,6 +2393,7 @@ const Board = () => {
       board,
       allPlayers,
       playerId,
+      playerName,
       battlefieldCards,
       libraryCards,
       cemeteryCards,
@@ -2242,6 +2415,7 @@ const Board = () => {
       changeCardZone,
       detectZoneAtPosition,
       reorderHandCard,
+      reorderLibraryCard,
       dragStartedFromHandRef,
       handCardPlacedRef,
       setContextMenu,
@@ -2258,6 +2432,7 @@ const Board = () => {
       moveCounter,
       modifyCounter,
       removeCounterToken,
+      flipCard,
     };
 
     if (viewMode === 'individual') {
@@ -2293,6 +2468,7 @@ const Board = () => {
     changeCardZone,
     detectZoneAtPosition,
     reorderHandCard,
+    reorderLibraryCard,
     dragStartedFromHandRef,
     handCardPlacedRef,
     setContextMenu,
@@ -2307,6 +2483,269 @@ const Board = () => {
     convertMouseToUnifiedCoordinates,
     selectedPlayerIndex,
   ]);
+
+  // Componente para exibir vida com dropdown de commander damage
+  const LifeDisplay = ({ player, isCurrentPlayer, changePlayerLife, changeCommanderDamage, allPlayers }: {
+    player: PlayerSummary;
+    isCurrentPlayer: boolean;
+    changePlayerLife: (playerId: string, delta: number) => void;
+    changeCommanderDamage: (targetPlayerId: string, attackerPlayerId: string, delta: number) => void;
+    allPlayers: PlayerSummary[];
+  }) => {
+    const [showCountersDropdown, setShowCountersDropdown] = useState(false);
+    const handleShowDropdown = () => setShowCountersDropdown(true);
+    const life = player.life ?? 40;
+    
+    // Obter outros jogadores (commander damage de cada um)
+    const otherPlayers = allPlayers.filter((p) => p.id !== player.id);
+
+    return (
+      <div
+        style={{
+          position: 'relative',
+          display: 'flex',
+          alignItems: 'center',
+          gap: '8px',
+          backgroundColor: isCurrentPlayer ? 'rgba(99, 102, 241, 0.2)' : 'rgba(15, 23, 42, 0.9)',
+          border: `1px solid ${isCurrentPlayer ? 'rgba(99, 102, 241, 0.5)' : 'rgba(148, 163, 184, 0.3)'}`,
+          borderRadius: '8px',
+          padding: '8px 12px',
+          minWidth: '120px',
+        }}
+        onMouseEnter={handleShowDropdown}
+        onMouseLeave={() => {
+          setShowCountersDropdown(false);
+        }}
+      >
+        <span
+          style={{
+            color: '#f8fafc',
+            fontSize: '14px',
+            fontWeight: '500',
+            minWidth: '80px',
+          }}
+        >
+          {player.name}
+        </span>
+        <div
+          style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '4px',
+          }}
+        >
+          <button
+            onClick={() => changePlayerLife(player.id, -10)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 1)';
+              handleShowDropdown();
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 0.8)';
+            }}
+            style={{
+              width: '32px',
+              height: '24px',
+              backgroundColor: 'rgba(220, 38, 38, 0.8)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+            }}
+          >
+            -10
+          </button>
+          <button
+            onClick={() => changePlayerLife(player.id, -1)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 1)';
+              handleShowDropdown();
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 0.8)';
+            }}
+            style={{
+              width: '24px',
+              height: '24px',
+              backgroundColor: 'rgba(220, 38, 38, 0.8)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '16px',
+              fontWeight: 'bold',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+            }}
+          >
+            −
+          </button>
+          <span
+            onMouseEnter={handleShowDropdown}
+            style={{
+              color: life <= 0 ? '#ef4444' : life <= 5 ? '#fbbf24' : '#f8fafc',
+              fontSize: '18px',
+              fontWeight: 'bold',
+              minWidth: '40px',
+              textAlign: 'center',
+            }}
+          >
+            {life}
+          </span>
+          <button
+            onClick={() => changePlayerLife(player.id, 1)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 1)';
+              handleShowDropdown();
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 0.8)';
+            }}
+            style={{
+              width: '24px',
+              height: '24px',
+              backgroundColor: 'rgba(34, 197, 94, 0.8)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '16px',
+              fontWeight: 'bold',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+            }}
+          >
+            +
+          </button>
+          <button
+            onClick={() => changePlayerLife(player.id, 10)}
+            onMouseEnter={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 1)';
+              handleShowDropdown();
+            }}
+            onMouseLeave={(e) => {
+              e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 0.8)';
+            }}
+            style={{
+              width: '32px',
+              height: '24px',
+              backgroundColor: 'rgba(34, 197, 94, 0.8)',
+              color: 'white',
+              border: 'none',
+              borderRadius: '4px',
+              cursor: 'pointer',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+              padding: 0,
+            }}
+          >
+            +10
+          </button>
+        </div>
+        
+        {/* Dropdown de commander damage */}
+        {showCountersDropdown && otherPlayers.length > 0 && (
+          <div
+            style={{
+              position: 'absolute',
+              top: '100%',
+              left: 0,
+              marginTop: '4px',
+              backgroundColor: 'rgba(15, 23, 42, 0.95)',
+              border: '1px solid rgba(148, 163, 184, 0.3)',
+              borderRadius: '8px',
+              padding: '8px',
+              minWidth: '200px',
+              zIndex: 10000,
+              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+              pointerEvents: 'auto',
+            }}
+            onMouseEnter={() => {
+              setShowCountersDropdown(true);
+            }}
+            onMouseLeave={() => {
+              setShowCountersDropdown(false);
+            }}
+          >
+            {otherPlayers.map((otherPlayer) => {
+              const commanderDamage = player.commanderDamage?.[otherPlayer.id] ?? 0;
+              
+              return (
+                <div
+                  key={otherPlayer.id}
+                  style={{
+                    display: 'flex',
+                    alignItems: 'center',
+                    justifyContent: 'space-between',
+                    gap: '8px',
+                    padding: '4px 0',
+                  }}
+                >
+                  <span style={{ color: '#f8fafc', fontSize: '12px' }}>
+                    {otherPlayer.name}:
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <button
+                      onClick={() => {
+                        changeCommanderDamage(player.id, otherPlayer.id, -1);
+                      }}
+                      style={{
+                        width: '20px',
+                        height: '20px',
+                        backgroundColor: 'rgba(220, 38, 38, 0.8)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      −
+                    </button>
+                    <span style={{ color: '#f8fafc', fontSize: '14px', minWidth: '30px', textAlign: 'center' }}>
+                      {commanderDamage}
+                    </span>
+                    <button
+                      onClick={() => {
+                        changeCommanderDamage(player.id, otherPlayer.id, 1);
+                      }}
+                      style={{
+                        width: '20px',
+                        height: '20px',
+                        backgroundColor: 'rgba(34, 197, 94, 0.8)',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '12px',
+                        fontWeight: 'bold',
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div className="board-container">
@@ -2326,104 +2765,16 @@ const Board = () => {
         }}
       >
         {allPlayers.map((player) => {
-          const life = player.life ?? 20;
           const isCurrentPlayer = player.id === playerId;
           return (
-            <div
+            <LifeDisplay
               key={player.id}
-              style={{
-                display: 'flex',
-                alignItems: 'center',
-                gap: '8px',
-                backgroundColor: isCurrentPlayer ? 'rgba(99, 102, 241, 0.2)' : 'rgba(15, 23, 42, 0.9)',
-                border: `1px solid ${isCurrentPlayer ? 'rgba(99, 102, 241, 0.5)' : 'rgba(148, 163, 184, 0.3)'}`,
-                borderRadius: '8px',
-                padding: '8px 12px',
-                minWidth: '120px',
-              }}
-            >
-              <span
-                style={{
-                  color: '#f8fafc',
-                  fontSize: '14px',
-                  fontWeight: '500',
-                  minWidth: '80px',
-                }}
-              >
-                {player.name}
-              </span>
-              <div
-                style={{
-                  display: 'flex',
-                  alignItems: 'center',
-                  gap: '4px',
-                }}
-              >
-                <button
-                  onClick={() => changePlayerLife(player.id, -1)}
-                  style={{
-                    width: '24px',
-                    height: '24px',
-                    backgroundColor: 'rgba(220, 38, 38, 0.8)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '16px',
-                    fontWeight: 'bold',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 0,
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 1)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 0.8)';
-                  }}
-                >
-                  −
-                </button>
-                <span
-                  style={{
-                    color: life <= 0 ? '#ef4444' : life <= 5 ? '#fbbf24' : '#f8fafc',
-                    fontSize: '18px',
-                    fontWeight: 'bold',
-                    minWidth: '40px',
-                    textAlign: 'center',
-                  }}
-                >
-                  {life}
-                </span>
-                <button
-                  onClick={() => changePlayerLife(player.id, 1)}
-                  style={{
-                    width: '24px',
-                    height: '24px',
-                    backgroundColor: 'rgba(34, 197, 94, 0.8)',
-                    color: 'white',
-                    border: 'none',
-                    borderRadius: '4px',
-                    cursor: 'pointer',
-                    fontSize: '16px',
-                    fontWeight: 'bold',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    padding: 0,
-                  }}
-                  onMouseEnter={(e) => {
-                    e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 1)';
-                  }}
-                  onMouseLeave={(e) => {
-                    e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 0.8)';
-                  }}
-                >
-                  +
-                </button>
-              </div>
-            </div>
+              player={player}
+              isCurrentPlayer={isCurrentPlayer}
+              changePlayerLife={changePlayerLife}
+              changeCommanderDamage={changeCommanderDamage}
+              allPlayers={allPlayers}
+            />
           );
         })}
       </div>
@@ -2491,7 +2842,7 @@ const Board = () => {
               onClick={() => {
                 setViewMode('individual');
                 // Começar com o player atual
-                const currentIndex = players.findIndex(p => p.id === playerId);
+                const currentIndex = players.findIndex(p => p.name === playerName);
                 setSelectedPlayerIndex(currentIndex >= 0 ? currentIndex : 0);
               }}
               style={{
@@ -2629,7 +2980,7 @@ const Board = () => {
                     <button
                       key={num}
                       onClick={() => {
-                        setSimulatePlayers(num);
+                        setSimulatedPlayers(num);
                         if (num === 0) setShowSimulatePanel(false);
                       }}
                       style={{
@@ -3216,7 +3567,7 @@ const Board = () => {
                 {draggingLibrary && (
                   <div style={{ marginTop: '4px', paddingLeft: '8px', borderLeft: '2px solid #555' }}>
                     <div><strong>Library Drag:</strong></div>
-                    <div>Player: {draggingLibrary.playerId}</div>
+                    <div>Player: {draggingLibrary.playerName}</div>
                     <div>Moveu: {libraryMoved ? '✅ Sim' : '❌ Não'}</div>
                   </div>
                 )}
@@ -3236,7 +3587,7 @@ const Board = () => {
                 <div>Total: {handCards.length} cartas</div>
                 {playerId && (
                   <div>
-                    Suas cartas: {handCards.filter(c => c.ownerId === playerId).length}
+                    Suas cartas: {handCards.filter(c => c.ownerId === playerName).length}
                   </div>
                 )}
               </div>
@@ -3264,7 +3615,7 @@ const Board = () => {
               data-context-menu
               onClick={(e) => e.stopPropagation()}
             >
-              {contextMenu.card.ownerId === playerId && (
+              {canInteractWithCard(contextMenu.card.ownerId) && (
                 <>
                   {/* Tap/Untap - apenas para battlefield */}
                   {contextMenu.card.zone === 'battlefield' && (
@@ -3293,7 +3644,7 @@ const Board = () => {
                   )}
                   
                   {/* Flip - apenas para battlefield */}
-                  {contextMenu.card.zone === 'battlefield' && contextMenu.card.ownerId === playerId && (
+                  {contextMenu.card.zone === 'battlefield' && canInteractWithCard(contextMenu.card.ownerId) && (
                     <>
                       <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
                       <button
@@ -3316,7 +3667,7 @@ const Board = () => {
                           e.currentTarget.style.backgroundColor = 'transparent';
                         }}
                       >
-                        🔄 {contextMenu.card.flipped ? 'Desvirar' : 'Virar'} Carta
+                        🔄 Transform Card
                       </button>
                     </>
                   )}
@@ -3374,6 +3725,107 @@ const Board = () => {
                     </button>
                   )}
                   
+                  {/* Cascade - apenas para library */}
+                  {contextMenu.card.zone === 'library' && (
+                    <>
+                      <button
+                        onClick={() => {
+                          setContextSubmenu(contextSubmenu === 'cascade' ? null : 'cascade');
+                          setContextSubmenuLibrary(false);
+                        }}
+                        style={{
+                          width: '100%',
+                          padding: '8px 12px',
+                          textAlign: 'left',
+                          background: 'transparent',
+                          border: 'none',
+                          color: '#f8fafc',
+                          cursor: 'pointer',
+                          borderRadius: '4px',
+                          fontSize: '14px',
+                          display: 'flex',
+                          justifyContent: 'space-between',
+                          alignItems: 'center',
+                        }}
+                        onMouseEnter={(e) => {
+                          e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                        }}
+                        onMouseLeave={(e) => {
+                          e.currentTarget.style.backgroundColor = 'transparent';
+                        }}
+                      >
+                        <span>🌊 Cascade</span>
+                        <span style={{ fontSize: '12px', opacity: 0.7 }}>▶</span>
+                      </button>
+                      
+                      {/* Submenu de Cascade */}
+                      {contextSubmenu === 'cascade' && (
+                        <div
+                          data-context-submenu
+                          onClick={(e) => e.stopPropagation()}
+                          style={{
+                            position: 'absolute',
+                            left: '100%',
+                            top: '0',
+                            marginLeft: '4px',
+                            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+                            border: '1px solid rgba(148, 163, 184, 0.3)',
+                            borderRadius: '8px',
+                            padding: '4px',
+                            minWidth: '200px',
+                            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+                            zIndex: 10003,
+                          }}
+                        >
+                          <button
+                            onClick={() => handleCascade(true)}
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              textAlign: 'left',
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#f8fafc',
+                              cursor: 'pointer',
+                              borderRadius: '4px',
+                              fontSize: '14px',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                          >
+                            👁️ Mostrar cada carta
+                          </button>
+                          <button
+                            onClick={() => handleCascade(false)}
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              textAlign: 'left',
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#f8fafc',
+                              cursor: 'pointer',
+                              borderRadius: '4px',
+                              fontSize: '14px',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                          >
+                            ⚡ Executar tudo de uma vez
+                          </button>
+                        </div>
+                      )}
+                    </>
+                  )}
+                  
                   {/* Mulligan - apenas para library */}
                   {contextMenu.card.zone === 'library' && (
                     <>
@@ -3385,7 +3837,7 @@ const Board = () => {
                               playerId,
                               cardsCount: playerHandCards.length,
                             });
-                            mulligan(playerId);
+                            mulligan(playerName);
                           }
                           setContextMenu(null);
                         }}
@@ -3715,8 +4167,8 @@ const Board = () => {
       </div>
       
       {/* Overlay de carta zoomada */}
-      {zoomedCard && boardRef.current && (() => {
-        const card = board.find((c) => c.id === zoomedCard);
+      {effectiveZoomedCard && boardRef.current && (() => {
+        const card = board.find((c) => c.id === effectiveZoomedCard);
         if (!card) return null;
         
         return (
@@ -3734,10 +4186,24 @@ const Board = () => {
               zIndex: 10000,
               cursor: 'pointer',
             }}
-            onClick={() => setZoomedCard(null)}
+            onClick={() => {
+              // Se for zoom sincronizado, usar função sincronizada, senão usar local
+              if (zoomedCardSync === effectiveZoomedCard) {
+                setZoomedCardSync(null);
+              } else {
+                setZoomedCard(null);
+              }
+            }}
             onPointerDown={(e) => {
               if (e.button === 1 || e.button === 0) {
-                setZoomedCard(null);
+                e.preventDefault();
+                e.stopPropagation();
+                // Se for zoom sincronizado, usar função sincronizada, senão usar local
+                if (zoomedCardSync === effectiveZoomedCard) {
+                  setZoomedCardSync(null);
+                } else {
+                  setZoomedCard(null);
+                }
               }
             }}
           >
@@ -3746,6 +4212,7 @@ const Board = () => {
                 transform: 'scale(2.5)',
                 transformOrigin: 'center',
                 pointerEvents: 'none',
+                position: 'relative',
               }}
             >
               <CardToken
@@ -3756,7 +4223,7 @@ const Board = () => {
                 ownerName={ownerName(card)}
                 width={CARD_WIDTH}
                 height={CARD_HEIGHT}
-                showBack={card.zone === 'library'}
+                showBack={false}
               />
             </div>
             </div>
@@ -3802,7 +4269,7 @@ const Board = () => {
                   counterType: 'numeral',
                   position,
                 });
-                createCounter(playerId, 'numeral', position);
+                createCounter(playerName, 'numeral', position);
               }
               setBoardContextMenu(null);
               setBoardContextMenuPosition(null);
@@ -3843,7 +4310,7 @@ const Board = () => {
                   counterType: 'plus',
                   position,
                 });
-                createCounter(playerId, 'plus', position);
+                createCounter(playerName, 'plus', position);
               }
               setBoardContextMenu(null);
               setBoardContextMenuPosition(null);

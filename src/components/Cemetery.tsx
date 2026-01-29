@@ -9,22 +9,22 @@ const CEMETERY_CARD_HEIGHT = 140;
 
 interface CemeteryProps {
   boardRef: React.RefObject<HTMLDivElement | null>;
-  playerId: string;
+  playerName: string;
   cemeteryCards: CardOnBoard[];
   players: Array<{ id: string; name: string }>;
-  getCemeteryPosition: (playerId: string) => Point | null;
+  getCemeteryPosition: (playerName: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
   onCemeteryContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
-  startCemeteryDrag: (playerId: string, event: ReactPointerEvent) => void;
-  draggingCemetery: { playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
+  startCemeteryDrag: (playerName: string, event: ReactPointerEvent) => void;
+  draggingCemetery: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   handleCardZoom?: (card: CardOnBoard, event: ReactPointerEvent) => void;
   zoomedCard?: string | null;
 }
 
 const Cemetery = ({
   boardRef,
-  playerId,
+  playerName,
   cemeteryCards,
   players,
   getCemeteryPosition,
@@ -36,11 +36,11 @@ const Cemetery = ({
   handleCardZoom,
   zoomedCard,
 }: CemeteryProps) => {
-  if (!boardRef.current || players.length === 0) return null;
+  if (!boardRef.current || players.length === 0 || !playerName) return null;
 
   // Agrupar cartas por owner
   const cemeteryByOwner = players.map((player) => {
-    const playerCemeteryCards = cemeteryCards.filter((c) => c.ownerId === player.id);
+    const playerCemeteryCards = cemeteryCards.filter((c) => c.ownerId === player.name);
     const sortedCemeteryCards = [...playerCemeteryCards].sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
     return { player, cards: sortedCemeteryCards };
   });
@@ -48,12 +48,12 @@ const Cemetery = ({
   return (
     <>
       {cemeteryByOwner.map(({ player, cards }) => {
-        const cemeteryPos = getCemeteryPosition(player.id);
+        const cemeteryPos = getCemeteryPosition(player.name);
         if (!cemeteryPos) return null;
 
         return (
           <div
-            key={player.id}
+            key={player.name}
             style={{
               position: 'absolute',
               left: `${cemeteryPos.x}px`,
@@ -80,27 +80,37 @@ const Cemetery = ({
               {player.name} - Cemitério
             </div>
             <div
-              className={`cemetery-stack ${player.id === playerId ? 'draggable' : ''}`}
+              className={`cemetery-stack ${player.name === playerName ? 'draggable' : ''}`}
               style={{
                 position: 'absolute',
                 left: '0px',
                 top: '20px',
                 width: `${CEMETERY_CARD_WIDTH}px`,
                 height: `${CEMETERY_CARD_HEIGHT}px`,
-                cursor: player.id === playerId ? (draggingCemetery && draggingCemetery.playerId === player.id ? 'grabbing' : 'grab') : 'pointer',
+                cursor: player.name === playerName ? (draggingCemetery && draggingCemetery.playerName === player.name ? 'grabbing' : 'grab') : 'pointer',
                 pointerEvents: 'auto',
               }}
             onPointerDown={(e) => {
               console.log('[Cemetery] onPointerDown', { 
-                playerId: player.id, 
-                currentPlayerId: playerId, 
-                matches: player.id === playerId,
+                cemeteryOwnerName: player.name, 
+                currentPlayerName: playerName, 
+                matches: player.name === playerName,
                 button: e.button,
                 shiftKey: e.shiftKey,
-                cardsLength: cards.length 
+                cardsLength: cards.length,
+                allPlayers: players.map(p => ({ id: p.id, name: p.name }))
               });
               
-              if (player.id === playerId) {
+              // Verificar se o player dono do cemitério é o player atual
+              // IMPORTANTE: Cada player só pode mover seu próprio cemitério
+              // O playerName passado como prop é o nome do player atual do store
+              // O player.name é o nome do dono do cemitério
+              const isOwner = player.name === playerName;
+              // Permitir que qualquer player possa mexer em players simulados
+              const isSimulated = player.id.startsWith('simulated-');
+              const canInteract = isOwner || isSimulated;
+              
+              if (canInteract) {
                 // Se for botão direito, não fazer nada (abre menu de contexto)
                 if (e.button === 2) return;
                 // Se for botão do meio, não fazer nada
@@ -112,11 +122,17 @@ const Cemetery = ({
                   startDrag(topCard, e);
                 } else {
                   // Caso contrário, arrastar o stack inteiro
-                  console.log('[Cemetery] Chamando startCemeteryDrag', player.id);
-                  startCemeteryDrag(player.id, e);
+                  console.log('[Cemetery] Chamando startCemeteryDrag', player.name);
+                  e.preventDefault();
+                  e.stopPropagation();
+                  startCemeteryDrag(player.name, e);
                 }
               } else {
-                console.log('[Cemetery] Bloqueado - não é o player atual');
+                console.log('[Cemetery] Bloqueado - não é o player atual', {
+                  cemeteryOwnerId: player.name,
+                  currentPlayerName: playerName,
+                  playersCount: players.length
+                });
               }
             }}
             onContextMenu={(e) => {
@@ -141,14 +157,23 @@ const Cemetery = ({
                       zIndex: 5 - index,
                     }}
                     onPointerDown={(e) => {
-                      if (index === 0 && card.ownerId === playerId) {
+                      // Só processar se for a primeira carta (topo do stack)
+                      if (index === 0 && card.ownerId === playerName) {
+                        // Se for botão do meio, fazer zoom
                         if (e.button === 1 && handleCardZoom) {
                           e.stopPropagation();
                           handleCardZoom(card, e);
-                        } else if (e.button === 0) {
+                        } 
+                        // Se for botão esquerdo E segurar Shift, arrastar carta individual
+                        else if (e.button === 0 && e.shiftKey) {
                           e.stopPropagation();
                           startDrag(card, e);
                         }
+                        // Caso contrário, deixar o evento propagar para o container (para arrastar o stack)
+                        // Não chamar stopPropagation aqui
+                      } else {
+                        // Para outras cartas, sempre bloquear propagação
+                        e.stopPropagation();
                       }
                     }}
                   >

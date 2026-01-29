@@ -5,12 +5,14 @@ import Library from './Library';
 import Cemetery from './Cemetery';
 import type { BoardViewProps } from './BoardTypes';
 import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT, CARD_WIDTH, CARD_HEIGHT } from './BoardTypes';
+import { useGameStore } from '../store/useGameStore';
 
 export const BoardSeparated = (props: BoardViewProps) => {
   const {
     boardRef,
     allPlayers,
     playerId,
+    playerName,
     battlefieldCards,
     libraryCards,
     cemeteryCards,
@@ -41,6 +43,10 @@ export const BoardSeparated = (props: BoardViewProps) => {
     moveCounter,
     modifyCounter,
     removeCounterToken,
+    getCemeteryPosition,
+    getLibraryPosition,
+    flipCard,
+    addEventLog,
   } = props;
 
   if (!boardRef.current) return null;
@@ -82,9 +88,9 @@ export const BoardSeparated = (props: BoardViewProps) => {
         // Calcular scale baseado na largura
         const scale = playerAreaWidth / BASE_BOARD_WIDTH;
 
-        const playerBattlefieldCards = battlefieldCards.filter(c => c.ownerId === player.id);
-        const playerLibraryCards = libraryCards.filter(c => c.ownerId === player.id);
-        const playerCemeteryCards = cemeteryCards.filter(c => c.ownerId === player.id);
+        const playerBattlefieldCards = battlefieldCards.filter(c => c.ownerId === player.name);
+        const playerLibraryCards = libraryCards.filter(c => c.ownerId === player.name);
+        const playerCemeteryCards = cemeteryCards.filter(c => c.ownerId === player.name);
 
         return (
           <div
@@ -166,11 +172,11 @@ export const BoardSeparated = (props: BoardViewProps) => {
 
                   <Library
                     boardRef={boardRef}
-                    playerId={playerId}
+                    playerName={playerName}
                     libraryCards={playerLibraryCards}
                     players={[player]}
-                    getPlayerArea={(id) => {
-                      if (id === player.id) {
+                    getPlayerArea={(ownerId) => {
+                      if (ownerId === player.name) {
                         return {
                           x: 0,
                           y: 0,
@@ -180,11 +186,11 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       }
                       return null;
                     }}
-                    getLibraryPosition={(id) => {
-                      if (id !== player.id) {
+                    getLibraryPosition={(name) => {
+                      if (name !== player.name) {
                         return null;
                       }
-                      const storePos = storeLibraryPositions[id];
+                      const storePos = storeLibraryPositions[name];
                       if (storePos) {
                         // Usar posição do store diretamente (em pixels)
                         return {
@@ -212,11 +218,11 @@ export const BoardSeparated = (props: BoardViewProps) => {
                     handleCardZoom={handleCardZoom}
                     zoomedCard={zoomedCard}
                     changeCardZone={changeCardZone}
-                    getCemeteryPosition={(id) => {
-                      if (id !== player.id) {
+                    getCemeteryPosition={(playerName) => {
+                      if (playerName !== player.name) {
                         return null;
                       }
-                      const storePos = storeCemeteryPositions[id];
+                      const storePos = storeCemeteryPositions[playerName];
                       if (storePos) {
                         return {
                           x: storePos.x,
@@ -229,18 +235,19 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       };
                     }}
                     board={board}
+                    reorderLibraryCard={props.reorderLibraryCard}
                   />
 
                   <Cemetery
                     boardRef={boardRef}
-                    playerId={playerId}
+                    playerName={playerName}
                     cemeteryCards={playerCemeteryCards}
                     players={[player]}
-                    getCemeteryPosition={(id) => {
-                      if (id !== player.id) {
+                    getCemeteryPosition={(playerName) => {
+                      if (playerName !== player.name) {
                         return null;
                       }
-                      const storePos = storeCemeteryPositions[id];
+                      const storePos = storeCemeteryPositions[playerName];
                       if (storePos) {
                         // Usar posição do store diretamente (em pixels)
                         return {
@@ -299,18 +306,56 @@ export const BoardSeparated = (props: BoardViewProps) => {
                           height={CARD_HEIGHT}
                           showBack={false}
                         />
+                        {/* Botão de flip embaixo da carta (apenas se tiver backImageUrl) */}
+                        {card.backImageUrl && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              e.preventDefault();
+                              props.flipCard(card.id);
+                            }}
+                            style={{
+                              position: 'absolute',
+                              bottom: '-24px',
+                              left: '50%',
+                              transform: 'translateX(-50%)',
+                              width: '40px',
+                              height: '32px',
+                              padding: '4px 6px',
+                              backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                              border: '1px solid rgba(148, 163, 184, 0.3)',
+                              borderRadius: '4px',
+                              color: '#f8fafc',
+                              cursor: 'pointer',
+                              fontSize: '18px',
+                              display: 'flex',
+                              alignItems: 'center',
+                              justifyContent: 'center',
+                              zIndex: 2,
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.3)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.9)';
+                            }}
+                            title="Transform"
+                          >
+                            🔄
+                          </button>
+                        )}
                       </div>
                     );
                   })}
 
                   {/* Renderizar contadores independentemente para este player */}
                   {counters
-                    .filter((counter) => counter.ownerId === player.id)
+                    .filter((counter) => counter.ownerId === player.name)
                     .map((counter) => (
                       <CounterToken
                         key={counter.id}
                         counter={counter}
-                        isCurrentPlayer={counter.ownerId === playerId}
+                        isCurrentPlayer={counter.ownerId === playerName}
                         onMove={moveCounter}
                         onModify={modifyCounter}
                         onRemove={removeCounterToken}
@@ -325,10 +370,11 @@ export const BoardSeparated = (props: BoardViewProps) => {
                     <Hand
                       boardRef={boardRef}
                       playerId={playerId}
+                      playerName={playerName}
                       board={board}
                       players={[player]}
-                      getPlayerArea={(id) => {
-                        if (id === player.id) {
+                      getPlayerArea={(ownerId) => {
+                        if (ownerId === player.name) {
                           return {
                             x: 0,
                             y: 0,
@@ -364,6 +410,8 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       moveCounter={moveCounter}
                       modifyCounter={modifyCounter}
                       removeCounterToken={removeCounterToken}
+                      getCemeteryPosition={getCemeteryPosition}
+                      getLibraryPosition={getLibraryPosition}
                     />
                   )}
                 </div>

@@ -4,6 +4,7 @@ export interface CardLookupResult {
   manaCost?: string;
   typeLine?: string;
   imageUrl?: string;
+  backImageUrl?: string; // Imagem do verso da carta (para cartas com duas faces)
   setName?: string;
 }
 

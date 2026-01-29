@@ -11,26 +11,26 @@ const LIBRARY_CARD_HEIGHT = 140;
 
 interface LibraryProps {
   boardRef: React.RefObject<HTMLDivElement | null>;
-  playerId: string;
+  playerName: string;
   libraryCards: CardOnBoard[];
   players: Array<{ id: string; name: string }>;
   getPlayerArea: (ownerId: string) => { x: number; y: number; width: number; height: number } | null;
   getLibraryPosition: (ownerId: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
   onLibraryContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
-  startLibraryDrag: (playerId: string, event: ReactPointerEvent) => void;
-  draggingLibrary: { playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
+  startLibraryDrag: (playerName: string, event: ReactPointerEvent) => void;
+  draggingLibrary: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   handleCardZoom?: (card: CardOnBoard, event: ReactPointerEvent) => void;
   zoomedCard?: string | null;
-  changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point) => void;
-  getCemeteryPosition?: (playerId: string) => Point | null;
+  changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  getCemeteryPosition?: (playerName: string) => Point | null;
   board?: CardOnBoard[];
 }
 
 const Library = ({
   boardRef,
-  playerId,
+  playerName,
   libraryCards,
   players,
   getPlayerArea,
@@ -45,19 +45,22 @@ const Library = ({
   changeCardZone,
   getCemeteryPosition,
   board = [],
+  reorderLibraryCard,
 }: LibraryProps) => {
   const [showLibrarySearch, setShowLibrarySearch] = useState(false);
   
-  if (!boardRef.current || players.length === 0) return null;
+  if (!boardRef.current || players.length === 0 || !playerName) return null;
 
   return (
     <>
       {players.map((player) => {
-        const area = getPlayerArea(player.id);
+        const area = getPlayerArea(player.name);
         if (!area) return null;
-        const isCurrentPlayer = player.id === playerId;
-        const libraryPos = getLibraryPosition(player.id);
-        const playerLibraryCards = libraryCards.filter((c) => c.ownerId === player.id);
+        const isCurrentPlayer = player.name === playerName;
+        const isSimulated = player.id.startsWith('simulated-');
+        const canInteract = isCurrentPlayer || isSimulated;
+        const libraryPos = getLibraryPosition(player.name);
+        const playerLibraryCards = libraryCards.filter((c) => c.ownerId === player.name);
         const sortedLibraryCards = [...playerLibraryCards].sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
 
         if (!libraryPos || sortedLibraryCards.length === 0) return null;
@@ -96,23 +99,39 @@ const Library = ({
                 position: 'absolute',
                 left: '0px',
                 top: '20px',
-                cursor: isCurrentPlayer ? (draggingLibrary?.playerId === player.id ? 'grabbing' : 'grab') : 'pointer',
+                cursor: isCurrentPlayer ? (draggingLibrary?.playerName === player.name ? 'grabbing' : 'grab') : 'pointer',
+                pointerEvents: 'auto',
               }}
             onPointerDown={(e) => {
-              if (isCurrentPlayer) {
+              console.log('[Library] onPointerDown container', { 
+                libraryOwnerName: player.name, 
+                currentPlayerName: playerName, 
+                matches: player.name === playerName,
+                button: e.button,
+                shiftKey: e.shiftKey,
+                cardsLength: sortedLibraryCards.length,
+                target: (e.target as HTMLElement).tagName,
+              });
+              
+              if (canInteract) {
                 // Se for botão direito, não fazer nada (abre menu de contexto)
                 if (e.button === 2) return;
                 // Se for botão do meio, não fazer nada
                 if (e.button === 1) return;
-                // Se segurar Shift, arrastar carta individual
+                // Se segurar Shift, arrastar carta individual para mudar de zona
                 if (e.shiftKey && sortedLibraryCards.length > 0) {
                   e.stopPropagation();
+                  e.preventDefault();
                   const topCard = sortedLibraryCards[0];
+                  console.log('[Library] Shift+arrastar carta individual do container:', topCard.name);
                   startDrag(topCard, e);
-                } else {
-                  // Caso contrário, arrastar o stack inteiro
-                  startLibraryDrag(player.id, e);
+                  return; // IMPORTANTE: retornar para não executar o código abaixo
                 }
+                // Caso contrário, arrastar o stack inteiro
+                console.log('[Library] Arrastando stack inteiro');
+                e.preventDefault();
+                e.stopPropagation();
+                startLibraryDrag(player.name, e);
               }
             }}
             onContextMenu={(e) => {
@@ -136,14 +155,33 @@ const Library = ({
                   zIndex: 5 - index,
                 }}
                 onPointerDown={(e) => {
+                  // Só processar se for a primeira carta (topo do stack)
                   if (index === 0 && isCurrentPlayer) {
+                    console.log('[Library] onPointerDown carta', {
+                      cardName: card.name,
+                      button: e.button,
+                      shiftKey: e.shiftKey,
+                    });
+                    // Se for botão do meio, fazer zoom
                     if (e.button === 1 && handleCardZoom) {
                       e.stopPropagation();
+                      e.preventDefault();
                       handleCardZoom(card, e);
-                    } else if (e.button === 0 && e.shiftKey) {
+                      return;
+                    } 
+                    // Se for botão esquerdo E segurar Shift, arrastar carta individual para mudar de zona
+                    if (e.button === 0 && e.shiftKey) {
                       e.stopPropagation();
+                      e.preventDefault();
+                      console.log('[Library] Shift+arrastar carta individual do stack:', card.name);
                       startDrag(card, e);
+                      return; // IMPORTANTE: retornar para não propagar
                     }
+                    // Caso contrário, deixar o evento propagar para o container (para arrastar o stack)
+                    // Não chamar stopPropagation nem preventDefault aqui
+                  } else {
+                    // Para outras cartas, sempre bloquear propagação
+                    e.stopPropagation();
                   }
                 }}
               >
@@ -195,10 +233,10 @@ const Library = ({
       {changeCardZone && getCemeteryPosition && (
         <LibrarySearch
           libraryCards={libraryCards}
-          playerId={playerId}
+          playerName={playerName}
           isOpen={showLibrarySearch}
           onClose={() => setShowLibrarySearch(false)}
-          onMoveCard={(cardId, zone) => {
+          onMoveCard={(cardId, zone, libraryPlace) => {
             const card = board.find((c) => c.id === cardId);
             if (!card || !changeCardZone) return;
             
@@ -211,7 +249,7 @@ const Library = ({
                 y: rect.height / 2 - 210 / 2,
               };
             } else if (zone === 'cemetery' && getCemeteryPosition) {
-              const cemeteryPos = getCemeteryPosition(playerId);
+              const cemeteryPos = getCemeteryPosition(playerName);
               if (cemeteryPos) {
                 position = cemeteryPos;
               }
@@ -219,9 +257,10 @@ const Library = ({
               position = { x: 0, y: 0 };
             }
             
-            changeCardZone(cardId, zone, position);
+            changeCardZone(cardId, zone, position, libraryPlace);
           }}
           ownerName={ownerName}
+          reorderLibraryCard={reorderLibraryCard}
         />
       )}
     </>

@@ -16,6 +16,8 @@ const RoomPanel = () => {
   const leaveRoom = useGameStore((state) => state.leaveRoom);
   const [localRoomId, setLocalRoomId] = useState(roomId);
   const [password, setPassword] = useState('');
+  const [copied, setCopied] = useState(false);
+  const roomPassword = useGameStore((state) => state.roomPassword);
 
   const inRoom = status !== 'idle';
   const canSubmit = Boolean(playerName && localRoomId);
@@ -32,13 +34,13 @@ const RoomPanel = () => {
 
   const onCreate = (event: FormEvent) => {
     event.preventDefault();
-    if (!playerName) return;
+    if (!playerName || !playerName.trim()) return;
     createRoom(localRoomId, password);
   };
 
   const onJoin = (event: FormEvent) => {
     event.preventDefault();
-    if (!playerName || !localRoomId) return;
+    if (!playerName || !playerName.trim() || !localRoomId) return;
     joinRoom(localRoomId, password);
   };
 
@@ -47,6 +49,24 @@ const RoomPanel = () => {
       setLocalRoomId(roomId);
     }
   }, [roomId]);
+
+  const copyRoomLink = () => {
+    if (!roomId || !playerName) return;
+    
+    const url = new URL(window.location.origin + window.location.pathname);
+    url.searchParams.set('roomId', roomId);
+    if (roomPassword) {
+      url.searchParams.set('password', roomPassword);
+    }
+    url.searchParams.set('playerName', playerName);
+    
+    navigator.clipboard.writeText(url.toString()).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch((err) => {
+      console.error('Erro ao copiar link:', err);
+    });
+  };
 
   return (
     <div className="panel">
@@ -64,7 +84,13 @@ const RoomPanel = () => {
           placeholder="Chandra"
           value={playerName}
           onChange={(event) => setPlayerName(event.target.value)}
+          disabled={inRoom}
         />
+        {inRoom && (
+          <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
+            Name cannot be changed while in a room
+          </div>
+        )}
       </label>
 
       <form className="room-form">
@@ -89,7 +115,7 @@ const RoomPanel = () => {
         </label>
 
         <div className="button-row">
-          <button className="primary" onClick={onCreate} disabled={!playerName}>
+          <button className="primary" onClick={onCreate} disabled={!playerName || !playerName.trim()}>
             Create
           </button>
           <button onClick={onJoin} disabled={!canSubmit}>
@@ -103,7 +129,17 @@ const RoomPanel = () => {
 
       {roomId && (
         <div className="hint">
-          Share your room id <code>{roomId}</code> with friends. Everyone must use the same password.
+          <div style={{ marginBottom: '8px' }}>
+            Share your room id <code>{roomId}</code> with friends. Everyone must use the same password.
+          </div>
+          <button
+            type="button"
+            className="primary"
+            onClick={copyRoomLink}
+            style={{ width: '100%', marginTop: '8px' }}
+          >
+            {copied ? '✓ Link copiado!' : '📋 Copiar link da sala'}
+          </button>
         </div>
       )}
 
@@ -111,8 +147,8 @@ const RoomPanel = () => {
         <h3>Players ({players.length})</h3>
         {players.length === 0 && <p className="muted">No one is connected yet.</p>}
         {players.map((player) => {
-          const isSelf = player.id === selfId;
-          const isRoomHost = player.id === players[0]?.id;
+          const isSelf = player.name === playerName;
+          const isRoomHost = player.name === players[0]?.name;
           return (
             <div key={player.id} className="player-pill">
               <span>{player.name}</span>

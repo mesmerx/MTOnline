@@ -10,6 +10,7 @@ export interface PlayerSummary {
   id: string;
   name: string;
   life?: number;
+  commanderDamage?: Record<string, number>; // Record<attackerPlayerId, damage>
 }
 
 export interface Point {
@@ -20,8 +21,9 @@ export interface Point {
 export interface CardOnBoard {
   id: string;
   name: string;
-  ownerId: string;
+  ownerId: string; // Nome do jogador dono da carta (não ID)
   imageUrl?: string;
+  backImageUrl?: string; // Imagem do verso da carta (para cartas com duas faces)
   oracleText?: string;
   manaCost?: string;
   typeLine?: string;
@@ -38,7 +40,7 @@ export type CounterType = 'numeral' | 'plus';
 
 export interface Counter {
   id: string;
-  ownerId: string; // ID do jogador que criou o contador
+  ownerId: string; // Nome do jogador que criou o contador (não ID)
   type: CounterType;
   position: Point; // Posição absoluta do contador no board
   // Para tipo 'numeral'
@@ -61,27 +63,32 @@ export interface NewCardPayload {
 type CardAction =
   | { kind: 'add'; card: CardOnBoard }
   | { kind: 'move'; id: string; position: Point }
-  | { kind: 'moveLibrary'; playerId: string; position: Point }
-  | { kind: 'moveCemetery'; playerId: string; position: Point }
+  | { kind: 'moveLibrary'; playerName: string; position: Point }
+  | { kind: 'moveCemetery'; playerName: string; position: Point }
   | { kind: 'toggleTap'; id: string }
   | { kind: 'remove'; id: string }
   | { kind: 'addToLibrary'; card: CardOnBoard }
-  | { kind: 'replaceLibrary'; cards: CardOnBoard[]; playerId: string }
-  | { kind: 'drawFromLibrary'; playerId: string }
+  | { kind: 'replaceLibrary'; cards: CardOnBoard[]; playerName: string }
+  | { kind: 'drawFromLibrary'; playerName: string }
   | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand' | 'cemetery'; position: Point; libraryPlace?: 'top' | 'bottom' | 'random' }
-  | { kind: 'shuffleLibrary'; playerId: string }
-  | { kind: 'mulligan'; playerId: string }
+  | { kind: 'reorderHand'; cardId: string; newIndex: number; playerName: string }
+  | { kind: 'reorderLibrary'; cardId: string; newIndex: number; playerName: string }
+  | { kind: 'shuffleLibrary'; playerName: string }
+  | { kind: 'mulligan'; playerName: string }
   | { kind: 'createCounter'; ownerId: string; type: CounterType; position: Point }
   | { kind: 'moveCounter'; counterId: string; position: Point }
   | { kind: 'modifyCounter'; counterId: string; delta?: number; deltaX?: number; deltaY?: number; setValue?: number; setX?: number; setY?: number }
   | { kind: 'removeCounterToken'; counterId: string }
   | { kind: 'setPlayerLife'; playerId: string; life: number }
-  | { kind: 'flipCard'; id: string };
+  | { kind: 'flipCard'; id: string }
+  | { kind: 'setSimulatedPlayers'; count: number }
+  | { kind: 'setZoomedCard'; cardId: string | null }
+  | { kind: 'setCommanderDamage'; targetPlayerId: string; attackerPlayerId: string; damage: number };
 
 type IncomingMessage =
-  | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string }
+  | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string; skipEventSave?: boolean }
   | { type: 'BOARD_STATE'; board: CardOnBoard[]; counters?: Counter[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
-  | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
+  | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
   | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
   | { type: 'ERROR'; message: string };
 
@@ -102,11 +109,18 @@ const buildCoturnServers = (turnUrl: string, username?: string, credential?: str
   if (stunUrl) {
     servers.push({ urls: stunUrl });
   }
-  servers.push({
-    urls: turnUrl,
-    username,
-    credential,
-  });
+  
+  // Validar que username e credential estão presentes e não vazios antes de adicionar TURN
+  if (username && credential && username.trim() !== '' && credential.trim() !== '') {
+    servers.push({
+      urls: turnUrl,
+      username,
+      credential,
+    });
+  } else {
+    console.warn('[TURN] Ignorando servidor TURN sem credenciais válidas:', turnUrl);
+  }
+  
   return servers;
 };
 
@@ -119,6 +133,7 @@ const fetchTurnCredentials = async (): Promise<{ username: string; credential: s
   const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
   
   try {
+    const startTime = performance.now();
     console.log('[TURN] Buscando credenciais da API...');
     const response = await fetch(`${API_URL}/api/turn-credentials`, {
       credentials: 'include',
@@ -128,11 +143,15 @@ const fetchTurnCredentials = async (): Promise<{ username: string; credential: s
       throw new Error(`HTTP ${response.status}: ${response.statusText}`);
     }
     
+    const fetchTime = performance.now() - startTime;
     const data = await response.json();
+    const totalTime = performance.now() - startTime;
     console.log('[TURN] Credenciais recebidas da API:', {
       username: data.username,
       credential: data.credential,
       urls: data.urls,
+      fetchTime: `${fetchTime.toFixed(2)}ms`,
+      totalTime: `${totalTime.toFixed(2)}ms`,
     });
     
     // Cache válido por 50 minutos (menos que 1 hora para garantir validade)
@@ -244,17 +263,24 @@ const parseIceServersFromEnv = (): RTCIceServer[] => {
     const { username, credential, urls } = turnCredentialsCache;
     console.log('[TURN] Adicionando servidores externos do cache:', { username, urls });
     
-    urls.forEach((url) => {
-      if (url.startsWith('turn:') || url.startsWith('turns:')) {
-        servers.push({
-          urls: url,
-          username,
-          credential,
-        });
-      } else if (url.startsWith('stun:') || url.startsWith('stuns:')) {
-        servers.push({ urls: url });
-      }
-    });
+    if (urls && Array.isArray(urls)) {
+      urls.forEach((url) => {
+        if (url.startsWith('turn:') || url.startsWith('turns:')) {
+          // Só adicionar se username e credential estiverem presentes e não vazios
+          if (username && credential && username.trim() !== '' && credential.trim() !== '') {
+            servers.push({
+              urls: url,
+              username,
+              credential,
+            });
+          } else {
+            console.warn('[TURN] Ignorando servidor TURN sem credenciais válidas:', url);
+          }
+        } else if (url.startsWith('stun:') || url.startsWith('stuns:')) {
+          servers.push({ urls: url });
+        }
+      });
+    }
   } else {
     // Se não há cache, verificar se já há uma busca em andamento (pré-carregamento)
     if (!turnCredentialsPromise) {
@@ -283,7 +309,10 @@ const resolvePeerEndpoint = (): Omit<PeerJSOption, 'config'> => {
   const port = Number(rawPort);
   const host = env.VITE_PEER_HOST || defaultHost;
   const secure = typeof env.VITE_PEER_SECURE === 'string' ? env.VITE_PEER_SECURE === 'true' : isHttps;
-  const path = env.VITE_PEER_PATH || '/peerjs';
+  // Remover aspas e espaços do path se vier do .env
+  // O path deve corresponder exatamente ao path configurado no servidor PeerJS
+  const rawPath = env.VITE_PEER_PATH || '/peerjs';
+  const path = typeof rawPath === 'string' ? rawPath.replace(/^["']|["']$/g, '').trim() : '/peerjs';
 
   const result: Omit<PeerJSOption, 'config'> = {
     host,
@@ -294,6 +323,19 @@ const resolvePeerEndpoint = (): Omit<PeerJSOption, 'config'> => {
   if (Number.isFinite(port)) {
     result.port = port;
   }
+
+  console.log('[PeerJS] Configurando endpoint:', {
+    host,
+    port,
+    path,
+    secure,
+    env: {
+      VITE_PEER_HOST: env.VITE_PEER_HOST,
+      VITE_PEER_PORT: env.VITE_PEER_PORT,
+      VITE_PEER_PATH: env.VITE_PEER_PATH,
+      VITE_PEER_SECURE: env.VITE_PEER_SECURE,
+    },
+  });
 
   return result;
 };
@@ -306,8 +348,6 @@ interface TurnConfig {
 }
 
 const TURN_STORAGE_KEY = 'mtonline.turnConfig';
-const SESSION_STORAGE_KEY = 'mtonline.session';
-
 const defaultTurnConfig = (): TurnConfig => ({
   mode: 'env',
   url: '',
@@ -334,46 +374,253 @@ const persistTurnConfig = (config: TurnConfig) => {
   window.localStorage.setItem(TURN_STORAGE_KEY, JSON.stringify(config));
 };
 
-interface SessionState {
-  playerId: string;
-  playerName: string;
-  roomId: string;
-  roomPassword: string;
-  board: CardOnBoard[];
-  players: PlayerSummary[];
-  status: RoomStatus;
-  isHost: boolean;
-}
+// Funções para event sourcing - salvar e carregar eventos
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
-const loadSession = (): Partial<SessionState> | null => {
-  if (typeof window === 'undefined') return null;
+// Salvar um evento no backend
+const saveEvent = async (roomId: string, eventType: string, eventData: CardAction, playerId?: string, playerName?: string): Promise<void> => {
+  if (!roomId) return;
+  
   try {
-    const raw = window.localStorage.getItem(SESSION_STORAGE_KEY);
-    if (!raw) return null;
-    return JSON.parse(raw) as SessionState;
-  } catch {
+    await fetch(`${API_URL}/api/rooms/${roomId}/events`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        eventType,
+        eventData,
+        playerId,
+        playerName,
+      }),
+    });
+  } catch (error) {
+    console.warn('[Store] Erro ao salvar evento:', error);
+  }
+};
+
+// Carregar eventos e fazer replay para reconstruir o estado
+const loadRoomStateFromEvents = async (roomId: string): Promise<{
+  board: CardOnBoard[];
+  counters: Counter[];
+  players: PlayerSummary[];
+  cemeteryPositions: Record<string, Point>;
+  libraryPositions: Record<string, Point>;
+} | null> => {
+  if (!roomId) return null;
+  
+  try {
+    const response = await fetch(`${API_URL}/api/rooms/${roomId}/events`, {
+      credentials: 'include',
+    });
+    if (!response.ok) return null;
+    
+    const { events } = await response.json();
+    if (!events || events.length === 0) {
+      // Se não houver eventos, tentar carregar estado antigo (backward compatibility)
+      const stateResponse = await fetch(`${API_URL}/api/rooms/${roomId}/state`, {
+        credentials: 'include',
+      });
+      if (stateResponse.ok) {
+        return await stateResponse.json();
+      }
+      return null;
+    }
+    
+    // Replay dos eventos para reconstruir o estado
+    let board: CardOnBoard[] = [];
+    let counters: Counter[] = [];
+    let players: PlayerSummary[] = [];
+    let zoomedCard: string | null = null;
+    let cemeteryPositions: Record<string, Point> = {};
+    let libraryPositions: Record<string, Point> = {};
+    
+    // Funções auxiliares para aplicar ações (simplificadas para replay)
+    const applyCardActionReplay = (currentBoard: CardOnBoard[], action: CardAction): CardOnBoard[] => {
+      switch (action.kind) {
+        case 'add':
+          return [...currentBoard, action.card];
+        case 'move':
+          return currentBoard.map((c) => (c.id === action.id ? { ...c, position: action.position } : c));
+        case 'toggleTap':
+          return currentBoard.map((c) => (c.id === action.id ? { ...c, tapped: !c.tapped } : c));
+        case 'remove':
+          return currentBoard.filter((c) => c.id !== action.id);
+        case 'addToLibrary':
+          return [...currentBoard, { ...action.card, zone: 'library' }];
+        case 'replaceLibrary':
+          return currentBoard.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerName)).concat(action.cards);
+        case 'drawFromLibrary':
+          const libraryCards = currentBoard.filter((c) => c.zone === 'library' && c.ownerId === action.playerName);
+          if (libraryCards.length > 0) {
+            const drawnCard = libraryCards[libraryCards.length - 1];
+            return currentBoard.map((c) => (c.id === drawnCard.id ? { ...c, zone: 'hand' } : c));
+          }
+          return currentBoard;
+        case 'changeZone':
+          return currentBoard.map((c) => (c.id === action.id ? { ...c, zone: action.zone, position: action.position } : c));
+        case 'reorderHand': {
+          const card = currentBoard.find((c) => c.id === action.cardId);
+          if (!card || card.zone !== 'hand' || card.ownerId !== action.playerName) return currentBoard;
+          
+          const handCards = currentBoard
+            .filter((c) => c.zone === 'hand' && c.ownerId === action.playerName)
+            .sort((a, b) => {
+              if (a.handIndex !== undefined && b.handIndex !== undefined) {
+                return a.handIndex - b.handIndex;
+              }
+              if (a.handIndex !== undefined) return -1;
+              if (b.handIndex !== undefined) return 1;
+              return a.id.localeCompare(b.id);
+            });
+          
+          const oldIndex = handCards.findIndex((c) => c.id === action.cardId);
+          if (oldIndex === -1) return currentBoard;
+          
+          const reordered = [...handCards];
+          const [movedCard] = reordered.splice(oldIndex, 1);
+          reordered.splice(action.newIndex, 0, movedCard);
+          
+          const updatedHandCards = reordered.map((c, idx) => ({
+            ...c,
+            handIndex: idx,
+          }));
+          
+          const otherCards = currentBoard.filter((c) => !(c.zone === 'hand' && c.ownerId === action.playerName));
+          return [...otherCards, ...updatedHandCards];
+        }
+        case 'reorderLibrary': {
+          const card = currentBoard.find((c) => c.id === action.cardId);
+          if (!card || card.zone !== 'library' || card.ownerId !== action.playerName) return currentBoard;
+          
+          const libraryCards = currentBoard
+            .filter((c) => c.zone === 'library' && c.ownerId === action.playerName)
+            .sort((a, b) => {
+              if (a.stackIndex !== undefined && b.stackIndex !== undefined) {
+                return (b.stackIndex ?? 0) - (a.stackIndex ?? 0); // Ordem reversa (topo primeiro)
+              }
+              if (a.stackIndex !== undefined) return -1;
+              if (b.stackIndex !== undefined) return 1;
+              return a.id.localeCompare(b.id);
+            });
+          
+          const oldIndex = libraryCards.findIndex((c) => c.id === action.cardId);
+          if (oldIndex === -1) return currentBoard;
+          
+          const reordered = [...libraryCards];
+          const [movedCard] = reordered.splice(oldIndex, 1);
+          reordered.splice(action.newIndex, 0, movedCard);
+          
+          // Atualizar stackIndex (ordem reversa - maior índice = topo)
+          const updatedLibraryCards = reordered.map((c, idx) => ({
+            ...c,
+            stackIndex: reordered.length - 1 - idx,
+          }));
+          
+          const otherCards = currentBoard.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerName));
+          return [...otherCards, ...updatedLibraryCards];
+        }
+        case 'shuffleLibrary':
+          // Shuffle não precisa ser replayed exatamente, apenas manter as cartas
+          return currentBoard;
+        case 'mulligan':
+          // Mulligan remove cartas da mão, mas não vamos reimplementar a lógica completa aqui
+          return currentBoard;
+        case 'flipCard':
+          return currentBoard.map((c) => (c.id === action.id ? { ...c, flipped: !c.flipped } : c));
+        default:
+          return currentBoard;
+      }
+    };
+    
+    const applyCounterActionReplay = (currentCounters: Counter[], action: CardAction): Counter[] => {
+      switch (action.kind) {
+        case 'createCounter':
+          return [...currentCounters, {
+            id: `counter-${Date.now()}-${Math.random()}`,
+            ownerId: action.ownerId,
+            type: action.type,
+            position: action.position,
+            value: 1,
+          }];
+        case 'moveCounter':
+          return currentCounters.map((c) => (c.id === action.counterId ? { ...c, position: action.position } : c));
+        case 'modifyCounter':
+          return currentCounters.map((c) => {
+            if (c.id !== action.counterId) return c;
+            const updated = { ...c };
+            if (action.setValue !== undefined) updated.value = action.setValue;
+            else if (action.delta !== undefined) updated.value = (updated.value || 1) + action.delta;
+            if (action.setX !== undefined) updated.position = { ...updated.position, x: action.setX };
+            else if (action.deltaX !== undefined) updated.position = { ...updated.position, x: updated.position.x + action.deltaX };
+            if (action.setY !== undefined) updated.position = { ...updated.position, y: action.setY };
+            else if (action.deltaY !== undefined) updated.position = { ...updated.position, y: updated.position.y + action.deltaY };
+            return updated;
+          });
+        case 'removeCounterToken':
+          return currentCounters.filter((c) => c.id !== action.counterId);
+        default:
+          return currentCounters;
+      }
+    };
+    
+    // Replay de cada evento
+    for (const event of events) {
+      const action = event.eventData as CardAction;
+      
+      // Aplicar ação no board
+      board = applyCardActionReplay(board, action);
+      
+      // Aplicar ação nos counters
+      counters = applyCounterActionReplay(counters, action);
+      
+      // Atualizar posições de library e cemetery
+      if (action.kind === 'moveCemetery' && 'playerName' in action && 'position' in action) {
+        cemeteryPositions = {
+          ...cemeteryPositions,
+          [action.playerName]: action.position,
+        };
+      } else if (action.kind === 'moveLibrary' && 'playerName' in action && 'position' in action) {
+        libraryPositions = {
+          ...libraryPositions,
+          [action.playerName]: action.position,
+        };
+      }
+      
+      // Atualizar players (setPlayerLife)
+      if (action.kind === 'setPlayerLife' && 'playerId' in action && 'life' in action) {
+        const existingPlayer = players.find((p) => p.id === action.playerId);
+        if (existingPlayer) {
+          players = players.map((p) => (p.id === action.playerId ? { ...p, life: action.life } : p));
+        }
+      }
+      
+      // Atualizar commander damage
+      if (action.kind === 'setCommanderDamage' && 'targetPlayerId' in action && 'attackerPlayerId' in action && 'damage' in action) {
+        players = players.map((p) => {
+          if (p.id === action.targetPlayerId) {
+            const commanderDamage = { ...(p.commanderDamage || {}), [action.attackerPlayerId]: action.damage };
+            return { ...p, commanderDamage };
+          }
+          return p;
+        });
+      }
+    }
+    
+    return {
+      board,
+      counters,
+      players,
+      cemeteryPositions,
+      libraryPositions,
+    };
+  } catch (error) {
+    console.warn('[Store] Erro ao carregar eventos do room:', error);
     return null;
   }
 };
 
-const saveSession = (state: Partial<GameStore>) => {
-  if (typeof window === 'undefined') return;
-  try {
-    const session: SessionState = {
-      playerId: state.playerId || '',
-      playerName: state.playerName || '',
-      roomId: state.roomId || '',
-      roomPassword: state.roomPassword || '',
-      board: state.board || [],
-      players: state.players || [],
-      status: state.status || 'idle',
-      isHost: state.isHost || false,
-    };
-    window.localStorage.setItem(SESSION_STORAGE_KEY, JSON.stringify(session));
-  } catch (error) {
-    debugLog('failed to save session', error);
-  }
-};
+// Alias para manter compatibilidade
+const loadRoomState = loadRoomStateFromEvents;
 
 interface User {
   id: number;
@@ -394,6 +641,7 @@ interface GameStore {
   players: PlayerSummary[];
   cemeteryPositions: Record<string, Point>;
   libraryPositions: Record<string, Point>;
+  zoomedCard: string | null;
   savedDecks: SavedDeck[];
   turnConfig: TurnConfig;
   peer?: Peer;
@@ -418,28 +666,34 @@ interface GameStore {
   replaceLibrary: (cards: NewCardPayload[]) => void;
   drawFromLibrary: () => void;
   moveCard: (cardId: string, position: Point) => void;
-  moveLibrary: (playerId: string, relativePosition: Point, absolutePosition: Point) => void;
-  moveCemetery: (playerId: string, position: Point) => void;
+  moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point) => void;
+  moveCemetery: (playerName: string, position: Point) => void;
   toggleTap: (cardId: string) => void;
   removeCard: (cardId: string) => void;
   changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   reorderHandCard: (cardId: string, newIndex: number) => void;
-  shuffleLibrary: (playerId: string) => void;
-  mulligan: (playerId: string) => void;
+  reorderLibraryCard: (cardId: string, newIndex: number) => void;
+  shuffleLibrary: (playerName: string) => void;
+  mulligan: (playerName: string) => void;
   createCounter: (ownerId: string, type: CounterType, position: Point) => void;
   moveCounter: (counterId: string, position: Point) => void;
   modifyCounter: (counterId: string, delta?: number, deltaX?: number, deltaY?: number, setValue?: number, setX?: number, setY?: number) => void;
   removeCounterToken: (counterId: string) => void;
+  flipCard: (cardId: string) => void;
   setPlayerLife: (playerId: string, life: number) => void;
   changePlayerLife: (playerId: string, delta: number) => void;
+  setCommanderDamage: (targetPlayerId: string, attackerPlayerId: string, damage: number) => void;
+  changeCommanderDamage: (targetPlayerId: string, attackerPlayerId: string, delta: number) => void;
   resetBoard: () => void;
+  setSimulatedPlayers: (count: number) => void;
   setPeerEventLogger: (logger: ((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => void) | null) => void;
+  setZoomedCard: (cardId: string | null) => void;
 }
 
 // Função helper para recalcular posições das cartas na mão
-const recalculateHandPositions = (board: CardOnBoard[], playerId: string): CardOnBoard[] => {
+const recalculateHandPositions = (board: CardOnBoard[], playerName: string): CardOnBoard[] => {
   const handCards = board
-    .filter((c) => c.zone === 'hand' && c.ownerId === playerId)
+    .filter((c) => c.zone === 'hand' && c.ownerId === playerName)
     .sort((a, b) => {
       // Ordenar por handIndex se disponível, senão por ID para manter ordem consistente
       if (a.handIndex !== undefined && b.handIndex !== undefined) {
@@ -460,7 +714,7 @@ const recalculateHandPositions = (board: CardOnBoard[], playerId: string): CardO
   }));
   
   // Atualizar o board com as cartas reordenadas
-  const otherCards = board.filter((c) => !(c.zone === 'hand' && c.ownerId === playerId));
+  const otherCards = board.filter((c) => !(c.zone === 'hand' && c.ownerId === playerName));
   return [...otherCards, ...updatedCards];
 };
 
@@ -487,7 +741,7 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       // Atualizar posição do library do player
       // Apenas as top 5 cartas visíveis precisam ter posição trackeada
       // As outras cartas não precisam de posição (são apenas dados)
-      const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === action.playerId);
+      const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === action.playerName);
       if (libraryCards.length === 0) return board;
       
       // Ordenar por stackIndex para pegar as top 5 cartas (maiores índices)
@@ -507,7 +761,7 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       const top5CardIds = new Set(top5Cards.map(c => c.id));
       
       return board.map((card) => {
-        if (card.zone === 'library' && card.ownerId === action.playerId) {
+        if (card.zone === 'library' && card.ownerId === action.playerName) {
           // Apenas atualizar posição das top 5 cartas visíveis
           if (top5CardIds.has(card.id)) {
             const cardCurrentX = card.position.x || 0;
@@ -530,7 +784,7 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       // Atualizar posição do cemitério do player
       // Apenas as top 5 cartas visíveis precisam ter posição trackeada
       // As outras cartas não precisam de posição (são apenas dados)
-      const cemeteryCards = board.filter((c) => c.zone === 'cemetery' && c.ownerId === action.playerId);
+      const cemeteryCards = board.filter((c) => c.zone === 'cemetery' && c.ownerId === action.playerName);
       if (cemeteryCards.length === 0) return board;
       
       // Ordenar por stackIndex para pegar as top 5 cartas (maiores índices)
@@ -551,7 +805,7 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       const top5CardIds = new Set(top5Cards.map(c => c.id));
       
       return board.map((card) => {
-        if (card.zone === 'cemetery' && card.ownerId === action.playerId) {
+        if (card.zone === 'cemetery' && card.ownerId === action.playerName) {
           // Apenas atualizar posição das top 5 cartas visíveis
           if (top5CardIds.has(card.id)) {
             const cardIndex = top5Cards.findIndex((c) => c.id === card.id);
@@ -756,6 +1010,74 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       
       return newBoard;
     }
+    case 'reorderHand': {
+      const card = board.find((c) => c.id === action.cardId);
+      if (!card || card.zone !== 'hand' || card.ownerId !== action.playerName) return board;
+      
+      // Filtrar e ordenar cartas da mão do player
+      const handCards = board
+        .filter((c) => c.zone === 'hand' && c.ownerId === action.playerName)
+        .sort((a, b) => {
+          if (a.handIndex !== undefined && b.handIndex !== undefined) {
+            return a.handIndex - b.handIndex;
+          }
+          if (a.handIndex !== undefined) return -1;
+          if (b.handIndex !== undefined) return 1;
+          return a.id.localeCompare(b.id);
+        });
+      
+      const oldIndex = handCards.findIndex((c) => c.id === action.cardId);
+      if (oldIndex === -1) return board;
+      
+      // Reordenar o array
+      const reordered = [...handCards];
+      const [movedCard] = reordered.splice(oldIndex, 1);
+      reordered.splice(action.newIndex, 0, movedCard);
+      
+      // Atualizar handIndex de todas as cartas
+      const updatedHandCards = reordered.map((c, idx) => ({
+        ...c,
+        handIndex: idx,
+      }));
+      
+      // Combinar com outras cartas
+      const otherCards = board.filter((c) => !(c.zone === 'hand' && c.ownerId === action.playerName));
+      return [...otherCards, ...updatedHandCards];
+    }
+    case 'reorderLibrary': {
+      const card = board.find((c) => c.id === action.cardId);
+      if (!card || card.zone !== 'library' || card.ownerId !== action.playerName) return board;
+      
+      // Filtrar e ordenar cartas da library do player (ordem reversa - maior índice = topo)
+      const libraryCards = board
+        .filter((c) => c.zone === 'library' && c.ownerId === action.playerName)
+        .sort((a, b) => {
+          if (a.stackIndex !== undefined && b.stackIndex !== undefined) {
+            return (b.stackIndex ?? 0) - (a.stackIndex ?? 0);
+          }
+          if (a.stackIndex !== undefined) return -1;
+          if (b.stackIndex !== undefined) return 1;
+          return a.id.localeCompare(b.id);
+        });
+      
+      const oldIndex = libraryCards.findIndex((c) => c.id === action.cardId);
+      if (oldIndex === -1) return board;
+      
+      // Reordenar o array
+      const reordered = [...libraryCards];
+      const [movedCard] = reordered.splice(oldIndex, 1);
+      reordered.splice(action.newIndex, 0, movedCard);
+      
+      // Atualizar stackIndex (ordem reversa - maior índice = topo)
+      const updatedLibraryCards = reordered.map((c, idx) => ({
+        ...c,
+        stackIndex: reordered.length - 1 - idx,
+      }));
+      
+      // Combinar com outras cartas
+      const otherCards = board.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerName));
+      return [...otherCards, ...updatedLibraryCards];
+    }
     case 'remove': {
       const removedCard = board.find((c) => c.id === action.id);
       newBoard = board.filter((card) => card.id !== action.id);
@@ -779,12 +1101,12 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
     }
     case 'replaceLibrary': {
       // Remove todas as cartas do library do player e adiciona as novas
-      const filtered = board.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerId));
+      const filtered = board.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerName));
       return [...filtered, ...action.cards];
     }
     case 'drawFromLibrary': {
       const libraryCards = board
-        .filter((c) => c.zone === 'library' && c.ownerId === action.playerId)
+        .filter((c) => c.zone === 'library' && c.ownerId === action.playerName)
         .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0)); // Topo é o maior índice
       
       if (libraryCards.length === 0) return board;
@@ -798,7 +1120,7 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       
       // Mover carta do topo para a mão
       // Obter o maior handIndex atual para adicionar a nova carta no final
-      const currentHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === action.playerId);
+      const currentHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === action.playerName);
       const maxHandIndex = currentHandCards.reduce((max, card) => 
         Math.max(max, card.handIndex ?? -1), -1
       );
@@ -823,7 +1145,7 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
         const newTop5CardIds = new Set(newTop5Cards.map(c => c.id));
         
         newBoard = newBoard.map((card) => {
-          if (card.zone === 'library' && card.ownerId === action.playerId && newTop5CardIds.has(card.id)) {
+          if (card.zone === 'library' && card.ownerId === action.playerName && newTop5CardIds.has(card.id)) {
             // A nova carta do topo (que era a segunda) herda a posição do stack
             if (card.id === newTop5Cards[0].id) {
               return {
@@ -848,12 +1170,12 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       }
       
       // Recalcular posições de todas as cartas na mão
-      newBoard = recalculateHandPositions(newBoard, action.playerId);
+      newBoard = recalculateHandPositions(newBoard, action.playerName);
       return newBoard;
     }
     case 'shuffleLibrary': {
       const libraryCards = board
-        .filter((c) => c.zone === 'library' && c.ownerId === action.playerId)
+        .filter((c) => c.zone === 'library' && c.ownerId === action.playerName)
         .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
       
       if (libraryCards.length === 0) return board;
@@ -867,24 +1189,24 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
         stackIndex: libraryCards.length - 1 - index, // Inverter para manter ordem (maior índice = topo)
       }));
       
-      const otherCards = board.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerId));
+      const otherCards = board.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerName));
       return [...otherCards, ...updatedLibraryCards];
     }
     case 'mulligan': {
       // Pegar todas as cartas da mão do jogador
-      const handCards = board.filter((c) => c.zone === 'hand' && c.ownerId === action.playerId);
+      const handCards = board.filter((c) => c.zone === 'hand' && c.ownerId === action.playerName);
       
       if (handCards.length === 0) return board;
       
       // Pegar cartas do library para calcular o próximo stackIndex
-      const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === action.playerId);
+      const libraryCards = board.filter((c) => c.zone === 'library' && c.ownerId === action.playerName);
       const maxStackIndex = libraryCards.length > 0 
         ? Math.max(...libraryCards.map((c) => c.stackIndex ?? 0))
         : -1;
       
       // Mover todas as cartas da mão para o library (no topo)
       let newBoard = board.map((card) => {
-        if (card.zone === 'hand' && card.ownerId === action.playerId) {
+        if (card.zone === 'hand' && card.ownerId === action.playerName) {
           return {
             ...card,
             zone: 'library' as const,
@@ -898,7 +1220,7 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       
       // Embaralhar o library
       const allLibraryCards = newBoard
-        .filter((c) => c.zone === 'library' && c.ownerId === action.playerId)
+        .filter((c) => c.zone === 'library' && c.ownerId === action.playerName)
         .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
       
       if (allLibraryCards.length === 0) return newBoard;
@@ -912,7 +1234,7 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
         stackIndex: allLibraryCards.length - 1 - index, // Inverter para manter ordem (maior índice = topo)
       }));
       
-      const otherCards = newBoard.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerId));
+      const otherCards = newBoard.filter((c) => !(c.zone === 'library' && c.ownerId === action.playerName));
       return [...otherCards, ...updatedLibraryCards];
     }
     case 'flipCard': {
@@ -991,17 +1313,81 @@ const applyCounterAction = (counters: Counter[], action: CardAction): Counter[] 
 export const useGameStore = create<GameStore>((set, get) => {
   let peerEventLogger: ((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => void) | null = null;
   
+  // Função para carregar estado persistido do localStorage
+  const loadPersistedState = () => {
+    if (typeof window === 'undefined') {
+      return {
+        roomId: '',
+        roomPassword: '',
+        playerName: '',
+        isHost: false,
+      };
+    }
+    
+    try {
+      const persisted = localStorage.getItem('mtonline-room-state');
+      if (persisted) {
+        const parsed = JSON.parse(persisted);
+        return {
+          roomId: parsed.roomId || '',
+          roomPassword: parsed.roomPassword || '',
+          playerName: parsed.playerName || '',
+          isHost: parsed.isHost || false,
+        };
+      }
+    } catch (error) {
+      console.warn('[Store] Erro ao carregar estado persistido:', error);
+    }
+    
+    return {
+      roomId: '',
+      roomPassword: '',
+      playerName: '',
+      isHost: false,
+    };
+  };
+
+  // Função para salvar estado no localStorage
+  const savePersistedState = (roomId: string, roomPassword: string, playerName: string, isHost: boolean) => {
+    if (typeof window === 'undefined') return;
+    
+    try {
+      localStorage.setItem('mtonline-room-state', JSON.stringify({
+        roomId,
+        roomPassword,
+        playerName,
+        isHost,
+      }));
+    } catch (error) {
+      console.warn('[Store] Erro ao salvar estado persistido:', error);
+    }
+  };
+
+  // Função para limpar estado persistido
+  const clearPersistedState = () => {
+    if (typeof window === 'undefined') return;
+    try {
+      localStorage.removeItem('mtonline-room-state');
+    } catch (error) {
+      console.warn('[Store] Erro ao limpar estado persistido:', error);
+    }
+  };
+
+  const persisted = loadPersistedState();
+
   const baseState = () => ({
     status: 'idle' as RoomStatus,
-    isHost: false,
-    roomId: '',
-    roomPassword: '',
+    isHost: persisted.isHost,
+    roomId: persisted.roomId,
+    roomPassword: persisted.roomPassword,
     error: undefined,
     board: [] as CardOnBoard[],
     counters: [] as Counter[],
     players: [] as PlayerSummary[],
+    simulatedPlayers: [] as PlayerSummary[],
     cemeteryPositions: {} as Record<string, Point>,
     libraryPositions: {} as Record<string, Point>,
+    zoomedCard: null as string | null,
     connections: {} as Record<string, DataConnection>,
     hostConnection: undefined as DataConnection | undefined,
     peer: undefined as Peer | undefined,
@@ -1048,38 +1434,140 @@ export const useGameStore = create<GameStore>((set, get) => {
   };
 
   const createPeerInstance = async (peerId?: string): Promise<Peer> => {
+    const createStartTime = performance.now();
+    
     // Aguardar credenciais TURN se ainda não foram inicializadas
     if (!turnCredentialsInitialized && turnCredentialsPromise) {
       console.log('[TURN] Aguardando credenciais antes de criar peer...');
+      const waitStart = performance.now();
       await turnCredentialsPromise;
+      console.log(`[TURN] Credenciais aguardadas em ${(performance.now() - waitStart).toFixed(2)}ms`);
     }
     
     // Se ainda não há cache e não há promise em andamento, tentar buscar agora
     if (!turnCredentialsCache && !turnCredentialsPromise) {
       console.log('[TURN] Buscando credenciais antes de criar peer...');
+      const fetchStart = performance.now();
       await getTurnCredentials();
+      console.log(`[TURN] Credenciais buscadas em ${(performance.now() - fetchStart).toFixed(2)}ms`);
     }
     
+    const iceServers = buildIceServers();
     const options: PeerJSOption = {
       ...resolvePeerEndpoint(),
       debug: 0,
-      config: { iceServers: buildIceServers() },
+      config: { iceServers },
     };
     debugLog('creating peer instance', peerId ?? 'anonymous', options);
-    const peer = peerId ? new Peer(peerId, options) : new Peer(options);
     
-    // DEBUG ICE - Adicionar handler para logar candidatos ICE
+    const peerCreationStart = performance.now();
+    const peer = peerId ? new Peer(peerId, options) : new Peer(options);
+    const peerCreationTime = performance.now() - peerCreationStart;
+    console.log(`[Peer] Instância criada em ${peerCreationTime.toFixed(2)}ms`);
+    console.log(`[Peer] Tempo total de criação: ${(performance.now() - createStartTime).toFixed(2)}ms`);
+    
+    // DEBUG ICE e Performance - Adicionar handlers para logar candidatos ICE e estatísticas
     peer.on('open', () => {
       // Acessar RTCPeerConnection interno do PeerJS
       const pc = (peer as any)._pc as RTCPeerConnection | undefined;
       if (pc) {
+        // Log de candidatos ICE
         pc.onicecandidate = (event) => {
           if (event.candidate) {
-            console.log('[ICE] Candidate:', event.candidate.candidate);
+            console.log('[ICE] Candidate:', event.candidate.candidate, {
+              type: event.candidate.type,
+              protocol: event.candidate.protocol,
+              address: event.candidate.address,
+              port: event.candidate.port,
+            });
           } else {
             console.log('[ICE] Gathering finished');
           }
         };
+
+        // Log de mudanças de estado ICE
+        pc.oniceconnectionstatechange = () => {
+          console.log('[ICE] Connection state:', pc.iceConnectionState);
+        };
+
+        pc.onicegatheringstatechange = () => {
+          console.log('[ICE] Gathering state:', pc.iceGatheringState);
+        };
+
+        // Coletar estatísticas de performance periodicamente
+        const statsInterval = setInterval(async () => {
+          try {
+            const stats = await pc.getStats();
+            const statsMap = new Map(stats);
+            
+            // Encontrar estatísticas de transporte (candidate-pair)
+            const candidatePairs: any[] = [];
+            const localCandidates: any[] = [];
+            const remoteCandidates: any[] = [];
+            
+            statsMap.forEach((report) => {
+              if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                candidatePairs.push({
+                  id: report.id,
+                  localCandidateId: report.localCandidateId,
+                  remoteCandidateId: report.remoteCandidateId,
+                  state: report.state,
+                  priority: report.priority,
+                  nominated: report.nominated,
+                  bytesReceived: report.bytesReceived,
+                  bytesSent: report.bytesSent,
+                  packetsReceived: report.packetsReceived,
+                  packetsSent: report.packetsSent,
+                  lastPacketReceivedTimestamp: report.lastPacketReceivedTimestamp,
+                  lastPacketSentTimestamp: report.lastPacketSentTimestamp,
+                  totalRoundTripTime: report.totalRoundTripTime,
+                  currentRoundTripTime: report.currentRoundTripTime,
+                });
+              } else if (report.type === 'local-candidate') {
+                localCandidates.push({
+                  id: report.id,
+                  candidateType: report.candidateType,
+                  ip: report.ip,
+                  port: report.port,
+                  protocol: report.protocol,
+                  priority: report.priority,
+                });
+              } else if (report.type === 'remote-candidate') {
+                remoteCandidates.push({
+                  id: report.id,
+                  candidateType: report.candidateType,
+                  ip: report.ip,
+                  port: report.port,
+                  protocol: report.protocol,
+                  priority: report.priority,
+                });
+              }
+            });
+
+            if (candidatePairs.length > 0) {
+              console.log('[RTC Stats] Active candidate pairs:', candidatePairs);
+              console.log('[RTC Stats] Local candidates:', localCandidates);
+              console.log('[RTC Stats] Remote candidates:', remoteCandidates);
+              
+              // Calcular latência média se disponível
+              const activePair = candidatePairs[0];
+              if (activePair.currentRoundTripTime) {
+                console.log(`[RTC Stats] RTT: ${(activePair.currentRoundTripTime * 1000).toFixed(2)}ms`);
+              }
+            }
+          } catch (error) {
+            console.warn('[RTC Stats] Erro ao coletar estatísticas:', error);
+          }
+        }, 5000); // Coletar a cada 5 segundos
+
+        // Limpar intervalo quando o peer for fechado
+        peer.on('close', () => {
+          clearInterval(statsInterval);
+        });
+
+        peer.on('error', () => {
+          clearInterval(statsInterval);
+        });
       }
     });
     
@@ -1133,33 +1621,8 @@ export const useGameStore = create<GameStore>((set, get) => {
     }
   };
 
-  const pushBoardState = () => {
-    const state = get();
-    if (!state) return;
-    broadcastToPeers({ 
-      type: 'BOARD_STATE', 
-      board: state.board,
-      counters: state.counters,
-      cemeteryPositions: state.cemeteryPositions,
-      libraryPositions: state.libraryPositions,
-    });
-    // Salvar sessão quando o board mudar
-    if (state.roomId) {
-      saveSession(state);
-    }
-  };
 
-  const pushRoomState = () => {
-    const state = get();
-    if (!state) return;
-    broadcastToPeers({ type: 'ROOM_STATE', board: state.board, counters: state.counters, players: state.players });
-    // Salvar sessão quando o estado da sala mudar
-    if (state.roomId) {
-      saveSession(state);
-    }
-  };
-
-  const handleHostAction = (action: CardAction) => {
+  const handleHostAction = (action: CardAction, skipEventSave = false) => {
     set((state) => {
       if (!state) return state;
       
@@ -1171,21 +1634,56 @@ export const useGameStore = create<GameStore>((set, get) => {
         };
       }
       
+      // Tratar setCommanderDamage separadamente
+      if (action.kind === 'setCommanderDamage') {
+        return {
+          ...state,
+          players: state.players.map((p) => {
+            if (p.id === action.targetPlayerId) {
+              const commanderDamage = { ...(p.commanderDamage || {}), [action.attackerPlayerId]: action.damage };
+              return { ...p, commanderDamage };
+            }
+            return p;
+          }),
+        };
+      }
+      
+      // Tratar setSimulatedPlayers separadamente
+      if (action.kind === 'setSimulatedPlayers') {
+        const simulatedPlayers: PlayerSummary[] = Array.from({ length: action.count }, (_, i) => ({
+          id: `simulated-${i + 1}`,
+          name: `Player ${i + 1}`,
+          life: 40,
+        }));
+        return {
+          ...state,
+          simulatedPlayers,
+        };
+      }
+      
+      // Tratar setZoomedCard separadamente (não afeta o board)
+      if (action.kind === 'setZoomedCard') {
+        return {
+          ...state,
+          zoomedCard: action.cardId,
+        };
+      }
+      
       // Atualizar posições se for moveLibrary ou moveCemetery
       let newCemeteryPositions = state.cemeteryPositions;
       let newLibraryPositions = state.libraryPositions;
       
-      if (action.kind === 'moveCemetery' && 'playerId' in action && 'position' in action) {
+      if (action.kind === 'moveCemetery' && 'playerName' in action && 'position' in action) {
         newCemeteryPositions = {
           ...state.cemeteryPositions,
-          [action.playerId]: action.position,
+          [action.playerName]: action.position,
         };
-      } else if (action.kind === 'moveLibrary' && 'playerId' in action && 'position' in action) {
+      } else if (action.kind === 'moveLibrary' && 'playerName' in action && 'position' in action) {
         // Para library, a posição vem absoluta, mas precisamos armazenar relativa
         // Por enquanto, vamos armazenar a absoluta e calcular a relativa no Board
         newLibraryPositions = {
           ...state.libraryPositions,
-          [action.playerId]: action.position,
+          [action.playerName]: action.position,
         };
       }
       
@@ -1200,13 +1698,44 @@ export const useGameStore = create<GameStore>((set, get) => {
       };
     });
     
-    // Se for setPlayerLife, usar pushRoomState para propagar os players
-    // Caso contrário, usar pushBoardState
-    const state = get();
-    if (state && action.kind === 'setPlayerLife') {
-      pushRoomState();
-    } else {
-      pushBoardState();
+    // Fazer broadcast para peers após aplicar a ação
+    // IMPORTANTE: Sempre fazer broadcast, mesmo durante drag (skipEventSave = true)
+    // O skipEventSave só afeta o salvamento no banco, não a sincronização com peers
+    const stateAfter = get();
+    if (stateAfter) {
+      // Fazer broadcast para peers
+      if (action.kind === 'setPlayerLife' || action.kind === 'setCommanderDamage') {
+        broadcastToPeers({ 
+          type: 'ROOM_STATE', 
+          board: stateAfter.board, 
+          counters: stateAfter.counters, 
+          players: stateAfter.players,
+          cemeteryPositions: stateAfter.cemeteryPositions,
+          libraryPositions: stateAfter.libraryPositions,
+        });
+      } else {
+        broadcastToPeers({ 
+          type: 'BOARD_STATE', 
+          board: stateAfter.board,
+          counters: stateAfter.counters,
+          cemeteryPositions: stateAfter.cemeteryPositions,
+          libraryPositions: stateAfter.libraryPositions,
+        });
+      }
+    }
+    
+    // Salvar evento no backend (event sourcing) - apenas se não for skip
+    // Isso é feito DEPOIS do broadcast para não atrasar a sincronização
+    if (stateAfter && stateAfter.roomId && !skipEventSave) {
+      saveEvent(
+        stateAfter.roomId,
+        'CARD_ACTION',
+        action,
+        stateAfter.playerId,
+        stateAfter.playerName
+      ).catch((err) => {
+        console.warn('[Store] Erro ao salvar evento (não crítico):', err);
+      });
     }
   };
 
@@ -1218,7 +1747,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       const message = raw as IncomingMessage;
       // Filtrar apenas mensagens válidas do jogo
       if (message?.type === 'REQUEST_ACTION' && message.action && message.actorId) {
-        debugLog('host received action', message.actorId, message.action.kind);
+        debugLog('host received action', message.actorId, message.action.kind, message.skipEventSave ? '(skipEventSave)' : '');
         
         // Log evento
         if (peerEventLogger) {
@@ -1226,6 +1755,7 @@ export const useGameStore = create<GameStore>((set, get) => {
             actionKind: message.action.kind,
             actorId: message.actorId,
             playerName,
+            skipEventSave: message.skipEventSave || false,
           };
           
           // Adicionar detalhes específicos por tipo de ação
@@ -1251,7 +1781,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           peerEventLogger('RECEIVED', 'FROM_PEER', 'REQUEST_ACTION', message.action.kind, playerId, details);
         }
         
-        handleHostAction(message.action);
+        handleHostAction(message.action, message.skipEventSave || false);
       } else if (message?.type) {
         // Log outros tipos de mensagens recebidas
         if (peerEventLogger) {
@@ -1274,26 +1804,33 @@ export const useGameStore = create<GameStore>((set, get) => {
         };
       });
 
-      // Se não há mais conexões e ainda há jogadores, transferir host para o primeiro jogador restante
-      const state = get();
-      if (Object.keys(state.connections).length === 0 && state.players.length > 0) {
-        // Não há mais clientes conectados, mas ainda há jogadores na lista
-        // Isso significa que o host está saindo, então não há ninguém para transferir
-        // A transferência será feita quando o host chamar leaveRoom
-      }
-
-      pushRoomState();
+      // Se o host desconectou (não há mais conexões mas ainda há players), 
+      // os clientes detectarão via disconnected() e se tornarão host automaticamente
+      // Aqui apenas removemos o player da lista
     };
 
     conn.on('close', dropPlayer);
     conn.on('error', dropPlayer);
 
     // Registrar conexão e player
+    // Validar que não há outro player com o mesmo nome ANTES de adicionar
+    const currentState = get();
+    const existingPlayerWithName = currentState.players.find((player) => player.name === playerName);
+    if (existingPlayerWithName) {
+      // Rejeitar conexão se já existe um player com esse nome
+      conn.send({ type: 'ERROR', message: `Player name "${playerName}" is already taken. Please choose a different name.` });
+      conn.close();
+      return;
+    }
+    
     set((state) => {
       if (!state) return state;
+      // Garantir que não há outro player com o mesmo ID
+      const existingPlayers = state.players.filter((player) => player.id !== playerId);
+      
       return {
         connections: { ...state.connections, [playerId]: conn },
-        players: [...state.players.filter((player) => player.id !== playerId), { id: playerId, name: playerName, life: 20 }],
+        players: [...existingPlayers, { id: playerId, name: playerName, life: 40 }],
       };
     });
 
@@ -1310,7 +1847,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           libraryPositions: currentState.libraryPositions,
         });
         debugLog('host registered connection', playerId, playerName);
-        pushRoomState();
+        // Sync contínuo vai cuidar da sincronização
       }
     };
 
@@ -1370,21 +1907,58 @@ export const useGameStore = create<GameStore>((set, get) => {
       switch (message.type) {
         case 'ROOM_STATE':
           if (Array.isArray(message.board) && Array.isArray(message.players)) {
+            const currentState = get();
+            // Verificar se o playerId do store está no array de players recebido
+            // Se não estiver, significa que o playerId mudou (pode acontecer em reconexões)
+            // Nesse caso, tentar encontrar o player correspondente pelo nome ou manter o playerId atual
+            const currentPlayerId = currentState?.playerId;
+            const playerExists = message.players.some(p => p.id === currentPlayerId);
+            
+            // Se o playerId atual não está no array, usar o primeiro player se for o host
+            let newPlayerId = currentPlayerId;
+            if (!playerExists && currentState?.isHost && message.players.length > 0) {
+              // Se for host e não encontrar pelo ID, usar o primeiro player (geralmente o host)
+              newPlayerId = message.players[0].id;
+            }
+            
+            // Validar que não há nomes duplicados
+            const nameCounts = new Map<string, number>();
+            message.players.forEach(p => {
+              nameCounts.set(p.name, (nameCounts.get(p.name) || 0) + 1);
+            });
+            const duplicateNames = Array.from(nameCounts.entries())
+              .filter(([_, count]) => count > 1)
+              .map(([name]) => name);
+            
+            if (duplicateNames.length > 0) {
+              console.warn('[ROOM_STATE] Nomes duplicados detectados:', duplicateNames);
+            }
+            
+            // Remover duplicatas por ID (manter apenas o primeiro de cada ID)
+            const uniquePlayers = message.players.reduce((acc, player) => {
+              if (!acc.find(p => p.id === player.id)) {
+                acc.push(player);
+              }
+              return acc;
+            }, [] as typeof message.players);
+            
             const newState = {
               board: message.board,
               counters: message.counters || [],
-              players: message.players,
+              players: uniquePlayers,
+              simulatedPlayers: message.simulatedPlayers || [],
               status: 'connected' as RoomStatus,
               error: undefined,
+              // Atualizar playerId se necessário
+              ...(newPlayerId !== currentPlayerId ? { playerId: newPlayerId } : {}),
             };
             set(newState);
-            // Salvar sessão quando receber estado da sala
-            setTimeout(() => {
-              const currentState = get();
-              if (currentState) {
-                saveSession({ ...currentState, ...newState });
-              }
-            }, 100);
+            // Salvar estado quando conectar
+            const stateAfter = get();
+            if (stateAfter) {
+              savePersistedState(stateAfter.roomId, stateAfter.roomPassword, stateAfter.playerName || '', stateAfter.isHost);
+            }
+            // Sync contínuo vai cuidar da sincronização
           }
           break;
         case 'BOARD_STATE':
@@ -1397,13 +1971,7 @@ export const useGameStore = create<GameStore>((set, get) => {
               cemeteryPositions: message.cemeteryPositions || currentState?.cemeteryPositions || {},
               libraryPositions: message.libraryPositions || currentState?.libraryPositions || {},
             });
-            // Salvar sessão quando receber estado do board
-            setTimeout(() => {
-              const updatedState = get();
-              if (updatedState) {
-                saveSession(updatedState);
-              }
-            }, 100);
+            // Sync contínuo vai cuidar da sincronização
           }
           break;
         case 'HOST_TRANSFER':
@@ -1424,12 +1992,12 @@ export const useGameStore = create<GameStore>((set, get) => {
               roomPassword: state.roomPassword,
               board: message.board,
               counters: message.counters || [],
+              // Garantir que todos os players usam ID como nome
               players: message.players,
               playerId: state.playerId,
               playerName: state.playerName,
             };
             set(newState);
-            saveSession({ ...newState });
 
             peer.on('open', () => {
               set((s) => {
@@ -1438,9 +2006,8 @@ export const useGameStore = create<GameStore>((set, get) => {
                   status: 'connected' as RoomStatus,
                   players: s.players,
                 };
-                if (s) {
-                  saveSession({ ...s, ...updatedState });
-                }
+                // Salvar estado quando conectar
+                savePersistedState(s.roomId, s.roomPassword, s.playerName || '', s.isHost);
                 return updatedState;
               });
             });
@@ -1454,7 +2021,8 @@ export const useGameStore = create<GameStore>((set, get) => {
                 return;
               }
               const remoteId = metadata.playerId || randomId();
-              registerHostConn(conn, remoteId, metadata.name || 'Guest');
+              const remoteName = metadata.name || 'Guest';
+              registerHostConn(conn, remoteId, remoteName);
             });
 
               peer.on('error', (error) => {
@@ -1526,64 +2094,212 @@ export const useGameStore = create<GameStore>((set, get) => {
 
     const disconnected = () => {
       const state = get();
-      // Se o host desconectou e este é o primeiro jogador na lista, tornar-se host
-      const firstPlayer = state.players[0];
-      if (firstPlayer && firstPlayer.id === state.playerId && state.players.length > 1 && !state.isHost) {
-        debugLog('host disconnected, becoming new host');
-        destroyPeer();
-        
-        // Criar novo peer como host
-        createPeerInstance(state.roomId).then((peer) => {
-          const newState = {
-          ...baseState(),
-          peer,
-          isHost: true,
-          status: 'initializing' as RoomStatus,
-          roomId: state.roomId,
-          roomPassword: state.roomPassword,
-          board: state.board,
-          players: state.players,
-          playerId: state.playerId,
-          playerName: state.playerName,
-        };
-        set(newState);
-        saveSession({ ...newState });
-
-        peer.on('open', () => {
-          set((s) => {
-            if (!s) return s;
-            const updatedState = {
-              status: 'connected' as RoomStatus,
-              players: s.players,
-            };
-            saveSession({ ...s, ...updatedState });
-            return updatedState;
-          });
-        });
-
-        peer.on('connection', (conn) => {
-          const metadata = conn.metadata as { password?: string; name?: string; playerId?: string } | undefined;
-          debugLog('incoming connection', metadata);
-          if (!metadata || metadata.password !== get().roomPassword) {
-            conn.send({ type: 'ERROR', message: 'Incorrect password' });
-            conn.close();
-            return;
-          }
-          const remoteId = metadata.playerId || randomId();
-          registerHostConn(conn, remoteId, metadata.name || 'Guest');
-        });
-
-          peer.on('error', (error) => {
-            debugLog('peer host error', error);
-            set({ status: 'error', error: error.message });
-          });
-        }).catch((error) => {
-          console.error('[TURN] Erro ao criar peer:', error);
-          set({ status: 'error', error: error.message });
+      
+      // Se não há mais players na sala, apenas marcar como erro
+      if (state.players.length <= 1) {
+        set((s) => {
+          if (!s) return s;
+          return {
+            ...s,
+            status: s.status === 'idle' ? s.status : 'error',
+            error: s.error ?? 'Lost connection to host',
+            hostConnection: undefined,
+          };
         });
         return;
       }
       
+      // Se o host desconectou e ainda há outros players, o primeiro player restante deve se tornar host
+      // O host é sempre o primeiro player na lista, então removemos ele
+      const hostPlayer = state.players[0];
+      const remainingPlayers = state.players.filter((p) => p.id !== hostPlayer?.id);
+      
+      // Se este player não é o host que desconectou e ainda há players restantes
+      if (hostPlayer && hostPlayer.id !== state.playerId && remainingPlayers.length > 0) {
+        // Atualizar lista de players removendo o host
+        set((s) => ({
+          ...s,
+          players: remainingPlayers,
+        }));
+        
+        const stateAfter = get();
+        // Se este player é o primeiro na lista agora, tornar-se host
+        const firstPlayer = stateAfter.players[0];
+        if (firstPlayer && firstPlayer.id === stateAfter.playerId && !stateAfter.isHost) {
+          debugLog('host disconnected, becoming new host');
+          
+          // Destruir peer atual e criar um novo como host
+          // O novo host usa o roomId como peerId, permitindo que outros players se conectem
+          destroyPeer();
+          
+          // Aguardar um pouco para garantir que o peer antigo foi destruído
+          // O PeerJS pode levar um tempo para liberar o ID
+          const attemptCreateHostPeer = (retryCount = 0) => {
+            const maxRetries = 3;
+            const delay = retryCount * 1000; // 0s, 1s, 2s
+            
+            setTimeout(() => {
+              // Criar novo peer como host usando o roomId como peerId
+              // Isso permite que outros players se conectem usando o roomId
+              createPeerInstance(stateAfter.roomId).then((peer) => {
+                const newState = {
+                  ...baseState(),
+                  peer,
+                  isHost: true,
+                  status: 'initializing' as RoomStatus,
+                  roomId: stateAfter.roomId,
+                  roomPassword: stateAfter.roomPassword,
+                  board: stateAfter.board,
+                  counters: stateAfter.counters,
+                  players: stateAfter.players,
+                  cemeteryPositions: stateAfter.cemeteryPositions,
+                  libraryPositions: stateAfter.libraryPositions,
+                  playerId: stateAfter.playerId,
+                  playerName: stateAfter.playerName,
+                };
+                set(newState);
+
+                peer.on('open', () => {
+                  set((s) => {
+                    if (!s) return s;
+                    const updatedState = {
+                      status: 'connected' as RoomStatus,
+                      players: s.players,
+                    };
+                    return updatedState;
+                  });
+                  
+                  // Notificar outros players que este é o novo host
+                  // Eles devem tentar se conectar ao roomId (que é o peerId deste host)
+                  debugLog('new host peer opened, other players should connect to', stateAfter.roomId);
+                });
+
+                peer.on('connection', (conn) => {
+                  const metadata = conn.metadata as { password?: string; name?: string; playerId?: string } | undefined;
+                  debugLog('incoming connection from player', metadata);
+                  if (!metadata || metadata.password !== get().roomPassword) {
+                    conn.send({ type: 'ERROR', message: 'Incorrect password' });
+                    conn.close();
+                    return;
+                  }
+                  const remoteId = metadata.playerId || randomId();
+                  registerHostConn(conn, remoteId, metadata.name || 'Guest');
+                });
+
+                peer.on('error', (error: any) => {
+                  debugLog('peer host error', error);
+                  const errorMsg = error?.message || error?.toString() || '';
+                  const errorType = error?.type || '';
+                  
+                  // Se o erro for "ID taken", tentar novamente
+                  if (errorType === 'peer-unavailable' || 
+                      errorMsg.toLowerCase().includes('taken') || 
+                      errorMsg.toLowerCase().includes('unavailable') ||
+                      errorMsg.toLowerCase().includes('is taken')) {
+                    if (retryCount < maxRetries) {
+                      console.log(`[Store] Peer ID "${stateAfter.roomId}" is taken, retrying in ${(retryCount + 1) * 1000}ms... (attempt ${retryCount + 1}/${maxRetries})`);
+                      destroyPeer();
+                      attemptCreateHostPeer(retryCount + 1);
+                      return;
+                    } else {
+                      console.error(`[Store] Failed to create peer after ${maxRetries} retries. ID "${stateAfter.roomId}" is still taken.`);
+                    }
+                  }
+                  set({ status: 'error', error: errorMsg || 'Failed to create host peer' });
+                });
+              }).catch((error: any) => {
+                console.error('[TURN] Erro ao criar peer:', error);
+                const errorMsg = error?.message || error?.toString() || '';
+                const errorType = error?.type || '';
+                
+                // Se o erro for "ID taken", tentar novamente
+                if (errorType === 'peer-unavailable' || 
+                    errorMsg.toLowerCase().includes('taken') || 
+                    errorMsg.toLowerCase().includes('unavailable') ||
+                    errorMsg.toLowerCase().includes('is taken')) {
+                  if (retryCount < maxRetries) {
+                    console.log(`[Store] Peer ID "${stateAfter.roomId}" is taken, retrying in ${(retryCount + 1) * 1000}ms... (attempt ${retryCount + 1}/${maxRetries})`);
+                    destroyPeer();
+                    attemptCreateHostPeer(retryCount + 1);
+                    return;
+                  } else {
+                    console.error(`[Store] Failed to create peer after ${maxRetries} retries. ID "${stateAfter.roomId}" is still taken.`);
+                  }
+                }
+                set({ status: 'error', error: errorMsg || 'Failed to create host peer' });
+              });
+            }, delay);
+          };
+          
+          attemptCreateHostPeer();
+          return;
+        } else {
+          // Este player não é o novo host, tentar se reconectar ao novo host
+          // O novo host terá o roomId como peerId, então podemos nos conectar usando o roomId
+          debugLog('host disconnected, attempting to reconnect to new host via roomId');
+          
+          // Pequeno delay para dar tempo do novo host criar seu peer
+          setTimeout(() => {
+            const currentState = get();
+            if (!currentState.isHost && currentState.roomId) {
+              // Tentar se conectar ao roomId (que é o peerId do novo host)
+              const currentPeer = currentState.peer;
+              if (currentPeer) {
+                // Reutilizar o peer atual para conectar ao novo host
+                try {
+                  const connection = currentPeer.connect(currentState.roomId, {
+                    metadata: {
+                      password: currentState.roomPassword,
+                      name: currentState.playerName || 'Player',
+                      playerId: currentState.playerId,
+                    },
+                  });
+                  
+                  debugLog('reconnecting to new host', currentState.roomId);
+                  
+                  registerClientConn(connection);
+                  
+                  connection.on('open', () => {
+                    debugLog('reconnected to new host');
+                    set({ status: 'waiting', hostConnection: connection });
+                  });
+                  
+                  connection.on('error', (error) => {
+                    debugLog('failed to reconnect to new host', error);
+                    // Tentar novamente após um delay
+                    setTimeout(() => {
+                      const state = get();
+                      if (!state.isHost && state.roomId) {
+                        try {
+                          const retryConnection = state.peer?.connect(state.roomId, {
+                            metadata: {
+                              password: state.roomPassword,
+                              name: state.playerName || 'Player',
+                              playerId: state.playerId,
+                            },
+                          });
+                          if (retryConnection) {
+                            registerClientConn(retryConnection);
+                            retryConnection.on('open', () => {
+                              set({ status: 'waiting', hostConnection: retryConnection });
+                            });
+                          }
+                        } catch (err) {
+                          debugLog('retry connection failed', err);
+                        }
+                      }
+                    }, 1000);
+                  });
+                } catch (error) {
+                  debugLog('failed to create connection to new host', error);
+                }
+              }
+            }
+          }, 500);
+        }
+      }
+      
+      // Se não conseguiu se tornar host, marcar como erro
       set((s) => {
         if (!s) return s;
         return {
@@ -1611,21 +2327,22 @@ export const useGameStore = create<GameStore>((set, get) => {
     state.peer?.destroy();
   };
 
-  const requestAction = (action: CardAction) => {
+  const requestAction = (action: CardAction, skipEventSave = false) => {
     const state = get();
     if (!state) return;
     if (state.isHost) {
-      handleHostAction(action);
+      handleHostAction(action, skipEventSave);
       return;
     }
 
     if (state.hostConnection && state.hostConnection.open) {
       try {
-        debugLog('request action via host', action.kind);
+        debugLog('request action via host', action.kind, skipEventSave ? '(skipEventSave)' : '');
         state.hostConnection.send({
           type: 'REQUEST_ACTION',
           action,
           actorId: state.playerId,
+          skipEventSave,
         });
         
         // Log evento
@@ -1668,27 +2385,18 @@ export const useGameStore = create<GameStore>((set, get) => {
     set({ error: 'You must join a room before interacting with the board.' });
   };
 
-  // Carregar sessão salva
-  const savedSession = loadSession();
+  // Estado inicial - não carregar mais de session
   const initialState = {
-    playerId: savedSession?.playerId || randomId(),
-    playerName: savedSession?.playerName || '',
+    playerId: randomId(),
+    playerName: persisted.playerName,
     setPlayerName: (playerName: string) => {
       set({ playerName });
-      const currentState = get();
-      if (currentState) {
-        saveSession({ ...currentState, playerName });
+      const state = get();
+      if (state) {
+        savePersistedState(state.roomId, state.roomPassword, playerName, state.isHost);
       }
     },
     ...baseState(),
-    ...(savedSession ? {
-      roomId: savedSession.roomId,
-      roomPassword: savedSession.roomPassword,
-      board: savedSession.board,
-      players: savedSession.players,
-      status: savedSession.status === 'connected' ? 'idle' : savedSession.status, // Reset connected status
-      isHost: savedSession.isHost,
-    } : {}),
     savedDecks: loadLocalDecks(),
     turnConfig: loadTurnConfig(),
     user: null,
@@ -1849,12 +2557,17 @@ export const useGameStore = create<GameStore>((set, get) => {
       persistTurnConfig(config);
       set({ turnConfig: config });
     },
-    createRoom: (roomId: string, password: string) => {
+    createRoom: async (roomId: string, password: string) => {
       destroyPeer();
       const trimmedId = roomId?.trim() || `room-${randomId()}`;
+      
+      // Carregar estado do banco de dados
+      const savedState = await loadRoomState(trimmedId);
+      
       createPeerInstance(trimmedId).then((peer) => {
         debugLog('creating room', trimmedId);
 
+      const currentState = get();
       const newState = {
         ...baseState(),
         peer,
@@ -1862,24 +2575,28 @@ export const useGameStore = create<GameStore>((set, get) => {
         status: 'initializing' as RoomStatus,
         roomId: trimmedId,
         roomPassword: password,
-        players: [],
+        playerId: currentState.playerId,
+        playerName: currentState.playerName || '',
+        players: savedState?.players || [],
+        board: savedState?.board || [],
+        counters: savedState?.counters || [],
+        cemeteryPositions: savedState?.cemeteryPositions || {},
+        libraryPositions: savedState?.libraryPositions || {},
       };
       set(newState);
-      const currentState = get();
-      if (currentState) {
-        saveSession({ ...currentState, ...newState });
-      }
+      savePersistedState(trimmedId, password, currentState.playerName || '', true);
 
       peer.on('open', () => {
         set((state) => {
           if (!state) return state;
           const newState = {
             status: 'connected' as RoomStatus,
-            players: [{ id: state.playerId, name: state.playerName || 'Host', life: 20 }],
+            players: state.players.length > 0 
+              ? state.players 
+              : [{ id: state.playerId, name: state.playerName || state.playerId, life: 40 }],
           };
-          if (state) {
-            saveSession({ ...state, ...newState });
-          }
+          // Salvar estado quando conectar
+          savePersistedState(state.roomId, state.roomPassword, state.playerName || '', state.isHost);
           return newState;
         });
       });
@@ -1905,11 +2622,16 @@ export const useGameStore = create<GameStore>((set, get) => {
         set({ status: 'error', error: error.message });
       });
     },
-    joinRoom: (roomId: string, password: string) => {
+    joinRoom: async (roomId: string, password: string) => {
       destroyPeer();
+      
+      // Carregar estado do banco de dados
+      const savedState = await loadRoomState(roomId);
+      
       createPeerInstance().then((peer) => {
         debugLog('joining room', roomId);
 
+        const currentState = get();
         const newState = {
           ...baseState(),
           peer,
@@ -1917,12 +2639,15 @@ export const useGameStore = create<GameStore>((set, get) => {
           roomId,
           roomPassword: password,
           isHost: false,
+          playerId: currentState.playerId,
+          playerName: currentState.playerName || '',
+          board: savedState?.board || [],
+          counters: savedState?.counters || [],
+          cemeteryPositions: savedState?.cemeteryPositions || {},
+          libraryPositions: savedState?.libraryPositions || {},
         };
         set(newState);
-        const currentState = get();
-        if (currentState) {
-          saveSession({ ...currentState, ...newState });
-        }
+        savePersistedState(roomId, password, currentState.playerName || '', false);
 
         peer.on('open', () => {
           const connection = peer.connect(roomId, {
@@ -1939,7 +2664,12 @@ export const useGameStore = create<GameStore>((set, get) => {
 
           connection.on('open', () => {
             debugLog('client connected to host');
+            const currentState = get();
             set({ status: 'waiting', hostConnection: connection });
+            // Salvar estado quando conectar
+            if (currentState) {
+              savePersistedState(currentState.roomId, currentState.roomPassword, currentState.playerName || '', false);
+            }
           });
         });
 
@@ -1988,10 +2718,9 @@ export const useGameStore = create<GameStore>((set, get) => {
                 playerName: s.playerName,
                 savedDecks: s.savedDecks,
               };
-              // Limpar sessão ao sair da sala
-              if (typeof window !== 'undefined') {
-                window.localStorage.removeItem(SESSION_STORAGE_KEY);
-              }
+              // Limpar estado persistido ao sair da sala
+              clearPersistedState();
+              // Sync contínuo já foi parado acima
               return newState;
             });
           }, 100);
@@ -2023,7 +2752,6 @@ export const useGameStore = create<GameStore>((set, get) => {
               playerName: state.playerName,
             };
             set(newState);
-            saveSession({ ...newState });
 
             peer.on('open', () => {
               set((s) => {
@@ -2032,7 +2760,8 @@ export const useGameStore = create<GameStore>((set, get) => {
                   status: 'connected' as RoomStatus,
                   players: s.players,
                 };
-                saveSession({ ...s, ...updatedState });
+                // Salvar estado quando conectar
+                savePersistedState(s.roomId, s.roomPassword, s.playerName || '', s.isHost);
                 return updatedState;
               });
             });
@@ -2046,7 +2775,8 @@ export const useGameStore = create<GameStore>((set, get) => {
                 return;
               }
               const remoteId = metadata.playerId || randomId();
-              registerHostConn(conn, remoteId, metadata.name || 'Guest');
+              const remoteName = metadata.name || 'Guest';
+              registerHostConn(conn, remoteId, remoteName);
             });
 
             peer.on('error', (error) => {
@@ -2070,9 +2800,11 @@ export const useGameStore = create<GameStore>((set, get) => {
           playerName: s.playerName,
           savedDecks: s.savedDecks,
         };
+        // Limpar estado persistido ao sair da sala
+        clearPersistedState();
         // Limpar sessão ao sair da sala
         if (typeof window !== 'undefined') {
-          window.localStorage.removeItem(SESSION_STORAGE_KEY);
+          // Sync contínuo já foi parado acima
         }
         return newState;
       });
@@ -2092,7 +2824,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         typeLine: payload.typeLine,
         setName: payload.setName,
         imageUrl: payload.imageUrl,
-        ownerId: get().playerId,
+        backImageUrl: payload.backImageUrl,
+        ownerId: get().playerName,
         tapped: false,
         position,
         zone: 'battlefield',
@@ -2109,7 +2842,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         typeLine: payload.typeLine,
         setName: payload.setName,
         imageUrl: payload.imageUrl,
-        ownerId: get().playerId,
+        backImageUrl: payload.backImageUrl,
+        ownerId: get().playerName,
         tapped: false,
         position: { x: 0, y: 0 },
         zone: 'library',
@@ -2117,7 +2851,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       requestAction({ kind: 'addToLibrary', card });
     },
     replaceLibrary: (cards: NewCardPayload[]) => {
-      const playerId = get().playerId;
+      const playerName = get().playerName;
       // Apenas as top 5 cartas precisam ter posição inicial (0,0)
       // As outras não precisam de posição trackeada
       const libraryCards: CardOnBoard[] = cards.map((payload, index) => ({
@@ -2128,7 +2862,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         typeLine: payload.typeLine,
         setName: payload.setName,
         imageUrl: payload.imageUrl,
-        ownerId: playerId,
+        backImageUrl: payload.backImageUrl,
+        ownerId: playerName, // Usar playerName para consistência com addCardToLibrary e renderização
         tapped: false,
         // Apenas as top 5 cartas (últimas no array, maiores índices) têm posição inicial
         // As outras têm position (0,0) mas não serão renderizadas
@@ -2136,15 +2871,15 @@ export const useGameStore = create<GameStore>((set, get) => {
         zone: 'library' as const,
         stackIndex: index,
       }));
-      requestAction({ kind: 'replaceLibrary', cards: libraryCards, playerId });
+      requestAction({ kind: 'replaceLibrary', cards: libraryCards, playerName: playerName });
     },
     drawFromLibrary: () => {
-      requestAction({ kind: 'drawFromLibrary', playerId: get().playerId });
+      requestAction({ kind: 'drawFromLibrary', playerName: get().playerName });
     },
     moveCard: (cardId: string, position: Point) => {
       requestAction({ kind: 'move', id: cardId, position });
     },
-    moveLibrary: (playerId: string, relativePosition: Point, absolutePosition: Point) => {
+    moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point) => {
       const state = get();
       if (!state) return;
       
@@ -2155,31 +2890,39 @@ export const useGameStore = create<GameStore>((set, get) => {
           ...s,
           libraryPositions: {
             ...s.libraryPositions,
-            [playerId]: relativePosition,
+            [playerName]: relativePosition,
           },
         };
       });
       
       // Passar posição absoluta para a ação (para atualizar as cartas)
-      requestAction({ kind: 'moveLibrary', playerId, position: absolutePosition });
+      requestAction({ kind: 'moveLibrary', playerName, position: absolutePosition });
     },
-    moveCemetery: (playerId: string, position: Point) => {
+    moveCemetery: (playerName: string, position: Point, skipEventSave = false) => {
       const state = get();
       if (!state) return;
       
-      // Armazenar posição do cemitério
-      set((s) => {
-        if (!s) return s;
-        return {
-          ...s,
-          cemeteryPositions: {
-            ...s.cemeteryPositions,
-            [playerId]: position,
-          },
-        };
-      });
-      
-      requestAction({ kind: 'moveCemetery', playerId, position });
+      // Se for host, aplicar ação diretamente (sem requestAction)
+      // O handleHostAction já atualiza o estado e faz broadcast para os peers
+      if (state.isHost) {
+        handleHostAction({ kind: 'moveCemetery', playerName, position }, skipEventSave);
+      } else {
+        // Se for cliente, atualizar localmente primeiro para feedback imediato
+        set((s) => {
+          if (!s) return s;
+          return {
+            ...s,
+            cemeteryPositions: {
+              ...s.cemeteryPositions,
+              [playerName]: position,
+            },
+          };
+        });
+        
+        // Sempre enviar para o host, mesmo durante drag
+        // O host fará broadcast para os outros players, mas não salvará no banco se skipEventSave = true
+        requestAction({ kind: 'moveCemetery', playerName, position }, skipEventSave);
+      }
     },
     toggleTap: (cardId: string) => {
       requestAction({ kind: 'toggleTap', id: cardId });
@@ -2195,54 +2938,26 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (!state) return;
       
       const card = state.board.find((c) => c.id === cardId);
-      if (!card || card.zone !== 'hand' || card.ownerId !== state.playerId) return;
+      if (!card || card.zone !== 'hand' || card.ownerId !== state.playerName) return;
       
-      // Se for host, reordenar diretamente
-      if (state.isHost) {
-        set((s) => {
-          if (!s) return s;
-          const handCards = s.board
-            .filter((c) => c.zone === 'hand' && c.ownerId === state.playerId)
-            .sort((a, b) => {
-              if (a.handIndex !== undefined && b.handIndex !== undefined) {
-                return a.handIndex - b.handIndex;
-              }
-              if (a.handIndex !== undefined) return -1;
-              if (b.handIndex !== undefined) return 1;
-              return a.id.localeCompare(b.id);
-            });
-          
-          const oldIndex = handCards.findIndex((c) => c.id === cardId);
-          if (oldIndex === -1) return s;
-          
-          // Reordenar o array
-          const reordered = [...handCards];
-          const [movedCard] = reordered.splice(oldIndex, 1);
-          reordered.splice(newIndex, 0, movedCard);
-          
-          // Atualizar handIndex de todas as cartas
-          const updatedHandCards = reordered.map((c, idx) => ({
-            ...c,
-            handIndex: idx,
-          }));
-          
-          const otherCards = s.board.filter((c) => !(c.zone === 'hand' && c.ownerId === state.playerId));
-          return {
-            ...s,
-            board: [...otherCards, ...updatedHandCards],
-          };
-        });
-        pushBoardState();
-      } else {
-        // Para clientes, precisaríamos de uma nova ação, mas por enquanto só funciona para host
-        // TODO: Implementar ação de reordenação para clientes
-      }
+      // Usar requestAction para salvar e sincronizar
+      requestAction({ kind: 'reorderHand', cardId, newIndex, playerName: state.playerName });
     },
-    shuffleLibrary: (playerId: string) => {
-      requestAction({ kind: 'shuffleLibrary', playerId });
+    reorderLibraryCard: (cardId: string, newIndex: number) => {
+      const state = get();
+      if (!state) return;
+      
+      const card = state.board.find((c) => c.id === cardId);
+      if (!card || card.zone !== 'library' || card.ownerId !== state.playerName) return;
+      
+      // Usar requestAction para salvar e sincronizar
+      requestAction({ kind: 'reorderLibrary', cardId, newIndex, playerName: state.playerName });
     },
-    mulligan: (playerId: string) => {
-      requestAction({ kind: 'mulligan', playerId });
+    shuffleLibrary: (playerName: string) => {
+      requestAction({ kind: 'shuffleLibrary', playerName });
+    },
+    mulligan: (playerName: string) => {
+      requestAction({ kind: 'mulligan', playerName });
     },
     createCounter: (ownerId: string, type: CounterType, position: Point) => {
       requestAction({ kind: 'createCounter', ownerId, type, position });
@@ -2267,39 +2982,53 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (!state) return;
       
       const player = state.players.find((p) => p.id === playerId);
-      const currentLife = player?.life ?? 20;
+      const currentLife = player?.life ?? 40;
       const newLife = Math.max(0, currentLife + delta);
       
       get().setPlayerLife(playerId, newLife);
     },
-    resetBoard: () => {
+    setCommanderDamage: (targetPlayerId: string, attackerPlayerId: string, damage: number) => {
+      requestAction({ kind: 'setCommanderDamage', targetPlayerId, attackerPlayerId, damage });
+    },
+    changeCommanderDamage: (targetPlayerId: string, attackerPlayerId: string, delta: number) => {
       const state = get();
       if (!state) return;
       
-      // Se for host, limpar todas as cartas diretamente
-      if (state.isHost) {
-        set({ board: [] });
-        pushBoardState();
-      } else {
-        // Se for cliente, enviar ação para remover todas as cartas
-        if (state.hostConnection && state.hostConnection.open) {
-          try {
-            // Enviar ação para remover todas as cartas
-            state.board.forEach((card) => {
-              state.hostConnection?.send({
-                type: 'REQUEST_ACTION',
-                action: { kind: 'remove', id: card.id },
-                actorId: state.playerId,
-              });
-            });
-          } catch (error) {
-            debugLog('failed to reset board', error);
-          }
-        }
-      }
+      const targetPlayer = state.players.find((p) => p.id === targetPlayerId);
+      const currentDamage = targetPlayer?.commanderDamage?.[attackerPlayerId] ?? 0;
+      const newDamage = Math.max(0, currentDamage + delta);
+      
+      // Quando aumentar commander damage, diminuir a vida
+      // Quando diminuir commander damage, aumentar a vida
+      const currentLife = targetPlayer?.life ?? 40;
+      const newLife = Math.max(0, currentLife - delta);
+      get().setPlayerLife(targetPlayerId, newLife);
+      
+      get().setCommanderDamage(targetPlayerId, attackerPlayerId, newDamage);
+    },
+    resetBoard: () => {
+      const state = get();
+      if (!state || !state.playerName) return;
+      
+      // Remover apenas as cartas do jogador atual
+      const myCards = state.board.filter((card) => card.ownerId === state.playerName);
+      
+      if (myCards.length === 0) return; // Nenhuma carta para remover
+      
+      // Se for host, remover as cartas diretamente usando requestAction para cada uma
+      // Isso garante que os eventos sejam salvos no servidor
+      myCards.forEach((card) => {
+        requestAction({ kind: 'remove', id: card.id });
+      });
+    },
+    setSimulatedPlayers: (count: number) => {
+      requestAction({ kind: 'setSimulatedPlayers', count });
     },
     setPeerEventLogger: (logger: ((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => void) | null) => {
       peerEventLogger = logger;
+    },
+    setZoomedCard: (cardId: string | null) => {
+      requestAction({ kind: 'setZoomedCard', cardId }, true); // skipEventSave = true pois é apenas UI state
     },
   };
   
@@ -2310,42 +3039,4 @@ export const useGameStore = create<GameStore>((set, get) => {
 // Usar setTimeout para garantir que o store está totalmente inicializado
 // Usar debounce para evitar loops infinitos
 if (typeof window !== 'undefined') {
-  let saveTimeout: ReturnType<typeof setTimeout> | null = null;
-  let lastSavedState: string | null = null;
-  
-  setTimeout(() => {
-    try {
-      useGameStore.subscribe((state) => {
-        // Só salvar se estiver em uma sala (roomId não vazio) e state existir
-        if (state && typeof state === 'object' && state !== null && 'roomId' in state && state.roomId) {
-          // Serializar estado para comparar
-          const stateKey = JSON.stringify({
-            roomId: state.roomId,
-            board: state.board,
-            players: state.players,
-            status: state.status,
-            isHost: state.isHost,
-          });
-          
-          // Só salvar se o estado realmente mudou
-          if (stateKey !== lastSavedState) {
-            // Debounce para evitar múltiplas salvamentos
-            if (saveTimeout) {
-              clearTimeout(saveTimeout);
-            }
-            saveTimeout = setTimeout(() => {
-              try {
-                saveSession(state);
-                lastSavedState = stateKey;
-              } catch (error) {
-                debugLog('failed to save session in subscribe', error);
-              }
-            }, 500);
-          }
-        }
-      });
-    } catch (error) {
-      debugLog('failed to setup subscribe', error);
-    }
-  }, 0);
 }

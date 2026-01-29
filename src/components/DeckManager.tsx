@@ -77,6 +77,7 @@ const DeckManager = () => {
         typeLine: card.typeLine,
         setName: card.setName,
         imageUrl: card.imageUrl,
+        backImageUrl: card.backImageUrl,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load card');
@@ -99,6 +100,7 @@ const DeckManager = () => {
         typeLine: card.typeLine,
         setName: card.setName,
         imageUrl: card.imageUrl,
+        backImageUrl: card.backImageUrl,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load card');
@@ -266,6 +268,7 @@ const DeckManager = () => {
                           typeLine?: string;
                           setName?: string;
                           imageUrl?: string;
+                          backImageUrl?: string;
                         }[] = [];
                         
                         for (let i = 0; i < results.length; i++) {
@@ -285,6 +288,7 @@ const DeckManager = () => {
                               typeLine: result.typeLine,
                               setName: result.setName,
                               imageUrl: result.imageUrl,
+                              backImageUrl: result.backImageUrl,
                             });
                           }
                         }

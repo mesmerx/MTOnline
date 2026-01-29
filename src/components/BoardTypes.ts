@@ -7,6 +7,7 @@ export interface BoardViewProps {
   board: CardOnBoard[];
   allPlayers: PlayerSummary[];
   playerId: string;
+  playerName: string;
   battlefieldCards: CardOnBoard[];
   libraryCards: CardOnBoard[];
   cemeteryCards: CardOnBoard[];
@@ -14,8 +15,8 @@ export interface BoardViewProps {
   storeCemeteryPositions: Record<string, Point>;
   showHand: boolean;
   dragStateRef: RefObject<{ cardId: string; offsetX: number; offsetY: number; startX: number; startY: number; hasMoved: boolean } | null>;
-  draggingLibrary: { playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
-  draggingCemetery: { playerId: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
+  draggingLibrary: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
+  draggingCemetery: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   ownerName: (card: CardOnBoard) => string;
   handleCardClick: (card: CardOnBoard, event: React.MouseEvent) => void;
   handleCardContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
@@ -23,18 +24,19 @@ export interface BoardViewProps {
   startDrag: (card: CardOnBoard, event: React.PointerEvent) => void;
   zoomedCard: string | null;
   setZoomedCard: (cardId: string | null) => void;
-  startLibraryDrag: (targetPlayerId: string, event: React.PointerEvent) => void;
-  startCemeteryDrag: (targetPlayerId: string, event: React.PointerEvent) => void;
-  changeCardZone: (cardId: string, newZone: 'battlefield' | 'hand' | 'library' | 'cemetery', position?: Point) => void;
+  startLibraryDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
+  startCemeteryDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
+  changeCardZone: (cardId: string, newZone: 'battlefield' | 'hand' | 'library' | 'cemetery', position?: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   detectZoneAtPosition: (x: number, y: number) => { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | null; ownerId?: string };
   reorderHandCard: (cardId: string, newIndex: number) => void;
+  reorderLibraryCard: (cardId: string, newIndex: number) => void;
   dragStartedFromHandRef: RefObject<boolean>;
   handCardPlacedRef: RefObject<boolean>;
   setContextMenu: (menu: { x: number; y: number; card: CardOnBoard } | null) => void;
   setLastTouchedCard: (card: CardOnBoard | null) => void;
   getPlayerArea: (ownerId: string) => { x: number; y: number; width: number; height: number } | null;
-  getLibraryPosition: (playerId: string) => Point | null;
-  getCemeteryPosition: (playerId: string) => Point | null;
+  getLibraryPosition: (playerName: string) => Point | null;
+  getCemeteryPosition: (playerName: string) => Point | null;
   handDragStateRef: RefObject<{
     draggingHandCard: string | null;
     handCardMoved: boolean;
@@ -52,6 +54,7 @@ export interface BoardViewProps {
   removeCounterToken: (counterId: string) => void;
   mulligan?: (playerId: string) => void;
   playerHandCards?: CardOnBoard[];
+  flipCard: (cardId: string) => void;
 }
 
 export const BASE_BOARD_WIDTH = 1920;

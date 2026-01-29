@@ -37,6 +37,7 @@ const CardSearch = () => {
       typeLine: result.typeLine,
       setName: result.setName,
       imageUrl: result.imageUrl,
+      backImageUrl: result.backImageUrl,
     });
   };
 

@@ -11,6 +11,7 @@ export const BoardUnified = (props: BoardViewProps) => {
     boardRef,
     allPlayers,
     playerId,
+    playerName,
     battlefieldCards,
     libraryCards,
     cemeteryCards,
@@ -42,12 +43,14 @@ export const BoardUnified = (props: BoardViewProps) => {
     moveCounter,
     modifyCounter,
     removeCounterToken,
+    flipCard,
+    addEventLog,
   } = props;
 
   return (
     <>
       {allPlayers.length > 0 && allPlayers.map((player) => {
-        const area = getPlayerArea(player.id);
+        const area = getPlayerArea(player.name);
         if (!area) return null;
         const isCurrentPlayer = player.id === playerId;
 
@@ -70,7 +73,7 @@ export const BoardUnified = (props: BoardViewProps) => {
 
       <Library
         boardRef={boardRef}
-        playerId={playerId}
+        playerName={playerName}
         libraryCards={libraryCards}
         players={allPlayers}
         getPlayerArea={getPlayerArea}
@@ -91,11 +94,12 @@ export const BoardUnified = (props: BoardViewProps) => {
         changeCardZone={changeCardZone}
         getCemeteryPosition={getCemeteryPosition}
         board={board}
+        reorderLibraryCard={props.reorderLibraryCard}
       />
 
       <Cemetery
         boardRef={boardRef}
-        playerId={playerId}
+        playerName={playerName}
         cemeteryCards={cemeteryCards}
         players={allPlayers}
         getCemeteryPosition={getCemeteryPosition}
@@ -144,6 +148,44 @@ export const BoardUnified = (props: BoardViewProps) => {
               height={CARD_HEIGHT}
               showBack={false}
             />
+            {/* Botão de flip embaixo da carta (apenas se tiver backImageUrl) */}
+            {card.backImageUrl && (
+              <button
+                onClick={(e) => {
+                  e.stopPropagation();
+                  e.preventDefault();
+                  flipCard(card.id);
+                }}
+                style={{
+                  position: 'absolute',
+                  bottom: '-24px',
+                  left: '50%',
+                  transform: 'translateX(-50%)',
+                  width: '40px',
+                  height: '32px',
+                  padding: '4px 6px',
+                  backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                  border: '1px solid rgba(148, 163, 184, 0.3)',
+                  borderRadius: '4px',
+                  color: '#f8fafc',
+                  cursor: 'pointer',
+                  fontSize: '18px',
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'center',
+                  zIndex: 2,
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.3)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.9)';
+                }}
+                title="Transform"
+              >
+                🔄
+              </button>
+            )}
           </div>
         );
       })}
@@ -153,7 +195,7 @@ export const BoardUnified = (props: BoardViewProps) => {
         <CounterToken
           key={counter.id}
           counter={counter}
-          isCurrentPlayer={counter.ownerId === playerId}
+          isCurrentPlayer={counter.ownerId === playerName}
           onMove={moveCounter}
           onModify={modifyCounter}
           onRemove={removeCounterToken}
@@ -168,6 +210,7 @@ export const BoardUnified = (props: BoardViewProps) => {
         <Hand
           boardRef={boardRef}
           playerId={playerId}
+          playerName={playerName}
           board={board}
           players={allPlayers}
           getPlayerArea={getPlayerArea}
@@ -197,6 +240,8 @@ export const BoardUnified = (props: BoardViewProps) => {
           moveCounter={moveCounter}
           modifyCounter={modifyCounter}
           removeCounterToken={removeCounterToken}
+          getCemeteryPosition={getCemeteryPosition}
+          getLibraryPosition={getLibraryPosition}
         />
       )}
     </>

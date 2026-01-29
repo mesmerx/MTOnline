@@ -73,15 +73,21 @@ describe('useGameStore room connections', () => {
     useGameStore.getState().setPlayerName('');
   });
 
-  it('creates a host room and marks the local player as connected once PeerJS opens', () => {
+  it('creates a host room and marks the local player as connected once PeerJS opens', async () => {
     const store = useGameStore.getState();
     store.setPlayerName('Host Mage');
-    store.createRoom(' test-room ', 'secret');
-
+    const createPromise = store.createRoom(' test-room ', 'secret');
+    
+    // Aguardar um pouco mais para o peer ser criado (createPeerInstance é assíncrono)
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    
     expect(peerControl.peers.length).toBeGreaterThan(0);
     const hostPeer = peerControl.peers[peerControl.peers.length - 1];
 
     hostPeer.emit('open');
+    
+    // Aguardar a promise do createRoom completar
+    await createPromise;
 
     const nextState = useGameStore.getState();
     expect(nextState.isHost).toBe(true);
@@ -90,11 +96,12 @@ describe('useGameStore room connections', () => {
     expect(nextState.players[0]?.name).toBe('Host Mage');
   });
 
-  it('joins an existing room and applies ROOM_STATE updates from host', () => {
+  it('joins an existing room and applies ROOM_STATE updates from host', async () => {
     const store = useGameStore.getState();
     store.setPlayerName('Visiting Planeswalker');
-    store.joinRoom('alpha-room', 'pw123');
+    await store.joinRoom('alpha-room', 'pw123');
 
+    expect(peerControl.peers.length).toBeGreaterThan(0);
     const peer = peerControl.peers[peerControl.peers.length - 1];
     peer.emit('open');
 

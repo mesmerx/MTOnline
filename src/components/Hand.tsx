@@ -6,6 +6,7 @@ import CardToken from './CardToken';
 import CounterToken from './CounterToken';
 import type { Counter } from '../store/useGameStore';
 import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT } from './BoardTypes';
+import HandSearch from './HandSearch';
 
 type Point = { x: number; y: number };
 
@@ -19,7 +20,7 @@ const THROTTLE_MS = 8; // ~120fps para melhor responsividade durante drag
 
 interface HandProps {
   boardRef: React.RefObject<HTMLDivElement | null>;
-  playerId: string;
+  playerName: string;
   board: CardOnBoard[];
   players: Array<{ id: string; name: string }>;
   getPlayerArea: (ownerId: string) => { x: number; y: number; width: number; height: number } | null;
@@ -27,7 +28,7 @@ interface HandProps {
   handleCardContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   ownerName: (card: CardOnBoard) => string;
-  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point) => void;
+  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   detectZoneAtPosition: (x: number, y: number) => { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | null; ownerId?: string };
   reorderHandCard: (cardId: string, newIndex: number) => void;
   dragStartedFromHandRef: React.MutableRefObject<boolean>;
@@ -41,6 +42,7 @@ interface HandProps {
     previewHandOrder: number | null;
     dragPosition: Point | null;
     dragStartPosition: Point | null;
+    dragOffset: Point | null;
   }>;
   addEventLog: (type: string, message: string, cardId?: string, cardName?: string, details?: Record<string, unknown>) => void;
   showDebugMode?: boolean;
@@ -51,11 +53,13 @@ interface HandProps {
   moveCounter?: (counterId: string, position: Point) => void;
   modifyCounter?: (counterId: string, delta?: number, deltaX?: number, deltaY?: number, setValue?: number, setX?: number, setY?: number) => void;
   removeCounterToken?: (counterId: string) => void;
+  getCemeteryPosition?: (playerName: string) => Point | null;
+  getLibraryPosition?: (playerName: string) => Point | null;
 }
 
 const Hand = ({
   boardRef,
-  playerId,
+  playerName,
   board,
   players,
   getPlayerArea,
@@ -81,7 +85,10 @@ const Hand = ({
   moveCounter,
   modifyCounter,
   removeCounterToken,
+  getCemeteryPosition,
+  getLibraryPosition,
 }: HandProps) => {
+  const [showHandSearch, setShowHandSearch] = useState(false);
   const [handCardMoved, setHandCardMoved] = useState(false);
   const [handScrollIndex, setHandScrollIndex] = useState(0);
   const [isSliding, setIsSliding] = useState(false);
@@ -89,11 +96,13 @@ const Hand = ({
   const [previewHandOrder, setPreviewHandOrder] = useState<number | null>(null);
   const [dragPosition, setDragPosition] = useState<Point | null>(null);
   const [dragStartPosition, setDragStartPosition] = useState<Point | null>(null);
+  const [dragOffset, setDragOffset] = useState<Point | null>(null); // Offset do mouse em relação ao centro da carta
   const [zoomedCard, setZoomedCard] = useState<string | null>(null);
   const [hoveredHandCard, setHoveredHandCard] = useState<string | null>(null);
   const [initialHoverIndex, setInitialHoverIndex] = useState<number | null>(null);
   const [originalHandOrder, setOriginalHandOrder] = useState<Record<string, number> | null>(null);
   const [pendingHandDrag, setPendingHandDrag] = useState<{ cardId: string; startX: number; startY: number } | null>(null);
+  const [maxCardsToShow, setMaxCardsToShow] = useState<number>(0); // 0 = mostrar todas
   
   const dragUpdateRef = useRef<number>(0);
   const stopDragExecutedRef = useRef<boolean>(false); // Flag para evitar múltiplas execuções
@@ -104,11 +113,14 @@ const Hand = ({
   const getHandArea = useCallback((ownerId: string) => {
     if (!boardRef.current || players.length === 0) return null;
     const rect = boardRef.current.getBoundingClientRect();
-    const playerIndex = players.findIndex((p) => p.id === ownerId);
-    if (playerIndex === -1) return null;
+    // ownerId pode ser o nome do player (quando chamado com playerName) ou o ID
+    // Tentar encontrar por nome primeiro, depois por ID
+    const player = players.find((p) => p.name === ownerId) || players.find((p) => p.id === ownerId);
+    if (!player) return null;
 
     // Calcular área baseada no número real de cartas
-    const playerHandCards = handCards.filter((c) => c.ownerId === ownerId);
+    // ownerId das cartas é o nome do player, não o ID
+    const playerHandCards = handCards.filter((c) => c.ownerId === player.name);
     const totalCards = playerHandCards.length;
     
     if (totalCards === 0) {
@@ -130,12 +142,10 @@ const Hand = ({
     // Centralizar o container
     const handX = (rect.width - handWidth) / 2;
     
-    // Área Y: baseada na altura da carta + espaço para o arco + espaço para hover + 10% de margem
-    const curveHeight = 8;
-    const HOVER_LIFT_PX = 10;
-    const baseHandHeight = HAND_CARD_HEIGHT + curveHeight + HOVER_LIFT_PX + 10; // Altura da carta + arco + hover + margem
-    const marginY = baseHandHeight * 0.1; // 10% de margem
-    const handHeight = baseHandHeight + (marginY * 2);
+    // Área Y: baseada na altura da carta
+    // Reduzir margens para evitar espaço vazio no topo
+    // Margem inferior pequena (5px) e margem superior mínima (2px) apenas para o arco
+    const handHeight = HAND_CARD_HEIGHT + 5 + 2; // Altura da carta + margem inferior + margem superior mínima
     const handY = rect.height - handHeight;
 
     return {
@@ -147,7 +157,7 @@ const Hand = ({
   }, [boardRef, players, handCards]);
 
   const prepareHandDrag = (card: CardOnBoard, event: ReactPointerEvent) => {
-    if (card.ownerId !== playerId) return;
+    if (card.ownerId !== playerName) return;
     if ((event.target as HTMLElement).closest('button')) return;
     if (event.button === 1 || event.button === 2) return;
     if (!boardRef.current) return;
@@ -163,7 +173,7 @@ const Hand = ({
     // Resetar flag de execução quando iniciar um novo drag
     stopDragExecutedRef.current = false;
     
-    const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerId);
+    const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
     const sortedCards = [...playerHandCards].sort((a, b) => {
       if (a.handIndex !== undefined && b.handIndex !== undefined) {
         return a.handIndex - b.handIndex;
@@ -185,6 +195,34 @@ const Hand = ({
       setInitialHoverIndex(hoveredIndex >= 0 ? hoveredIndex : null);
     }
     
+    // Calcular a posição real da carta na mão para evitar "pulo" inicial
+    let cardRealX = startX;
+    let cardRealY = startY;
+    if (boardRef.current) {
+      const handArea = getHandArea(playerName);
+      if (handArea) {
+        const cardIndex = originalOrder[card.id] ?? sortedCards.findIndex((c) => c.id === card.id);
+        if (cardIndex >= 0) {
+          const positionIndex = cardIndex;
+          const cardLeftPx = 80 + (positionIndex * HAND_CARD_LEFT_SPACING);
+          
+          // Calcular Y com o arco
+          const visibleCardsCount = Math.min(maxRenderCards, sortedCards.length);
+          const normalizedPos = visibleCardsCount > 1 
+            ? (positionIndex / (visibleCardsCount - 1)) * 2 - 1 
+            : 0;
+          const curveHeight = 8;
+          const ellipseY = Math.sqrt(Math.max(0, 1 - normalizedPos * normalizedPos));
+          const curveY = curveHeight * ellipseY;
+          const cardYPercent = 85 - curveY;
+          
+          // Converter para coordenadas relativas ao board
+          cardRealX = handArea.x + cardLeftPx;
+          cardRealY = handArea.y + (cardYPercent / 100) * handArea.height;
+        }
+      }
+    }
+    
     setHandCardMoved(false);
     handCardPlacedRef.current = false;
     setDragStartedFromHand(true);
@@ -194,8 +232,18 @@ const Hand = ({
     
     setDraggingHandCard(card.id);
     setHoveredHandCard(null);
-    setDragPosition({ x: startX, y: startY });
-    setDragStartPosition({ x: startX, y: startY });
+    // Calcular offset do mouse em relação ao centro da carta
+    // A carta usa translate(-50%, -100%) então o ponto de referência é o centro inferior
+    // O centro da carta seria: X = cardRealX, Y = cardRealY - HAND_CARD_HEIGHT/2
+    const cardCenterX = cardRealX;
+    const cardCenterY = cardRealY - HAND_CARD_HEIGHT / 2;
+    const offsetX = startX - cardCenterX;
+    const offsetY = startY - cardCenterY;
+    const dragOffsetValue = { x: offsetX, y: offsetY };
+    setDragOffset(dragOffsetValue);
+    // Usar a posição real da carta na mão como posição inicial para evitar "pulo"
+    setDragPosition({ x: cardRealX, y: cardRealY });
+    setDragStartPosition({ x: startX, y: startY }); // Manter posição do cursor para cálculo de movimento
     setPreviewHandOrder(null);
     setPendingHandDrag(null);
     
@@ -207,8 +255,9 @@ const Hand = ({
       draggingHandCard: card.id,
       handCardMoved: false,
       previewHandOrder: null,
-      dragPosition: { x: startX, y: startY },
+      dragPosition: { x: cardRealX, y: cardRealY },
       dragStartPosition: { x: startX, y: startY },
+      dragOffset: dragOffsetValue,
     };
     
     addEventLog('DRAG_START', `Iniciando drag da hand: ${card.name}`, card.id, card.name, {
@@ -234,7 +283,7 @@ const Hand = ({
         // Usar board atualizado do store para garantir que temos a versão mais recente
         const currentBoard = useGameStore.getState().board;
         const card = currentBoard.find((c) => c.id === pendingHandDrag.cardId);
-        if (card && card.zone === 'hand' && card.ownerId === playerId) {
+        if (card && card.zone === 'hand' && card.ownerId === playerName) {
           event.preventDefault();
           startHandDrag(card, pendingHandDrag.startX, pendingHandDrag.startY);
         }
@@ -251,7 +300,7 @@ const Hand = ({
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
     };
-  }, [pendingHandDrag, board, playerId, hoveredHandCard]);
+  }, [pendingHandDrag, board, playerName, hoveredHandCard]);
   
   // useEffect para drag de cartas da mão
   useEffect(() => {
@@ -273,11 +322,26 @@ const Hand = ({
       let cursorY = event.clientY - rect.top;
       
       // Atualizar a posição visual da carta arrastada sempre (para seguir o mouse)
-      // Isso garante que a carta siga o mouse desde o início do drag
-      setDragPosition({ x: cursorX, y: cursorY });
-      
-      // Atualizar ref para debug
-      handDragStateRef.current.dragPosition = { x: cursorX, y: cursorY };
+      // Aplicar o offset para que o mouse fique sempre no mesmo ponto da carta
+      // A carta usa translate(-50%, -100%) então o ponto de referência é o centro inferior
+      const currentDragOffset = handDragStateRef.current.dragOffset;
+      if (currentDragOffset) {
+        // O mouse está em (cursorX, cursorY)
+        // O offset é a diferença entre o mouse e o centro da carta
+        // O centro da carta seria: X = cardCenterX, Y = cardCenterY
+        // O centro inferior (ponto de referência) seria: X = cardCenterX, Y = cardCenterY + HAND_CARD_HEIGHT/2
+        // Queremos: cursorX = cardCenterX + offsetX, cursorY = cardCenterY + offsetY
+        // Então: cardCenterX = cursorX - offsetX, cardCenterY = cursorY - offsetY
+        const cardCenterX = cursorX - currentDragOffset.x;
+        const cardCenterY = cursorY - currentDragOffset.y;
+        // Converter para a posição do centro inferior (ponto de referência da carta)
+        const newDragPosition = { x: cardCenterX, y: cardCenterY + HAND_CARD_HEIGHT / 2 };
+        setDragPosition(newDragPosition);
+        handDragStateRef.current.dragPosition = newDragPosition;
+      } else {
+        setDragPosition({ x: cursorX, y: cursorY });
+        handDragStateRef.current.dragPosition = { x: cursorX, y: cursorY };
+      }
       
       // Para o cálculo de movimento, usar coordenadas relativas (não convertidas)
       // Isso garante que o threshold funcione corretamente
@@ -296,12 +360,12 @@ const Hand = ({
         return;
       }
       
-      const handArea = getHandArea(playerId);
+      const handArea = getHandArea(playerName);
       if (!handArea) return;
       
       // Usar board atualizado do store para garantir que temos a versão mais recente
       const currentBoard = useGameStore.getState().board;
-      const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerId);
+      const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
       const allCards = [...playerHandCards].sort((a, b) => {
         const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
         const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
@@ -388,7 +452,66 @@ const Hand = ({
       }
       
       // Capturar previewHandOrder no início para evitar problemas de closure
-      const currentPreviewHandOrder = previewHandOrder;
+      let currentPreviewHandOrder = previewHandOrder;
+      
+      // Usar a ref que foi setada quando o drag começou (definir antes de usar)
+      const startedFromHand = dragStartedFromHandRef.current;
+      
+      // Se previewHandOrder não foi calculado durante o drag, calcular agora
+      // IMPORTANTE: Calcular ANTES de verificar droppedOutsideHand
+      if (currentPreviewHandOrder === null && handCardMoved && event && boardRef.current && startedFromHand) {
+        console.log('[Hand] stopDrag: Tentando calcular previewHandOrder', {
+          currentPreviewHandOrder,
+          handCardMoved,
+          hasEvent: !!event,
+          hasBoardRef: !!boardRef.current,
+          startedFromHand,
+        });
+        const handArea = getHandArea(playerName);
+        console.log('[Hand] stopDrag: handArea:', handArea);
+        if (handArea) {
+          const rect = boardRef.current.getBoundingClientRect();
+          // handArea está em coordenadas relativas ao board, usar coordenadas relativas também
+          let relativeX = event.clientX - rect.left;
+          
+          const currentBoard = useGameStore.getState().board;
+          const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
+          const allCards = [...playerHandCards].sort((a, b) => {
+            const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
+            const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
+            return indexA - indexB;
+          });
+          
+          const totalCards = allCards.length;
+          const maxScroll = Math.max(0, totalCards - maxRenderCards);
+          const currentScrollIndex = Math.min(handScrollIndex, maxScroll);
+          const renderStartIndex = currentScrollIndex;
+          
+          const handAreaLeft = handArea.x;
+          const relativeXToHand = relativeX - handAreaLeft;
+          const cardStartOffset = 80;
+          const adjustedX = relativeXToHand - cardStartOffset;
+          
+          if (adjustedX >= 0) {
+            const visibleCardsCount = Math.min(maxRenderCards, totalCards - renderStartIndex);
+            let visualPosition = Math.floor(adjustedX / HAND_CARD_LEFT_SPACING);
+            visualPosition = Math.max(0, Math.min(visibleCardsCount - 1, visualPosition));
+            
+            const newIndex = renderStartIndex + visualPosition;
+            currentPreviewHandOrder = Math.max(0, Math.min(totalCards - 1, newIndex));
+          } else {
+            currentPreviewHandOrder = renderStartIndex;
+          }
+          
+          console.log('[Hand] stopDrag: Calculado previewHandOrder:', {
+            relativeX,
+            handAreaLeft,
+            relativeXToHand,
+            adjustedX,
+            currentPreviewHandOrder,
+          });
+        }
+      }
       
       console.log('[Hand] stopDrag chamado:', {
         draggedCardId,
@@ -396,6 +519,9 @@ const Hand = ({
         dragStartPosition,
         currentPreviewHandOrder,
         previewHandOrder,
+        startedFromHand,
+        hasEvent: !!event,
+        hasBoardRef: !!boardRef.current,
         event: event ? { clientX: event.clientX, clientY: event.clientY } : null,
       });
       
@@ -422,6 +548,7 @@ const Hand = ({
           previewHandOrder: null,
           dragPosition: null,
           dragStartPosition: null,
+          dragOffset: null,
         };
         return;
       }
@@ -432,13 +559,13 @@ const Hand = ({
       
       console.log('[Hand] stopDrag: Verificando carta:', {
         draggedCard: draggedCard ? { id: draggedCard.id, name: draggedCard.name, zone: draggedCard.zone, ownerId: draggedCard.ownerId } : null,
-        playerId,
+        playerName,
         isHand: draggedCard?.zone === 'hand',
-        isOwner: draggedCard?.ownerId === playerId,
+        isOwner: draggedCard?.ownerId === playerName,
       });
       
       // Se a carta não existe, não está na hand, ou não é do jogador, limpar estados imediatamente
-      if (!draggedCard || draggedCard.zone !== 'hand' || draggedCard.ownerId !== playerId) {
+      if (!draggedCard || draggedCard.zone !== 'hand' || draggedCard.ownerId !== playerName) {
         console.log('[Hand] stopDrag: Carta não é válida para drag da hand, limpando estados');
         // Limpar imediatamente para evitar múltiplas chamadas
         if (draggingHandCard === draggedCardId) {
@@ -461,6 +588,7 @@ const Hand = ({
           previewHandOrder: null,
           dragPosition: null,
           dragStartPosition: null,
+          dragOffset: null,
         };
         return;
       }
@@ -497,6 +625,7 @@ const Hand = ({
             previewHandOrder: null,
             dragPosition: null,
             dragStartPosition: null,
+            dragOffset: null,
           };
           return;
         }
@@ -526,24 +655,13 @@ const Hand = ({
           previewHandOrder: null,
           dragPosition: null,
           dragStartPosition: null,
+          dragOffset: null,
         };
         return;
       }
       
       let dropPosition: { x: number; y: number } | null = null;
-      let startedFromHand = false;
-      
-      // Verificar se o drag começou na área da hand baseado na posição inicial
-      if (dragStartPosition && boardRef.current) {
-        const handArea = getHandArea(playerId);
-        if (handArea) {
-          startedFromHand = 
-            dragStartPosition.x >= handArea.x && 
-            dragStartPosition.x <= handArea.x + handArea.width &&
-            dragStartPosition.y >= handArea.y && 
-            dragStartPosition.y <= handArea.y + handArea.height;
-        }
-      }
+      // startedFromHand já foi declarado acima (linha 395)
       
       // Usar as coordenadas x e y de onde o usuário soltou a carta
       let dropCursorX: number | null = null;
@@ -558,7 +676,7 @@ const Hand = ({
           const coords = convertMouseToSeparatedCoordinates(
             event.clientX,
             event.clientY,
-            playerId,
+            playerName,
             rect
           );
           if (coords) {
@@ -596,7 +714,7 @@ const Hand = ({
       }
       
       // Se arrastou da hand e moveu, verificar se soltou dentro ou fora da área da hand
-      if (draggedCard.zone === 'hand' && draggedCard.ownerId === playerId) {
+      if (draggedCard.zone === 'hand' && draggedCard.ownerId === playerName) {
         console.log('[Hand] stopDrag: Verificando condições para mudar zona:', {
           startedFromHand,
           handCardMoved,
@@ -611,64 +729,40 @@ const Hand = ({
         
         // PRIMEIRO: Verificar se houve preview de reordenação
         // Se há previewHandOrder, significa que durante o drag estava dentro da hand
-        // Nesse caso, deve reordenar, não mudar de zona
+        // Mas ainda precisamos verificar se soltou fora da hand
         const hadPreviewOrder = currentPreviewHandOrder !== null;
         
         // Verificar se a carta foi solta FORA da área da hand
-        // Se sim, mudar de zona. Se não, reordenar.
+        // IMPORTANTE: Sempre verificar, mesmo se há preview de reordenação
+        // Se soltou fora, mudar de zona. Se não, reordenar.
         let droppedOutsideHand = false;
         
-        // Se há preview de reordenação, assumir que está dentro da hand (não mudar de zona)
-        if (!hadPreviewOrder && startedFromHand && handCardMoved && event && dropCursorX !== null && dropCursorY !== null && boardRef.current) {
-          const handArea = getHandArea(playerId);
+        // Sempre verificar se soltou fora da hand, independente de ter preview
+        if (startedFromHand && handCardMoved && event && dropCursorX !== null && dropCursorY !== null && boardRef.current) {
+          const handArea = getHandArea(playerName);
           if (handArea) {
-            // Converter dropCursorX/Y para espaço base antes de comparar
+            // Converter dropCursorX/Y para coordenadas relativas ao board (mesmo sistema que handArea)
             const rect = boardRef.current.getBoundingClientRect();
-            let baseX: number;
-            let baseY: number;
+            let relativeX = event.clientX - rect.left;
+            let relativeY = event.clientY - rect.top;
             
-            if (viewMode === 'separated' && convertMouseToSeparatedCoordinates) {
-              // Para separated, precisamos converter usando as coordenadas do evento
-              const coords = convertMouseToSeparatedCoordinates(
-                event.clientX,
-                event.clientY,
-                playerId,
-                rect
-              );
-              if (coords) {
-                baseX = coords.x;
-                baseY = coords.y;
-              } else {
-                // Fallback: usar dropCursorX/Y diretamente (já pode estar no espaço base)
-                baseX = dropCursorX;
-                baseY = dropCursorY;
-              }
-            } else if ((viewMode === 'individual' || viewMode === 'unified') && convertMouseToUnifiedCoordinates) {
-              const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
-              baseX = coords.x;
-              baseY = coords.y;
-            } else {
-              // Fallback: assumir que dropCursorX/Y já estão no espaço base
-              baseX = dropCursorX;
-              baseY = dropCursorY;
-            }
-            
-            // Verificar se a posição onde soltou está FORA da área da hand (no espaço base)
+            // handArea está em coordenadas relativas ao board, usar coordenadas relativas também
+            // Verificar se a posição onde soltou está FORA da área da hand
             // Adicionar uma pequena margem para facilitar a detecção
             const margin = 20;
             const isInsideHand = 
-              baseX >= (handArea.x - margin) && 
-              baseX <= (handArea.x + handArea.width + margin) &&
-              baseY >= (handArea.y - margin) && 
-              baseY <= (handArea.y + handArea.height + margin);
+              relativeX >= (handArea.x - margin) && 
+              relativeX <= (handArea.x + handArea.width + margin) &&
+              relativeY >= (handArea.y - margin) && 
+              relativeY <= (handArea.y + handArea.height + margin);
             
             droppedOutsideHand = !isInsideHand;
             
             console.log('[Hand] stopDrag: Verificando se soltou fora da hand:', {
               dropCursorX,
               dropCursorY,
-              baseX,
-              baseY,
+              relativeX,
+              relativeY,
               handArea: { x: handArea.x, y: handArea.y, width: handArea.width, height: handArea.height },
               isInsideHand,
               droppedOutsideHand,
@@ -678,11 +772,8 @@ const Hand = ({
           } else {
             // Se não conseguiu calcular a área da hand, assumir que está dentro
             droppedOutsideHand = false;
+            console.log('[Hand] stopDrag: Não conseguiu calcular handArea, assumindo dentro da hand');
           }
-        } else if (hadPreviewOrder) {
-          // Se há preview de reordenação, está dentro da hand
-          droppedOutsideHand = false;
-          console.log('[Hand] stopDrag: Há preview de reordenação, assumindo dentro da hand');
         }
         
         // Se soltou FORA da hand, mudar de zona (prioridade sobre reordenação)
@@ -698,7 +789,7 @@ const Hand = ({
             const coords = convertMouseToSeparatedCoordinates(
               event.clientX,
               event.clientY,
-              playerId,
+              playerName,
               rect
             );
             if (coords) {
@@ -730,27 +821,13 @@ const Hand = ({
             let finalPosition = dropPosition;
             
             if (targetZone === 'battlefield') {
-              // Converter dropPosition para espaço base se necessário
-              // dropPosition já está em coordenadas relativas ao board, precisa converter para espaço base
-              const rect = boardRef.current?.getBoundingClientRect();
-              if (rect) {
-                // dropPosition está em pixels relativos ao board, precisa converter para espaço base
-                // Usar a mesma lógica de conversão do Board
-                let baseDropX = dropPosition.x;
-                let baseDropY = dropPosition.y;
-                
-                // Se estiver em modo separated, pode precisar de conversão adicional
-                // Por enquanto, assumir que dropPosition já está no espaço correto
-                finalPosition = {
-                  x: Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, baseDropX)),
-                  y: Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, baseDropY)),
-                };
-              } else {
-                finalPosition = {
-                  x: Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, dropPosition.x)),
-                  y: Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, dropPosition.y)),
-                };
-              }
+              // dropPosition está baseado em dropCursorX/Y que já foi convertido para espaço base
+              // se estiver em modo separated/unified, ou está em coordenadas relativas se não
+              // Usar baseX/baseY que já foram calculados acima e estão no espaço base
+              finalPosition = {
+                x: Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, baseX - CARD_WIDTH / 2)),
+                y: Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, baseY - CARD_HEIGHT / 2)),
+              };
             } else if (targetZone === 'cemetery') {
               // Posição será calculada pelo store baseado no cemitério
               finalPosition = { x: 0, y: 0 };
@@ -786,6 +863,7 @@ const Hand = ({
               previewHandOrder: null,
               dragPosition: null,
               dragStartPosition: null,
+              dragOffset: null,
             };
             
             // Desativar o drag do Board também
@@ -822,9 +900,86 @@ const Hand = ({
         }
         
         // Verificar se houve reordenação (previewHandOrder não é null e diferente do original)
-        const originalIndex = originalHandOrder?.[draggedCardId];
+        // IMPORTANTE: Usar currentPreviewHandOrder que pode ter sido calculado acima
+        const originalIndex = originalHandOrder?.[draggedCardId] ?? 
+          (() => {
+            const currentBoard = useGameStore.getState().board;
+            const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
+            const allCards = [...playerHandCards].sort((a, b) => {
+              const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
+              const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
+              return indexA - indexB;
+            });
+            return allCards.findIndex((c) => c.id === draggedCardId);
+          })();
+        
+        // Se ainda não calculou o previewHandOrder e está dentro da hand, calcular baseado na posição final
+        if (currentPreviewHandOrder === null && !droppedOutsideHand && event && boardRef.current && startedFromHand) {
+          const handArea = getHandArea(playerName);
+          if (handArea && dropCursorX !== null) {
+            // handArea está em coordenadas relativas ao board, dropCursorX pode estar no espaço base
+            // Converter dropCursorX para coordenadas relativas se necessário
+            const rect = boardRef.current.getBoundingClientRect();
+            let cursorXRelative = dropCursorX;
+            
+            // Se dropCursorX está no espaço base (modo separated/unified), converter para relativo
+            if (viewMode === 'separated' || viewMode === 'unified') {
+              // dropCursorX já está no espaço base, mas handArea.x está em coordenadas relativas
+              // Precisamos converter handArea.x para o espaço base ou dropCursorX para relativo
+              // Vamos usar coordenadas relativas para ambos
+              const relativeX = event.clientX - rect.left;
+              cursorXRelative = relativeX;
+            }
+            
+            const handAreaLeft = handArea.x;
+            const relativeXToHand = cursorXRelative - handAreaLeft;
+            const cardStartOffset = 80;
+            const adjustedX = relativeXToHand - cardStartOffset;
+            
+            const currentBoard = useGameStore.getState().board;
+            const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
+            const allCards = [...playerHandCards].sort((a, b) => {
+              const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
+              const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
+              return indexA - indexB;
+            });
+            
+            const totalCards = allCards.length;
+            const maxScroll = Math.max(0, totalCards - maxRenderCards);
+            const currentScrollIndex = Math.min(handScrollIndex, maxScroll);
+            const renderStartIndex = currentScrollIndex;
+            
+            if (adjustedX >= 0) {
+              const visibleCardsCount = Math.min(maxRenderCards, totalCards - renderStartIndex);
+              let visualPosition = Math.floor(adjustedX / HAND_CARD_LEFT_SPACING);
+              visualPosition = Math.max(0, Math.min(visibleCardsCount - 1, visualPosition));
+              
+              const newIndex = renderStartIndex + visualPosition;
+              currentPreviewHandOrder = Math.max(0, Math.min(totalCards - 1, newIndex));
+            } else {
+              currentPreviewHandOrder = renderStartIndex;
+            }
+            
+            console.log('[Hand] stopDrag: Calculado previewHandOrder (fallback):', {
+              dropCursorX,
+              handAreaLeft,
+              relativeXToHand,
+              adjustedX,
+              currentPreviewHandOrder,
+            });
+          }
+        }
+        
         const hadReordering = currentPreviewHandOrder !== null;
-        const actuallyReordered = hadReordering && originalIndex !== undefined && originalIndex !== currentPreviewHandOrder;
+        const actuallyReordered = hadReordering && originalIndex !== undefined && originalIndex >= 0 && originalIndex !== currentPreviewHandOrder;
+        
+        console.log('[Hand] stopDrag: Verificando reordenação:', {
+          currentPreviewHandOrder,
+          originalIndex,
+          hadReordering,
+          actuallyReordered,
+          droppedOutsideHand,
+        });
         
         // Log evento de drag end ANTES de reordenar, se realmente moveu
         // IMPORTANTE: Sempre logar quando houver movimento, independente de reordenação
@@ -833,7 +988,8 @@ const Hand = ({
           addEventLog('DRAG_END', `Finalizando drag da hand: ${draggedCard.name}`, draggedCard.id, draggedCard.name, {
             zone: draggedCard.zone,
             handCardMoved,
-            previewHandOrder,
+            previewHandOrder: currentPreviewHandOrder,
+            originalIndex,
             droppedOutsideHand,
             actuallyReordered,
           });
@@ -842,15 +998,15 @@ const Hand = ({
         // Reordenar cartas na hand se soltou DENTRO da área da hand
         // Só reordenar se realmente moveu E o índice mudou E NÃO soltou fora da hand
         // IMPORTANTE: Só executar uma vez por drag
-        if (actuallyReordered && !droppedOutsideHand) {
+        if (actuallyReordered && !droppedOutsideHand && currentPreviewHandOrder !== null) {
           // Recalcular a posição final baseada na posição onde a carta foi soltada
           let finalNewIndex = currentPreviewHandOrder;
           
           if (event && boardRef.current && dropCursorX !== null && dropCursorY !== null) {
-            const handArea = getHandArea(playerId);
+            const handArea = getHandArea(playerName);
             if (handArea) {
               const currentBoard = useGameStore.getState().board;
-              const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerId);
+              const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
               const allCards = [...playerHandCards].sort((a, b) => {
                 const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
                 const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
@@ -922,6 +1078,7 @@ const Hand = ({
             previewHandOrder: null,
             dragPosition: null,
             dragStartPosition: null,
+            dragOffset: null,
           };
           
           // NÃO resetar stopDragExecutedRef aqui - ele será resetado quando iniciar um novo drag
@@ -953,6 +1110,7 @@ const Hand = ({
         previewHandOrder: null,
         dragPosition: null,
         dragStartPosition: null,
+        dragOffset: null,
       };
       
       // Resetar flag de execução DEPOIS de limpar todos os estados
@@ -972,7 +1130,7 @@ const Hand = ({
     previewHandOrder,
     originalHandOrder,
     board,
-    playerId,
+    playerName,
     reorderHandCard,
     hoveredHandCard,
     handScrollIndex,
@@ -994,7 +1152,7 @@ const Hand = ({
     // Se não há drag ativo, sempre atualizar originalHandOrder com a ordem atual do board
     // Isso garante que após uma reordenação, o originalHandOrder seja atualizado
     if (!draggingHandCard) {
-      const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerId);
+      const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
       const sortedCards = [...playerHandCards].sort((a, b) => {
         if (a.handIndex !== undefined && b.handIndex !== undefined) {
           return a.handIndex - b.handIndex;
@@ -1023,7 +1181,7 @@ const Hand = ({
         setOriginalHandOrder(currentOrder);
       }
     }
-  }, [board, playerId, draggingHandCard]);
+  }, [board, playerName, draggingHandCard]);
 
   // Navegação com teclado (setas esquerda/direita)
   useEffect(() => {
@@ -1037,7 +1195,7 @@ const Hand = ({
       }
       
       // Verificar se há cartas na hand do jogador
-      const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerId);
+      const playerHandCards = board.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
       if (playerHandCards.length === 0) return;
       
       const totalCards = playerHandCards.length;
@@ -1064,19 +1222,21 @@ const Hand = ({
     return () => {
       window.removeEventListener('keydown', handleKeyDown);
     };
-  }, [board, playerId, handScrollIndex, isSliding]);
+  }, [board, playerName, handScrollIndex, isSliding]);
 
   if (!boardRef.current) return null;
 
   return (
     <>
       {players.length > 0 && players.map((player) => {
-        const handArea = getHandArea(player.id);
+        const handArea = getHandArea(player.name);
         if (!handArea) return null;
-        const isCurrentPlayer = player.id === playerId;
-        const playerHandCards = handCards.filter((c) => c.ownerId === player.id);
+        const isCurrentPlayer = player.name === playerName;
+        const isSimulated = player.id.startsWith('simulated-');
+        const canInteract = isCurrentPlayer || isSimulated;
+        const playerHandCards = handCards.filter((c) => c.ownerId === player.name);
         
-        if (!isCurrentPlayer) return null;
+        if (!canInteract) return null;
         
         const boardRect = boardRef.current!.getBoundingClientRect();
         
@@ -1089,6 +1249,7 @@ const Hand = ({
               top: `${(handArea.y / boardRect.height) * 100}%`,
               width: `${(handArea.width / boardRect.width) * 100}%`,
               height: `${(handArea.height / boardRect.height) * 100}%`,
+              overflow: 'visible',
             }}
           >
             <div className="hand-cards">
@@ -1135,12 +1296,17 @@ const Hand = ({
                   });
                 }
                 
-                const totalCards = sortedHandCards.length;
+                // Aplicar limite de cartas a mostrar se maxCardsToShow > 0
+                const cardsToShow = maxCardsToShow > 0 
+                  ? sortedHandCards.slice(0, maxCardsToShow)
+                  : sortedHandCards;
+                
+                const totalCards = cardsToShow.length;
                 const maxScroll = Math.max(0, totalCards - maxRenderCards);
                 const currentScrollIndex = Math.min(handScrollIndex, maxScroll);
                 const renderStartIndex = currentScrollIndex;
                 
-                const visibleCards = sortedHandCards.slice(
+                const visibleCards = cardsToShow.slice(
                   renderStartIndex,
                   renderStartIndex + maxRenderCards
                 );
@@ -1227,12 +1393,12 @@ const Hand = ({
                       
                       let horizontalOffset = 0;
                       let verticalOffset = 0;
-                      const HOVER_LIFT_PX = 10;
                       const HOVER_SPACE_PX = 40;
                       
                       if (hoveredHandCard && !draggingHandCard && spaceIndex !== null) {
                         if (visibleIndex === spaceIndex && isHovered) {
-                          verticalOffset = -HOVER_LIFT_PX;
+                          // Removido verticalOffset para não subir a carta
+                          verticalOffset = 0;
                         } else if (visibleIndex < spaceIndex) {
                           horizontalOffset = -HOVER_SPACE_PX;
                         } else if (visibleIndex > spaceIndex) {
@@ -1283,6 +1449,8 @@ const Hand = ({
                               : `translate(calc(-50% + ${horizontalOffset}px), calc(-100% + ${verticalOffset}px)) rotate(${rotation}deg)`,
                             transformOrigin: 'center bottom',
                             transition: isSliding && !isDragging ? 'left 0.3s ease-in-out' : undefined,
+                            opacity: isDragging ? 0 : 1, // Ocultar a carta na lista quando está sendo arrastada
+                            pointerEvents: isDragging ? 'none' : 'auto', // Desabilitar interação quando arrastando
                           }}
                           onMouseEnter={() => {
                             if (!draggingHandCard) {
@@ -1306,7 +1474,7 @@ const Hand = ({
                               return;
                             }
                             
-                            if (card.zone === 'hand' && card.ownerId === playerId) {
+                            if (card.zone === 'hand' && card.ownerId === playerName) {
                               prepareHandDrag(card, event);
                             } else {
                               startDrag(card, event);
@@ -1340,6 +1508,44 @@ const Hand = ({
                             height={HAND_CARD_HEIGHT}
                             showBack={false}
                           />
+                          {/* Botão de flip embaixo da carta (apenas se tiver backImageUrl) */}
+                          {card.backImageUrl && (
+                            <button
+                              onClick={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                useGameStore.getState().flipCard(card.id);
+                              }}
+                              style={{
+                                position: 'absolute',
+                                bottom: '-20px',
+                                left: '50%',
+                                transform: 'translateX(-50%)',
+                                width: '36px',
+                                height: '28px',
+                                padding: '4px 6px',
+                                backgroundColor: 'rgba(15, 23, 42, 0.9)',
+                                border: '1px solid rgba(148, 163, 184, 0.3)',
+                                borderRadius: '4px',
+                                color: '#f8fafc',
+                                cursor: 'pointer',
+                                fontSize: '16px',
+                                display: 'flex',
+                                alignItems: 'center',
+                                justifyContent: 'center',
+                                zIndex: 2,
+                              }}
+                              onMouseEnter={(e) => {
+                                e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.3)';
+                              }}
+                              onMouseLeave={(e) => {
+                                e.currentTarget.style.backgroundColor = 'rgba(15, 23, 42, 0.9)';
+                              }}
+                              title="Transform"
+                            >
+                              🔄
+                            </button>
+                          )}
                           {showDebugMode && (
                             <div
                               style={{
@@ -1381,7 +1587,12 @@ const Hand = ({
                 return a.id.localeCompare(b.id);
               });
               
-              const totalCards = sortedHandCards.length;
+              // Aplicar limite de cartas a mostrar se maxCardsToShow > 0
+              const cardsToShow = maxCardsToShow > 0 
+                ? sortedHandCards.slice(0, maxCardsToShow)
+                : sortedHandCards;
+              
+              const totalCards = cardsToShow.length;
               const maxScroll = Math.max(0, totalCards - maxRenderCards);
               const currentScrollIndex = Math.min(handScrollIndex, maxScroll);
               const renderStartIndex = currentScrollIndex;
@@ -1393,7 +1604,7 @@ const Hand = ({
                       className="hand-nav-button hand-nav-left"
                       style={{
                         position: 'absolute',
-                        left: '10px',
+                        left: '-40px',
                         top: '50%',
                         transform: 'translateY(-50%)',
                         zIndex: 100,
@@ -1414,7 +1625,7 @@ const Hand = ({
                   <div
                     style={{
                       position: 'absolute',
-                      right: '10px',
+                      right: '-40px',
                       top: '50%',
                       transform: 'translateY(-50%)',
                       display: 'flex',
@@ -1455,12 +1666,82 @@ const Hand = ({
                       </button>
                     )}
                   </div>
+                  
+                  {/* Botão Buscar na Mão */}
+                  {isCurrentPlayer && (
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        setShowHandSearch(true);
+                      }}
+                      onPointerDown={(e) => {
+                        e.stopPropagation();
+                      }}
+                      style={{
+                        position: 'absolute',
+                        top: '10px',
+                        right: '-70px',
+                        padding: '4px 8px',
+                        backgroundColor: '#6366f1',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '10px',
+                        fontWeight: '500',
+                        zIndex: 1000,
+                        pointerEvents: 'auto',
+                      }}
+                      title="Buscar carta na mão e mover para uma zona"
+                    >
+                      🔍 Buscar
+                    </button>
+                  )}
                 </>
               );
             })()}
           </div>
         );
       })}
+      
+      {/* Busca de cartas na mão */}
+      {changeCardZone && getCemeteryPosition && getLibraryPosition && (
+        <HandSearch
+          handCards={handCards}
+          playerName={playerName}
+          isOpen={showHandSearch}
+          onClose={() => setShowHandSearch(false)}
+          onMoveCard={(cardId, zone, libraryPlace) => {
+            const card = board.find((c) => c.id === cardId);
+            if (!card || !changeCardZone) return;
+            
+            let position: Point = { x: 0, y: 0 };
+            
+            if (zone === 'battlefield' && boardRef.current) {
+              const rect = boardRef.current.getBoundingClientRect();
+              position = {
+                x: rect.width / 2 - 150 / 2,
+                y: rect.height / 2 - 210 / 2,
+              };
+            } else if (zone === 'cemetery' && getCemeteryPosition) {
+              const cemeteryPos = getCemeteryPosition(playerName);
+              if (cemeteryPos) {
+                position = cemeteryPos;
+              }
+            } else if (zone === 'library' && getLibraryPosition) {
+              const libraryPos = getLibraryPosition(playerName);
+              if (libraryPos) {
+                position = libraryPos;
+              }
+            }
+            
+            changeCardZone(cardId, zone, position, libraryPlace);
+          }}
+          ownerName={ownerName}
+          reorderHandCard={reorderHandCard}
+        />
+      )}
       
       {/* Carta arrastada seguindo o cursor */}
       {draggingHandCard && dragPosition && boardRef.current && (() => {
@@ -1470,8 +1751,11 @@ const Hand = ({
         if (!draggedCard) return null;
         const boardRect = boardRef.current.getBoundingClientRect();
         const draggedXPercent = (dragPosition.x / boardRect.width) * 100;
-        const handYPercent = 85;
-        const draggedYPercent = Math.min(handYPercent - 5, (dragPosition.y / boardRect.height) * 100 - 10);
+        // Manter a carta na mesma altura Y da mão durante o drag para evitar "pulo"
+        const handArea = getHandArea(playerName);
+        const handYPercent = handArea ? ((handArea.y + handArea.height) / boardRect.height) * 100 : 85;
+        // Usar a posição Y do cursor, mas limitar para não sair muito da área da mão
+        const draggedYPercent = Math.min(handYPercent, (dragPosition.y / boardRect.height) * 100);
         return (
           <div
             className="hand-card-wrapper dragging"

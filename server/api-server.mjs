@@ -99,15 +99,70 @@ function fuzzyMatch(query, target) {
   return 0;
 }
 
-// Função para extrair URL da imagem
+// Função para construir URL do Scryfall usando /front/ ou /back/
+// Formato: https://cards.scryfall.io/large/{face}/{first_digit}/{second_digit}/{id}.jpg
+function buildScryfallImageUrl(cardId, face = 'front') {
+  if (!cardId) return undefined;
+  // O ID do Scryfall é um UUID, precisamos extrair os dois primeiros dígitos do primeiro segmento
+  // Exemplo: 62b5ab41-7a85-49aa-8669-8a09a09d02fa -> /6/2/62b5ab41-7a85-49aa-8669-8a09a09d02fa.jpg
+  const parts = cardId.split('-');
+  if (parts.length < 1) return undefined;
+  const firstPart = parts[0]; // "62b5ab41"
+  if (firstPart.length < 2) return undefined;
+  const pathPart1 = firstPart[0]; // "6"
+  const pathPart2 = firstPart[1]; // "2"
+  return `https://cards.scryfall.io/large/${face}/${pathPart1}/${pathPart2}/${cardId}.jpg`;
+}
+
+// Função para verificar se uma carta tem duas faces
+function hasTwoFaces(card) {
+  // Verificar se tem card_faces com mais de uma face
+  if (Array.isArray(card?.card_faces) && card.card_faces.length > 1) {
+    return true;
+  }
+  // Verificar layout que indica duas faces
+  const twoFacedLayouts = ['transform', 'modal_dfc', 'double_faced_token', 'reversible_card'];
+  if (card?.layout && twoFacedLayouts.includes(card.layout)) {
+    return true;
+  }
+  return false;
+}
+
+// Função para extrair URL da imagem da frente
 function pickImageUrl(card) {
+  // Se a carta tem image_uris direto, usar
   if (card?.image_uris) {
     return card.image_uris.normal || card.image_uris.large || card.image_uris.small;
   }
   
-  if (Array.isArray(card?.card_faces) && card.card_faces.length > 0) {
-    const faceWithImage = card.card_faces.find((face) => face.image_uris) || card.card_faces[0];
-    return faceWithImage?.image_uris?.normal ?? faceWithImage?.image_uris?.large;
+  // Para cartas com duas faces, pegar a primeira face (frente)
+  if (hasTwoFaces(card) && Array.isArray(card?.card_faces) && card.card_faces.length > 0) {
+    const frontFace = card.card_faces[0];
+    if (frontFace?.image_uris) {
+      return frontFace.image_uris.normal || frontFace.image_uris.large || frontFace.image_uris.small;
+    }
+    // Se não tem image_uris na face mas tem ID, construir URL usando /front/
+    if (card.id) {
+      return buildScryfallImageUrl(card.id, 'front');
+    }
+  }
+  
+  return undefined;
+}
+
+// Função para extrair URL da imagem do verso
+function pickBackImageUrl(card) {
+  // Para cartas com duas faces, pegar a segunda face (verso)
+  if (hasTwoFaces(card) && Array.isArray(card?.card_faces) && card.card_faces.length > 1) {
+    const backFace = card.card_faces[1];
+    if (backFace?.image_uris) {
+      const url = backFace.image_uris.normal || backFace.image_uris.large || backFace.image_uris.small;
+      return url;
+    }
+    // Se não tem image_uris na face mas tem ID, construir URL usando /back/
+    if (card.id) {
+      return buildScryfallImageUrl(card.id, 'back');
+    }
   }
   
   return undefined;
@@ -121,6 +176,7 @@ function toCardResult(card) {
     manaCost: card?.mana_cost,
     typeLine: card?.type_line,
     imageUrl: pickImageUrl(card),
+    backImageUrl: pickBackImageUrl(card),
     setName: card?.set_name,
   };
 }
@@ -514,6 +570,126 @@ app.get('/api/turn-credentials', (req, res) => {
   });
 
   res.json(response);
+});
+
+// Salvar estado do board por roomId
+app.post('/api/rooms/:roomId/state', (req, res) => {
+  const { roomId } = req.params;
+  const { board, counters, players, cemeteryPositions, libraryPositions } = req.body;
+
+  if (!roomId) {
+    return res.status(400).json({ error: 'roomId is required' });
+  }
+
+  try {
+    const state = {
+      board: board || [],
+      counters: counters || [],
+      players: players || [],
+      cemeteryPositions: cemeteryPositions || {},
+      libraryPositions: libraryPositions || {},
+    };
+
+    const stateJson = JSON.stringify(state);
+
+    db.prepare(`
+      INSERT INTO rooms (room_id, board_state, updated_at)
+      VALUES (?, ?, CURRENT_TIMESTAMP)
+      ON CONFLICT(room_id) DO UPDATE SET
+        board_state = excluded.board_state,
+        updated_at = CURRENT_TIMESTAMP
+    `).run(roomId, stateJson);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[API] Erro ao salvar estado do room:', error);
+    res.status(500).json({ error: 'Failed to save room state' });
+  }
+});
+
+// Salvar evento de uma sala (event sourcing)
+app.post('/api/rooms/:roomId/events', (req, res) => {
+  const { roomId } = req.params;
+  const { eventType, eventData, playerId, playerName } = req.body;
+
+  if (!roomId || !eventType || !eventData) {
+    return res.status(400).json({ error: 'roomId, eventType, and eventData are required' });
+  }
+
+  try {
+    const eventDataJson = JSON.stringify(eventData);
+
+    db.prepare(`
+      INSERT INTO room_events (room_id, event_type, event_data, player_id, player_name)
+      VALUES (?, ?, ?, ?, ?)
+    `).run(roomId, eventType, eventDataJson, playerId || null, playerName || null);
+
+    res.json({ success: true });
+  } catch (error) {
+    console.error('[API] Erro ao salvar evento:', error);
+    res.status(500).json({ error: 'Failed to save event' });
+  }
+});
+
+// Carregar eventos de uma sala (para replay)
+app.get('/api/rooms/:roomId/events', (req, res) => {
+  const { roomId } = req.params;
+
+  if (!roomId) {
+    return res.status(400).json({ error: 'roomId is required' });
+  }
+
+  try {
+    const events = db.prepare(`
+      SELECT id, event_type, event_data, player_id, player_name, created_at
+      FROM room_events
+      WHERE room_id = ?
+      ORDER BY created_at ASC, id ASC
+    `).all(roomId);
+
+    const formattedEvents = events.map(event => ({
+      id: event.id,
+      eventType: event.event_type,
+      eventData: JSON.parse(event.event_data),
+      playerId: event.player_id,
+      playerName: event.player_name,
+      createdAt: event.created_at,
+    }));
+
+    res.json({ events: formattedEvents });
+  } catch (error) {
+    console.error('[API] Erro ao carregar eventos:', error);
+    res.status(500).json({ error: 'Failed to load events' });
+  }
+});
+
+// Carregar estado do board por roomId
+app.get('/api/rooms/:roomId/state', (req, res) => {
+  const { roomId } = req.params;
+
+  if (!roomId) {
+    return res.status(400).json({ error: 'roomId is required' });
+  }
+
+  try {
+    const row = db.prepare('SELECT board_state FROM rooms WHERE room_id = ?').get(roomId);
+
+    if (!row) {
+      return res.json({
+        board: [],
+        counters: [],
+        players: [],
+        cemeteryPositions: {},
+        libraryPositions: {},
+      });
+    }
+
+    const state = JSON.parse(row.board_state);
+    res.json(state);
+  } catch (error) {
+    console.error('[API] Erro ao carregar estado do room:', error);
+    res.status(500).json({ error: 'Failed to load room state' });
+  }
 });
 
 app.listen(PORT, '0.0.0.0', () => {
