@@ -2,12 +2,8 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useGameStore } from '../store/useGameStore';
-import type { CardOnBoard, PlayerSummary, Counter } from '../store/useGameStore';
+import type { CardOnBoard, PlayerSummary } from '../store/useGameStore';
 import CardToken from './CardToken';
-import CounterToken from './CounterToken';
-import Hand from './Hand';
-import Library from './Library';
-import Cemetery from './Cemetery';
 import { BoardSeparated } from './BoardSeparated';
 import { BoardIndividual } from './BoardIndividual';
 import { BoardUnified } from './BoardUnified';
@@ -32,6 +28,7 @@ interface DragState {
   startX: number;
   startY: number;
   hasMoved: boolean;
+  lastPosition?: Point;
 }
 
 interface ClickBlockState {
@@ -574,7 +571,26 @@ const Board = () => {
   const [peerEventLogs, setPeerEventLogs] = useState<PeerEventLog[]>([]);
   const maxPeerLogs = 30;
   
+  const schedulePeerLogUpdate = useRef<null | ((updater: () => void) => void)>(null);
+  if (!schedulePeerLogUpdate.current) {
+    schedulePeerLogUpdate.current = (updater: () => void) => {
+      if (typeof queueMicrotask === 'function') {
+        queueMicrotask(updater);
+      } else {
+        Promise.resolve().then(updater);
+      }
+    };
+  }
+
+  const peerLogThrottleMap = useRef<Record<string, number>>({});
   const addPeerEventLog = useCallback((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => {
+    const throttleKey = `${type}-${direction}-${messageType}`;
+    const now = Date.now();
+    const lastCall = peerLogThrottleMap.current[throttleKey] ?? 0;
+    if (now - lastCall < 250) {
+      return;
+    }
+    peerLogThrottleMap.current[throttleKey] = now;
     const log: PeerEventLog = {
       id: `${Date.now()}-${Math.random()}`,
       timestamp: Date.now(),
@@ -586,9 +602,11 @@ const Board = () => {
       details,
     };
     
-    setPeerEventLogs((prev) => {
-      const updated = [log, ...prev].slice(0, maxPeerLogs);
-      return updated;
+    schedulePeerLogUpdate.current?.(() => {
+      setPeerEventLogs((prev) => {
+        const updated = [log, ...prev].slice(0, maxPeerLogs);
+        return updated;
+      });
     });
   }, []);
   
@@ -873,7 +891,7 @@ const Board = () => {
         
         cardsToCenter.forEach((card) => {
           processedCardsRef.current.add(card.id);
-          moveCard(card.id, { x: centerX, y: centerY });
+          moveCard(card.id, { x: centerX, y: centerY }, { persist: true });
         });
       }
     }
@@ -1348,6 +1366,7 @@ const Board = () => {
         });
       }
         moveCard(dragState.cardId, { x: clampedX, y: clampedY });
+        dragState.lastPosition = { x: clampedX, y: clampedY };
       }
     };
 
@@ -1439,6 +1458,8 @@ const Board = () => {
               position,
             });
             
+            moveCard(card.id, position, { persist: true });
+            
             changeCardZone(card.id, detectedZone.zone, position);
               
               // Limpar estados de drag imediatamente
@@ -1518,6 +1539,8 @@ const Board = () => {
               });
             }
           }
+          
+          moveCard(cardId, dragState.lastPosition || card.position, { persist: true });
         }
       }
       
@@ -4329,6 +4352,7 @@ const Board = () => {
                 width={CARD_WIDTH}
                 height={CARD_HEIGHT}
                 showBack={false}
+                forceShowFront
               />
             </div>
             </div>

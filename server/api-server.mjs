@@ -3,8 +3,6 @@ import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
 import { randomBytes, createHash, createHmac } from 'crypto';
-import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
 import db from './db.mjs';
 
 const app = express();
@@ -47,29 +45,77 @@ app.use(cors({
 app.use(express.json());
 app.use(cookieParser());
 
-// Carregar dados de cartas
-const CARDS_FILE = join(process.cwd(), 'data', 'cards.json');
-let cardsData = null;
+const ensureCardsAvailable = () => {
+  const row = db.prepare('SELECT 1 FROM cards LIMIT 1').get();
+  return !!row;
+};
 
-function loadCardsData() {
-  try {
-    if (existsSync(CARDS_FILE)) {
-      console.log(`[api] Carregando cartas de ${CARDS_FILE}...`);
-      const fileContent = readFileSync(CARDS_FILE, 'utf-8');
-      cardsData = JSON.parse(fileContent);
-      console.log(`[api] ${cardsData.length} cartas carregadas`);
-    } else {
-      console.warn(`[api] Arquivo de cartas não encontrado: ${CARDS_FILE}`);
-      console.warn(`[api] Execute: node server/download-cards.mjs`);
-    }
-  } catch (error) {
-    console.error('[api] Erro ao carregar cartas:', error);
-  }
-}
+const CARD_FIELDS = `
+  id,
+  name,
+  name_normalized,
+  type_line,
+  mana_cost,
+  oracle_text,
+  image_url,
+  back_image_url,
+  set_name,
+  set_code,
+  collector_number
+`;
 
-loadCardsData();
+const selectExactName = db.prepare(`
+  SELECT ${CARD_FIELDS}
+  FROM cards
+  WHERE name_normalized = ?
+  ORDER BY set_code, collector_number
+  LIMIT 25
+`);
 
-// Função para calcular similaridade entre strings (fuzzy matching)
+const selectExactNameAndSet = db.prepare(`
+  SELECT ${CARD_FIELDS}
+  FROM cards
+  WHERE name_normalized = ?
+    AND set_code = ?
+  ORDER BY collector_number
+  LIMIT 25
+`);
+
+const selectLikeName = db.prepare(`
+  SELECT ${CARD_FIELDS}
+  FROM cards
+  WHERE name_normalized LIKE ?
+  ORDER BY INSTR(name_normalized, ?) ASC, name ASC
+  LIMIT 100
+`);
+
+const selectLikeNameAndSet = db.prepare(`
+  SELECT ${CARD_FIELDS}
+  FROM cards
+  WHERE name_normalized LIKE ?
+    AND set_code = ?
+  ORDER BY INSTR(name_normalized, ?) ASC, collector_number
+  LIMIT 100
+`);
+
+const selectBySetCollector = db.prepare(`
+  SELECT ${CARD_FIELDS}
+  FROM cards
+  WHERE set_code = ?
+    AND collector_number = ?
+  LIMIT 1
+`);
+
+const cardRowToResult = (row) => ({
+  name: row.name,
+  oracleText: row.oracle_text || null,
+  manaCost: row.mana_cost || null,
+  typeLine: row.type_line || null,
+  imageUrl: row.image_url || undefined,
+  backImageUrl: row.back_image_url || undefined,
+  setName: row.set_name || row.set_code || undefined,
+});
+
 function fuzzyMatch(query, target) {
   const queryLower = query.toLowerCase();
   const targetLower = target.toLowerCase();
@@ -99,87 +145,40 @@ function fuzzyMatch(query, target) {
   return 0;
 }
 
-// Função para construir URL do Scryfall usando /front/ ou /back/
-// Formato: https://cards.scryfall.io/large/{face}/{first_digit}/{second_digit}/{id}.jpg
-function buildScryfallImageUrl(cardId, face = 'front') {
-  if (!cardId) return undefined;
-  // O ID do Scryfall é um UUID, precisamos extrair os dois primeiros dígitos do primeiro segmento
-  // Exemplo: 62b5ab41-7a85-49aa-8669-8a09a09d02fa -> /6/2/62b5ab41-7a85-49aa-8669-8a09a09d02fa.jpg
-  const parts = cardId.split('-');
-  if (parts.length < 1) return undefined;
-  const firstPart = parts[0]; // "62b5ab41"
-  if (firstPart.length < 2) return undefined;
-  const pathPart1 = firstPart[0]; // "6"
-  const pathPart2 = firstPart[1]; // "2"
-  return `https://cards.scryfall.io/large/${face}/${pathPart1}/${pathPart2}/${cardId}.jpg`;
-}
+const escapeLikePattern = (value) => value.replace(/[%_]/g, '\\$&');
 
-// Função para verificar se uma carta tem duas faces
-function hasTwoFaces(card) {
-  // Verificar se tem card_faces com mais de uma face
-  if (Array.isArray(card?.card_faces) && card.card_faces.length > 1) {
-    return true;
-  }
-  // Verificar layout que indica duas faces
-  const twoFacedLayouts = ['transform', 'modal_dfc', 'double_faced_token', 'reversible_card'];
-  if (card?.layout && twoFacedLayouts.includes(card.layout)) {
-    return true;
-  }
-  return false;
-}
-
-// Função para extrair URL da imagem da frente
-function pickImageUrl(card) {
-  // Se a carta tem image_uris direto, usar
-  if (card?.image_uris) {
-    return card.image_uris.normal || card.image_uris.large || card.image_uris.small;
+const findCardByName = (queryLower, setLower) => {
+  const normalizedSet = setLower ? setLower.toLowerCase() : null;
+  const exactRows = normalizedSet
+    ? selectExactNameAndSet.all(queryLower, normalizedSet)
+    : selectExactName.all(queryLower);
+  if (exactRows.length > 0) {
+    return exactRows[0];
   }
   
-  // Para cartas com duas faces, pegar a primeira face (frente)
-  if (hasTwoFaces(card) && Array.isArray(card?.card_faces) && card.card_faces.length > 0) {
-    const frontFace = card.card_faces[0];
-    if (frontFace?.image_uris) {
-      return frontFace.image_uris.normal || frontFace.image_uris.large || frontFace.image_uris.small;
-    }
-    // Se não tem image_uris na face mas tem ID, construir URL usando /front/
-    if (card.id) {
-      return buildScryfallImageUrl(card.id, 'front');
-    }
+  const pattern = `%${escapeLikePattern(queryLower)}%`;
+  const likeRows = normalizedSet
+    ? selectLikeNameAndSet.all(pattern, normalizedSet, queryLower)
+    : selectLikeName.all(pattern, queryLower);
+  
+  if (likeRows.length === 0) {
+    return null;
   }
   
-  return undefined;
-}
-
-// Função para extrair URL da imagem do verso
-function pickBackImageUrl(card) {
-  // Para cartas com duas faces, pegar a segunda face (verso)
-  if (hasTwoFaces(card) && Array.isArray(card?.card_faces) && card.card_faces.length > 1) {
-    const backFace = card.card_faces[1];
-    if (backFace?.image_uris) {
-      const url = backFace.image_uris.normal || backFace.image_uris.large || backFace.image_uris.small;
-      return url;
-    }
-    // Se não tem image_uris na face mas tem ID, construir URL usando /back/
-    if (card.id) {
-      return buildScryfallImageUrl(card.id, 'back');
-    }
+  const scored = likeRows
+    .map((row) => ({
+      row,
+      score: fuzzyMatch(queryLower, row.name_normalized || ''),
+    }))
+    .filter((entry) => entry.score > 0)
+    .sort((a, b) => b.score - a.score);
+  
+  if (scored.length > 0) {
+    return scored[0].row;
   }
   
-  return undefined;
-}
-
-// Função para converter carta do Scryfall para formato da API
-function toCardResult(card) {
-  return {
-    name: card?.name ?? 'Unknown',
-    oracleText: card?.oracle_text,
-    manaCost: card?.mana_cost,
-    typeLine: card?.type_line,
-    imageUrl: pickImageUrl(card),
-    backImageUrl: pickBackImageUrl(card),
-    setName: card?.set_name,
-  };
-}
+  return likeRows[0];
+};
 
 // Health check endpoint
 app.get('/health', (req, res) => {
@@ -392,7 +391,7 @@ app.delete('/decks/:id', requireAuth, (req, res) => {
 
 // Rotas de cartas (busca local)
 app.get('/cards/search', (req, res) => {
-  if (!cardsData) {
+  if (!ensureCardsAvailable()) {
     return res.status(503).json({ error: 'Cards data not loaded. Run: node server/download-cards.mjs' });
   }
 
@@ -403,67 +402,34 @@ app.get('/cards/search', (req, res) => {
   }
 
   const queryLower = name.toLowerCase().trim();
+  const setLower = setCode ? setCode.toLowerCase() : null;
   
-  // Primeiro, tentar match exato
-  let candidates = cardsData.filter((card) => {
-    if (!card.name) return false;
-    const cardNameLower = card.name.toLowerCase();
-    if (setCode) {
-      return cardNameLower === queryLower && card.set?.toLowerCase() === setCode.toLowerCase();
-    }
-    return cardNameLower === queryLower;
-  });
-  
-  // Se não encontrou match exato, fazer fuzzy search
-  if (candidates.length === 0) {
-    const scored = cardsData
-      .map((card) => ({
-        card,
-        score: fuzzyMatch(queryLower, card.name?.toLowerCase() || ''),
-      }))
-      .filter(item => item.score > 0)
-      .sort((a, b) => b.score - a.score);
-    
-    candidates = scored.slice(0, 10).map(item => item.card);
-    
-    // Filtrar por set se especificado
-    if (setCode) {
-      candidates = candidates.filter((card) => 
-        card.set?.toLowerCase() === setCode.toLowerCase()
-      );
-    }
-  }
-  
-  // Retornar a melhor correspondência
-  if (candidates.length > 0) {
-    return res.json(toCardResult(candidates[0]));
+  const card = findCardByName(queryLower, setLower);
+  if (card) {
+    return res.json(cardRowToResult(card));
   }
   
   res.status(404).json({ error: 'Card not found' });
 });
 
 app.get('/cards/:setCode/:collectorNumber', (req, res) => {
-  if (!cardsData) {
+  if (!ensureCardsAvailable()) {
     return res.status(503).json({ error: 'Cards data not loaded. Run: node server/download-cards.mjs' });
   }
 
   const { setCode, collectorNumber } = req.params;
   
-  const card = cardsData.find((c) => 
-    c.set?.toLowerCase() === setCode.toLowerCase() && 
-    c.collector_number === collectorNumber
-  );
-  
+  const card = selectBySetCollector.get(setCode.toLowerCase(), collectorNumber);
   if (!card) {
     return res.status(404).json({ error: 'Card not found' });
   }
   
-  res.json(toCardResult(card));
+  res.json(cardRowToResult(card));
 });
 
 // Endpoint batch para buscar múltiplas cartas de uma vez
 app.post('/cards/batch', (req, res) => {
-  if (!cardsData) {
+  if (!ensureCardsAvailable()) {
     return res.status(503).json({ error: 'Cards data not loaded. Run: node server/download-cards.mjs' });
   }
 
@@ -480,60 +446,21 @@ app.post('/cards/batch', (req, res) => {
       return { error: 'name or (setCode and collectorNumber) required' };
     }
 
-    let card = null;
+    let cardRow = null;
 
-    // Buscar por collector number se disponível
     if (setCode && collectorNumber) {
-      card = cardsData.find((c) => 
-        c.set?.toLowerCase() === setCode.toLowerCase() && 
-        c.collector_number === collectorNumber
-      );
+      cardRow = selectBySetCollector.get(setCode.toLowerCase(), collectorNumber) || null;
     }
 
-    // Se não encontrou por collector number, buscar por nome
-    if (!card && name) {
-      const queryLower = name.toLowerCase().trim();
-      
-      // Primeiro, tentar match exato
-      let candidates = cardsData.filter((c) => {
-        if (!c.name) return false;
-        const cardNameLower = c.name.toLowerCase();
-        if (setCode) {
-          return cardNameLower === queryLower && c.set?.toLowerCase() === setCode.toLowerCase();
-        }
-        return cardNameLower === queryLower;
-      });
-      
-      // Se não encontrou match exato, fazer fuzzy search
-      if (candidates.length === 0) {
-        const scored = cardsData
-          .map((c) => ({
-            card: c,
-            score: fuzzyMatch(queryLower, c.name?.toLowerCase() || ''),
-          }))
-          .filter(item => item.score > 0)
-          .sort((a, b) => b.score - a.score);
-        
-        candidates = scored.slice(0, 10).map(item => item.card);
-        
-        // Filtrar por set se especificado
-        if (setCode) {
-          candidates = candidates.filter((c) => 
-            c.set?.toLowerCase() === setCode.toLowerCase()
-          );
-        }
-      }
-      
-      if (candidates.length > 0) {
-        card = candidates[0];
-      }
+    if (!cardRow && name) {
+      cardRow = findCardByName(name.toLowerCase().trim(), setCode ? setCode.toLowerCase() : null);
     }
 
-    if (!card) {
+    if (!cardRow) {
       return { error: 'Card not found', request };
     }
 
-    return toCardResult(card);
+    return cardRowToResult(cardRow);
   });
 
   res.json(results);
@@ -696,4 +623,3 @@ app.listen(PORT, '0.0.0.0', () => {
   console.log(`[api] listening on 0.0.0.0:${PORT}`);
   console.log(`[api] CORS allowed origins: ${uniqueOrigins.join(', ')}`);
 });
-

@@ -60,6 +60,24 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_rooms_updated_at ON rooms(updated_at);
   CREATE INDEX IF NOT EXISTS idx_room_events_room_id ON room_events(room_id);
   CREATE INDEX IF NOT EXISTS idx_room_events_created_at ON room_events(created_at);
+
+  CREATE TABLE IF NOT EXISTS cards (
+    id TEXT PRIMARY KEY,
+    name TEXT NOT NULL,
+    name_normalized TEXT NOT NULL,
+    set_code TEXT,
+    collector_number TEXT,
+    type_line TEXT,
+    mana_cost TEXT,
+    oracle_text TEXT,
+    image_url TEXT,
+    back_image_url TEXT,
+    set_name TEXT,
+    layout TEXT
+  );
+
+  CREATE INDEX IF NOT EXISTS idx_cards_name_normalized ON cards(name_normalized);
+  CREATE INDEX IF NOT EXISTS idx_cards_set_collector ON cards(set_code, collector_number);
 `);
 
 // Adicionar coluna is_public se não existir (migração)
@@ -70,4 +88,3 @@ try {
 }
 
 export default db;
-

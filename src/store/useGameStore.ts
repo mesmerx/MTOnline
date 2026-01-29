@@ -90,7 +90,7 @@ type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string; skipEventSave?: boolean }
   | { type: 'BOARD_STATE'; board: CardOnBoard[]; counters?: Counter[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
   | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
-  | { type: 'PLAYER_STATE'; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[] }
+  | { type: 'PLAYER_STATE'; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; zoomedCard?: string | null }
   | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point> }
   | { type: 'ERROR'; message: string };
 
@@ -405,6 +405,7 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
   board: CardOnBoard[];
   counters: Counter[];
   players: PlayerSummary[];
+  simulatedPlayers: PlayerSummary[];
   cemeteryPositions: Record<string, Point>;
   libraryPositions: Record<string, Point>;
 } | null> => {
@@ -667,7 +668,7 @@ interface GameStore {
   addCardToLibrary: (card: NewCardPayload) => void;
   replaceLibrary: (cards: NewCardPayload[]) => void;
   drawFromLibrary: () => void;
-  moveCard: (cardId: string, position: Point) => void;
+  moveCard: (cardId: string, position: Point, options?: { persist?: boolean }) => void;
   moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point) => void;
   moveCemetery: (playerName: string, position: Point) => void;
   toggleTap: (cardId: string) => void;
@@ -1576,7 +1577,23 @@ export const useGameStore = create<GameStore>((set, get) => {
     return peer;
   };
 
-  const broadcastToPeers = (message: IncomingMessage) => {
+  const boardBroadcastQueue: IncomingMessage[] = [];
+  let boardBroadcastHandle: number | null = null;
+  const enqueueBoardBroadcast = (message: IncomingMessage) => {
+    boardBroadcastQueue.length = 0;
+    boardBroadcastQueue.push(message);
+    if (boardBroadcastHandle === null) {
+      boardBroadcastHandle = window.setTimeout(() => {
+        boardBroadcastHandle = null;
+        const msg = boardBroadcastQueue.shift();
+        if (msg) {
+          broadcastToPeersImmediate(msg);
+        }
+      }, 100);
+    }
+  };
+
+  const broadcastToPeersImmediate = (message: IncomingMessage) => {
     const state = get();
     if (!state || !state.isHost) return;
     const connections = state.connections;
@@ -1625,9 +1642,23 @@ export const useGameStore = create<GameStore>((set, get) => {
         if (Array.isArray((message as any).simulatedPlayers)) {
           details.simulatedCount = (message as any).simulatedPlayers.length;
         }
+        if ('zoomedCard' in (message as any)) {
+          details.zoomedCard = (message as any).zoomedCard || null;
+        }
       }
       
       peerEventLogger('SENT', 'TO_PEERS', message.type, actionKind, `${openConnections.length} peer(s)`, details);
+    }
+  };
+  const broadcastBoardPatch = (cards: Array<{ id: string; position: Point }>) => {
+    if (cards.length === 0) return;
+    broadcastToPeersImmediate({ type: 'BOARD_PATCH', cards });
+  };
+  const broadcastToPeers = (message: IncomingMessage) => {
+    if (message.type === 'BOARD_STATE') {
+      enqueueBoardBroadcast(message);
+    } else {
+      broadcastToPeersImmediate(message);
     }
   };
 
@@ -1785,17 +1816,20 @@ export const useGameStore = create<GameStore>((set, get) => {
     // O skipEventSave só afeta o salvamento no banco, não a sincronização com peers
     const stateAfter = get();
     if (stateAfter) {
-      // Fazer broadcast para peers
-      if (
+      if (action.kind === 'move') {
+        broadcastBoardPatch([{ id: action.id, position: action.position }]);
+      } else if (
         action.kind === 'setPlayerLife' ||
         action.kind === 'setCommanderDamage' ||
         action.kind === 'setSimulatedPlayers' ||
-        action.kind === 'adjustCommanderDamage'
+        action.kind === 'adjustCommanderDamage' ||
+        action.kind === 'setZoomedCard'
       ) {
         broadcastToPeers({ 
           type: 'PLAYER_STATE', 
           players: stateAfter.players,
           simulatedPlayers: stateAfter.simulatedPlayers,
+          zoomedCard: stateAfter.zoomedCard ?? null,
         });
       } else {
         broadcastToPeers({ 
@@ -2064,17 +2098,32 @@ export const useGameStore = create<GameStore>((set, get) => {
             // Sync contínuo vai cuidar da sincronização
           }
           break;
-        case 'PLAYER_STATE':
-          if (Array.isArray(message.players)) {
-            set((state) => {
-              if (!state) return state;
-              return {
-                players: message.players,
-                simulatedPlayers: message.simulatedPlayers || state.simulatedPlayers,
-              };
-            });
+        case 'PLAYER_STATE': {
+          const { players, simulatedPlayers, zoomedCard } = message;
+          const current = get();
+          if (!current) break;
+
+          const updatedPlayers = Array.isArray(players) ? players : current.players;
+          const updatedSimulated = Array.isArray(simulatedPlayers) ? simulatedPlayers : current.simulatedPlayers;
+          const updatedZoomed = zoomedCard === undefined ? current.zoomedCard ?? null : zoomedCard ?? null;
+
+          // Se nada mudou, não atualiza
+          if (
+            updatedPlayers === current.players &&
+            updatedSimulated === current.simulatedPlayers &&
+            updatedZoomed === (current.zoomedCard ?? null)
+          ) {
+            break;
           }
+
+          set({
+            ...current,
+            players: updatedPlayers,
+            simulatedPlayers: updatedSimulated,
+            zoomedCard: updatedZoomed,
+          });
           break;
+        }
         case 'BOARD_STATE':
           if (Array.isArray(message.board)) {
             const currentState = get();
@@ -2086,6 +2135,21 @@ export const useGameStore = create<GameStore>((set, get) => {
               libraryPositions: message.libraryPositions || currentState?.libraryPositions || {},
             });
             // Sync contínuo vai cuidar da sincronização
+          }
+          break;
+        case 'BOARD_PATCH':
+          if (Array.isArray(message.cards) && message.cards.length > 0) {
+            set((state) => {
+              if (!state) return state;
+              const updatedBoard = state.board.map((card) => {
+                const patch = message.cards.find((c) => c.id === card.id);
+                return patch ? { ...card, position: patch.position } : card;
+              });
+              return {
+                ...state,
+                board: updatedBoard,
+              };
+            });
           }
           break;
         case 'HOST_TRANSFER':
@@ -2499,15 +2563,16 @@ export const useGameStore = create<GameStore>((set, get) => {
     set({ error: 'You must join a room before interacting with the board.' });
   };
   
-  const pendingMoveActions = new Map<string, Point>();
+  type PendingMove = { position: Point; lastPersist: number };
+  const pendingMoveActions = new Map<string, PendingMove>();
   let moveFlushHandle: number | null = null;
+  let movePersistHandle: number | null = null;
+  const MOVE_PERSIST_INTERVAL = 1000;
   const flushPendingMoves = () => {
     moveFlushHandle = null;
     if (pendingMoveActions.size === 0) return;
-    const entries = Array.from(pendingMoveActions.entries());
-    pendingMoveActions.clear();
-    entries.forEach(([cardId, position]) => {
-      requestAction({ kind: 'move', id: cardId, position });
+    pendingMoveActions.forEach((entry, cardId) => {
+      requestAction({ kind: 'move', id: cardId, position: entry.position }, true);
     });
   };
   const scheduleMoveFlush = () => {
@@ -2522,9 +2587,67 @@ export const useGameStore = create<GameStore>((set, get) => {
       }, 16) as unknown as number;
     }
   };
+  const stopMovePersistInterval = () => {
+    if (movePersistHandle !== null) {
+      clearInterval(movePersistHandle);
+      movePersistHandle = null;
+    }
+  };
+  const ensureMovePersistInterval = () => {
+    if (movePersistHandle !== null) return;
+    if (pendingMoveActions.size === 0) return;
+    movePersistHandle = setInterval(() => {
+      const now = Date.now();
+      pendingMoveActions.forEach((entry, cardId) => {
+        if (now - entry.lastPersist >= MOVE_PERSIST_INTERVAL) {
+          entry.lastPersist = now;
+          requestAction({ kind: 'move', id: cardId, position: entry.position });
+        }
+      });
+      if (pendingMoveActions.size === 0) {
+        stopMovePersistInterval();
+      }
+    }, MOVE_PERSIST_INTERVAL);
+  };
+  const applyLocalMove = (cardId: string, position: Point) => {
+    set((state) => {
+      if (!state) return state;
+      return {
+        ...state,
+        board: state.board.map((card) =>
+          card.id === cardId ? { ...card, position } : card
+        ),
+      };
+    });
+  };
+
   const queueMoveAction = (cardId: string, position: Point) => {
-    pendingMoveActions.set(cardId, position);
+    applyLocalMove(cardId, position);
+    const existing = pendingMoveActions.get(cardId);
+    if (existing) {
+      existing.position = position;
+    } else {
+      pendingMoveActions.set(cardId, { position, lastPersist: 0 });
+      ensureMovePersistInterval();
+    }
     scheduleMoveFlush();
+  };
+  const commitMoveAction = (cardId: string | null, position?: Point) => {
+    const state = get();
+    if (!state) return;
+    if (cardId === null) {
+      pendingMoveActions.clear();
+      stopMovePersistInterval();
+      return;
+    }
+    const entry = pendingMoveActions.get(cardId);
+    const finalPosition = position ?? entry?.position;
+    pendingMoveActions.delete(cardId);
+    if (pendingMoveActions.size === 0) {
+      stopMovePersistInterval();
+    }
+    if (!finalPosition) return;
+    requestAction({ kind: 'move', id: cardId, position: finalPosition });
   };
 
   // Estado inicial - não carregar mais de session
@@ -3018,8 +3141,17 @@ export const useGameStore = create<GameStore>((set, get) => {
     drawFromLibrary: () => {
       requestAction({ kind: 'drawFromLibrary', playerName: get().playerName });
     },
-    moveCard: (cardId: string, position: Point) => {
+    moveCard: (cardId: string, position: Point, options?: { persist?: boolean }) => {
+      const state = get();
+      if (!state) return;
+      if (options?.persist) {
+        commitMoveAction(cardId, position);
+        return;
+      }
       queueMoveAction(cardId, position);
+      if (state.isHost) {
+        requestAction({ kind: 'move', id: cardId, position }, true);
+      }
     },
     moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point) => {
       const state = get();
@@ -3178,5 +3310,5 @@ export const useGameStore = create<GameStore>((set, get) => {
 // Subscribe para salvar sessão automaticamente quando o estado mudar
 // Usar setTimeout para garantir que o store está totalmente inicializado
 // Usar debounce para evitar loops infinitos
-if (typeof window !== 'undefined') {
-}
+	if (typeof window !== 'undefined') {
+	}
