@@ -28,3 +28,5 @@ data
 *.njsproj
 *.sln
 *.sw?
+*.db
+*.db*
