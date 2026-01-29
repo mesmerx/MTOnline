@@ -1628,23 +1628,59 @@ export const useGameStore = create<GameStore>((set, get) => {
       
       // Tratar setPlayerLife separadamente (não afeta o board)
       if (action.kind === 'setPlayerLife') {
+        let updated = false;
+        const updatedPlayers = state.players.map((p) => {
+          if (p.id === action.playerId) {
+            updated = true;
+            return { ...p, life: action.life };
+          }
+          return p;
+        });
+        if (updated) {
+          return {
+            ...state,
+            players: updatedPlayers,
+          };
+        }
+        const updatedSimulatedPlayers = state.simulatedPlayers.map((p) => {
+          if (p.id === action.playerId) {
+            return { ...p, life: action.life };
+          }
+          return p;
+        });
         return {
           ...state,
-          players: state.players.map((p) => (p.id === action.playerId ? { ...p, life: action.life } : p)),
+          simulatedPlayers: updatedSimulatedPlayers,
         };
       }
       
       // Tratar setCommanderDamage separadamente
       if (action.kind === 'setCommanderDamage') {
+        let updated = false;
+        const updatedPlayers = state.players.map((p) => {
+          if (p.id === action.targetPlayerId) {
+            updated = true;
+            const commanderDamage = { ...(p.commanderDamage || {}), [action.attackerPlayerId]: action.damage };
+            return { ...p, commanderDamage };
+          }
+          return p;
+        });
+        if (updated) {
+          return {
+            ...state,
+            players: updatedPlayers,
+          };
+        }
+        const updatedSimulatedPlayers = state.simulatedPlayers.map((p) => {
+          if (p.id === action.targetPlayerId) {
+            const commanderDamage = { ...(p.commanderDamage || {}), [action.attackerPlayerId]: action.damage };
+            return { ...p, commanderDamage };
+          }
+          return p;
+        });
         return {
           ...state,
-          players: state.players.map((p) => {
-            if (p.id === action.targetPlayerId) {
-              const commanderDamage = { ...(p.commanderDamage || {}), [action.attackerPlayerId]: action.damage };
-              return { ...p, commanderDamage };
-            }
-            return p;
-          }),
+          simulatedPlayers: updatedSimulatedPlayers,
         };
       }
       
@@ -1704,12 +1740,13 @@ export const useGameStore = create<GameStore>((set, get) => {
     const stateAfter = get();
     if (stateAfter) {
       // Fazer broadcast para peers
-      if (action.kind === 'setPlayerLife' || action.kind === 'setCommanderDamage') {
+      if (action.kind === 'setPlayerLife' || action.kind === 'setCommanderDamage' || action.kind === 'setSimulatedPlayers') {
         broadcastToPeers({ 
           type: 'ROOM_STATE', 
           board: stateAfter.board, 
           counters: stateAfter.counters, 
           players: stateAfter.players,
+          simulatedPlayers: stateAfter.simulatedPlayers,
           cemeteryPositions: stateAfter.cemeteryPositions,
           libraryPositions: stateAfter.libraryPositions,
         });
@@ -1747,6 +1784,17 @@ export const useGameStore = create<GameStore>((set, get) => {
       const message = raw as IncomingMessage;
       // Filtrar apenas mensagens válidas do jogo
       if (message?.type === 'REQUEST_ACTION' && message.action && message.actorId) {
+        if (message.actorId !== playerId) {
+          debugLog('ignoring action with mismatched actorId', { claimedActor: message.actorId, connectionPlayerId: playerId });
+          return;
+        }
+        if (message.action.kind === 'setCommanderDamage') {
+          const { targetPlayerId, attackerPlayerId } = message.action;
+          if (playerId !== targetPlayerId && playerId !== attackerPlayerId) {
+            debugLog('player attempted to modify commander damage without permission', { actor: playerId, target: targetPlayerId, attacker: attackerPlayerId });
+            return;
+          }
+        }
         debugLog('host received action', message.actorId, message.action.kind, message.skipEventSave ? '(skipEventSave)' : '');
         
         // Log evento
@@ -1843,6 +1891,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           board: currentState.board,
           counters: currentState.counters,
           players: currentState.players,
+          simulatedPlayers: currentState.simulatedPlayers,
           cemeteryPositions: currentState.cemeteryPositions,
           libraryPositions: currentState.libraryPositions,
         });
@@ -2981,7 +3030,9 @@ export const useGameStore = create<GameStore>((set, get) => {
       const state = get();
       if (!state) return;
       
-      const player = state.players.find((p) => p.id === playerId);
+      const player =
+        state.players.find((p) => p.id === playerId) ||
+        state.simulatedPlayers.find((p) => p.id === playerId);
       const currentLife = player?.life ?? 40;
       const newLife = Math.max(0, currentLife + delta);
       
@@ -2993,8 +3044,16 @@ export const useGameStore = create<GameStore>((set, get) => {
     changeCommanderDamage: (targetPlayerId: string, attackerPlayerId: string, delta: number) => {
       const state = get();
       if (!state) return;
+      const currentPlayerId = state.playerId;
+      const isHost = state.isHost;
+      if (!isHost && currentPlayerId !== targetPlayerId && currentPlayerId !== attackerPlayerId) {
+        debugLog('ignoring changeCommanderDamage for unauthorized players', { actor: currentPlayerId, target: targetPlayerId, attacker: attackerPlayerId });
+        return;
+      }
       
-      const targetPlayer = state.players.find((p) => p.id === targetPlayerId);
+      const targetPlayer =
+        state.players.find((p) => p.id === targetPlayerId) ||
+        state.simulatedPlayers.find((p) => p.id === targetPlayerId);
       const currentDamage = targetPlayer?.commanderDamage?.[attackerPlayerId] ?? 0;
       const newDamage = Math.max(0, currentDamage + delta);
       

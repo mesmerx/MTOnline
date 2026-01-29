@@ -38,6 +38,319 @@ interface ClickBlockState {
   timeoutId: number;
 }
 
+interface LifeDisplayProps {
+  player: PlayerSummary;
+  isCurrentPlayer: boolean;
+  changePlayerLife: (playerId: string, delta: number) => void;
+  changeCommanderDamage: (targetPlayerId: string, attackerPlayerId: string, delta: number) => void;
+  allPlayers: PlayerSummary[];
+  viewerPlayerId: string | null;
+  isHost: boolean;
+}
+
+const LifeDisplay = ({
+  player,
+  isCurrentPlayer,
+  changePlayerLife,
+  changeCommanderDamage,
+  allPlayers,
+  viewerPlayerId,
+  isHost,
+}: LifeDisplayProps) => {
+  const [showCountersDropdown, setShowCountersDropdown] = useState(false);
+  const dropdownHideTimeout = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  const handleShowDropdown = useCallback(() => {
+    if (dropdownHideTimeout.current) {
+      clearTimeout(dropdownHideTimeout.current);
+      dropdownHideTimeout.current = null;
+    }
+    setShowCountersDropdown(true);
+  }, []);
+
+  const handleHideDropdown = useCallback(() => {
+    if (dropdownHideTimeout.current) {
+      clearTimeout(dropdownHideTimeout.current);
+    }
+    dropdownHideTimeout.current = setTimeout(() => {
+      setShowCountersDropdown(false);
+      dropdownHideTimeout.current = null;
+    }, 150);
+  }, []);
+
+  useEffect(() => {
+    return () => {
+      if (dropdownHideTimeout.current) {
+        clearTimeout(dropdownHideTimeout.current);
+      }
+    };
+  }, []);
+
+  const life = player.life ?? 40;
+  const otherPlayers = allPlayers.filter((p) => p.id !== player.id);
+  const shouldShowDropdown = showCountersDropdown && otherPlayers.length > 0;
+
+  return (
+    <div
+      style={{
+        position: 'relative',
+        display: 'flex',
+        alignItems: 'center',
+        gap: '8px',
+        backgroundColor: isCurrentPlayer ? 'rgba(99, 102, 241, 0.2)' : 'rgba(15, 23, 42, 0.9)',
+        border: `1px solid ${isCurrentPlayer ? 'rgba(99, 102, 241, 0.5)' : 'rgba(148, 163, 184, 0.3)'}`,
+        borderRadius: '8px',
+        padding: '8px 12px',
+        minWidth: '120px',
+      }}
+      onMouseEnter={handleShowDropdown}
+      onMouseLeave={handleHideDropdown}
+    >
+      <span
+        onMouseEnter={handleShowDropdown}
+        style={{
+          color: '#f8fafc',
+          fontSize: '14px',
+          fontWeight: '500',
+          minWidth: '80px',
+        }}
+      >
+        {player.name}
+      </span>
+      <div
+        onMouseEnter={handleShowDropdown}
+        style={{
+          display: 'flex',
+          alignItems: 'center',
+          gap: '4px',
+        }}
+      >
+        <button
+          onClick={() => {
+            changePlayerLife(player.id, -10);
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 1)';
+            handleShowDropdown();
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 0.8)';
+          }}
+          style={{
+            width: '32px',
+            height: '24px',
+            backgroundColor: 'rgba(220, 38, 38, 0.8)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: 'bold',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+          }}
+        >
+          -10
+        </button>
+        <button
+          onClick={() => {
+            changePlayerLife(player.id, -1);
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 1)';
+            handleShowDropdown();
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 0.8)';
+          }}
+          style={{
+            width: '24px',
+            height: '24px',
+            backgroundColor: 'rgba(220, 38, 38, 0.8)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+          }}
+        >
+          −
+        </button>
+        <span
+          onMouseEnter={handleShowDropdown}
+          style={{
+            color: life <= 0 ? '#ef4444' : life <= 5 ? '#fbbf24' : '#f8fafc',
+            fontSize: '18px',
+            fontWeight: 'bold',
+            minWidth: '40px',
+            textAlign: 'center',
+          }}
+        >
+          {life}
+        </span>
+        <button
+          onClick={() => {
+            changePlayerLife(player.id, 1);
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 1)';
+            handleShowDropdown();
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 0.8)';
+          }}
+          style={{
+            width: '24px',
+            height: '24px',
+            backgroundColor: 'rgba(34, 197, 94, 0.8)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '16px',
+            fontWeight: 'bold',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+          }}
+        >
+          +
+        </button>
+        <button
+          onClick={() => {
+            changePlayerLife(player.id, 10);
+          }}
+          onMouseEnter={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 1)';
+            handleShowDropdown();
+          }}
+          onMouseLeave={(e) => {
+            e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 0.8)';
+          }}
+          style={{
+            width: '32px',
+            height: '24px',
+            backgroundColor: 'rgba(34, 197, 94, 0.8)',
+            color: 'white',
+            border: 'none',
+            borderRadius: '4px',
+            cursor: 'pointer',
+            fontSize: '12px',
+            fontWeight: 'bold',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            padding: 0,
+          }}
+        >
+          +10
+        </button>
+      </div>
+
+      {shouldShowDropdown && (
+        <div
+          style={{
+            position: 'absolute',
+            top: '100%',
+            left: 0,
+            marginTop: '4px',
+            backgroundColor: 'rgba(15, 23, 42, 0.95)',
+            border: '1px solid rgba(148, 163, 184, 0.3)',
+            borderRadius: '8px',
+            padding: '8px',
+            minWidth: '200px',
+            zIndex: 10000,
+            boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
+            pointerEvents: 'auto',
+          }}
+          onMouseEnter={handleShowDropdown}
+          onMouseLeave={handleHideDropdown}
+        >
+          {otherPlayers.map((otherPlayer) => {
+            const commanderDamage = Math.max(0, player.commanderDamage?.[otherPlayer.id] ?? 0);
+            const canEditRow = isHost || (!!viewerPlayerId && otherPlayer.id === viewerPlayerId);
+            const buttonBaseStyle = {
+              width: '20px',
+              height: '20px',
+              border: 'none',
+              borderRadius: '4px',
+              fontSize: '12px',
+              fontWeight: 'bold',
+              display: 'flex',
+              alignItems: 'center',
+              justifyContent: 'center',
+            } as const;
+            const minusDisabled = !canEditRow || commanderDamage <= 0;
+            const plusDisabled = !canEditRow;
+
+            return (
+              <div
+                key={otherPlayer.id}
+                style={{
+                  display: 'flex',
+                  alignItems: 'center',
+                  justifyContent: 'space-between',
+                  gap: '8px',
+                  padding: '4px 0',
+                }}
+                >
+                  <span style={{ color: '#f8fafc', fontSize: '12px' }}>
+                    {otherPlayer.name}:
+                  </span>
+                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
+                    <button
+                      disabled={minusDisabled}
+                      onClick={() => {
+                        if (minusDisabled) return;
+                        changeCommanderDamage(player.id, otherPlayer.id, -1);
+                      }}
+                      style={{
+                        ...buttonBaseStyle,
+                        backgroundColor: 'rgba(220, 38, 38, 0.8)',
+                        color: 'white',
+                        cursor: minusDisabled ? 'default' : 'pointer',
+                        opacity: minusDisabled ? 0.5 : 1,
+                      }}
+                    >
+                      −
+                    </button>
+                    <span style={{ color: '#f8fafc', fontSize: '14px', minWidth: '30px', textAlign: 'center' }}>
+                      {commanderDamage}
+                    </span>
+                    <button
+                      disabled={plusDisabled}
+                      onClick={() => {
+                        if (plusDisabled) return;
+                        changeCommanderDamage(player.id, otherPlayer.id, 1);
+                      }}
+                      style={{
+                        ...buttonBaseStyle,
+                        backgroundColor: 'rgba(34, 197, 94, 0.8)',
+                        color: 'white',
+                        cursor: plusDisabled ? 'default' : 'pointer',
+                        opacity: plusDisabled ? 0.5 : 1,
+                      }}
+                    >
+                      +
+                    </button>
+                  </div>
+                </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+};
+
 const Board = () => {
   const board = useGameStore((state) => state.board);
   const counters = useGameStore((state) => state.counters);
@@ -2484,269 +2797,6 @@ const Board = () => {
     selectedPlayerIndex,
   ]);
 
-  // Componente para exibir vida com dropdown de commander damage
-  const LifeDisplay = ({ player, isCurrentPlayer, changePlayerLife, changeCommanderDamage, allPlayers }: {
-    player: PlayerSummary;
-    isCurrentPlayer: boolean;
-    changePlayerLife: (playerId: string, delta: number) => void;
-    changeCommanderDamage: (targetPlayerId: string, attackerPlayerId: string, delta: number) => void;
-    allPlayers: PlayerSummary[];
-  }) => {
-    const [showCountersDropdown, setShowCountersDropdown] = useState(false);
-    const handleShowDropdown = () => setShowCountersDropdown(true);
-    const life = player.life ?? 40;
-    
-    // Obter outros jogadores (commander damage de cada um)
-    const otherPlayers = allPlayers.filter((p) => p.id !== player.id);
-
-    return (
-      <div
-        style={{
-          position: 'relative',
-          display: 'flex',
-          alignItems: 'center',
-          gap: '8px',
-          backgroundColor: isCurrentPlayer ? 'rgba(99, 102, 241, 0.2)' : 'rgba(15, 23, 42, 0.9)',
-          border: `1px solid ${isCurrentPlayer ? 'rgba(99, 102, 241, 0.5)' : 'rgba(148, 163, 184, 0.3)'}`,
-          borderRadius: '8px',
-          padding: '8px 12px',
-          minWidth: '120px',
-        }}
-        onMouseEnter={handleShowDropdown}
-        onMouseLeave={() => {
-          setShowCountersDropdown(false);
-        }}
-      >
-        <span
-          style={{
-            color: '#f8fafc',
-            fontSize: '14px',
-            fontWeight: '500',
-            minWidth: '80px',
-          }}
-        >
-          {player.name}
-        </span>
-        <div
-          style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '4px',
-          }}
-        >
-          <button
-            onClick={() => changePlayerLife(player.id, -10)}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 1)';
-              handleShowDropdown();
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 0.8)';
-            }}
-            style={{
-              width: '32px',
-              height: '24px',
-              backgroundColor: 'rgba(220, 38, 38, 0.8)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: 'bold',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-            }}
-          >
-            -10
-          </button>
-          <button
-            onClick={() => changePlayerLife(player.id, -1)}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 1)';
-              handleShowDropdown();
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(220, 38, 38, 0.8)';
-            }}
-            style={{
-              width: '24px',
-              height: '24px',
-              backgroundColor: 'rgba(220, 38, 38, 0.8)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '16px',
-              fontWeight: 'bold',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-            }}
-          >
-            −
-          </button>
-          <span
-            onMouseEnter={handleShowDropdown}
-            style={{
-              color: life <= 0 ? '#ef4444' : life <= 5 ? '#fbbf24' : '#f8fafc',
-              fontSize: '18px',
-              fontWeight: 'bold',
-              minWidth: '40px',
-              textAlign: 'center',
-            }}
-          >
-            {life}
-          </span>
-          <button
-            onClick={() => changePlayerLife(player.id, 1)}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 1)';
-              handleShowDropdown();
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 0.8)';
-            }}
-            style={{
-              width: '24px',
-              height: '24px',
-              backgroundColor: 'rgba(34, 197, 94, 0.8)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '16px',
-              fontWeight: 'bold',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-            }}
-          >
-            +
-          </button>
-          <button
-            onClick={() => changePlayerLife(player.id, 10)}
-            onMouseEnter={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 1)';
-              handleShowDropdown();
-            }}
-            onMouseLeave={(e) => {
-              e.currentTarget.style.backgroundColor = 'rgba(34, 197, 94, 0.8)';
-            }}
-            style={{
-              width: '32px',
-              height: '24px',
-              backgroundColor: 'rgba(34, 197, 94, 0.8)',
-              color: 'white',
-              border: 'none',
-              borderRadius: '4px',
-              cursor: 'pointer',
-              fontSize: '12px',
-              fontWeight: 'bold',
-              display: 'flex',
-              alignItems: 'center',
-              justifyContent: 'center',
-              padding: 0,
-            }}
-          >
-            +10
-          </button>
-        </div>
-        
-        {/* Dropdown de commander damage */}
-        {showCountersDropdown && otherPlayers.length > 0 && (
-          <div
-            style={{
-              position: 'absolute',
-              top: '100%',
-              left: 0,
-              marginTop: '4px',
-              backgroundColor: 'rgba(15, 23, 42, 0.95)',
-              border: '1px solid rgba(148, 163, 184, 0.3)',
-              borderRadius: '8px',
-              padding: '8px',
-              minWidth: '200px',
-              zIndex: 10000,
-              boxShadow: '0 4px 12px rgba(0, 0, 0, 0.5)',
-              pointerEvents: 'auto',
-            }}
-            onMouseEnter={() => {
-              setShowCountersDropdown(true);
-            }}
-            onMouseLeave={() => {
-              setShowCountersDropdown(false);
-            }}
-          >
-            {otherPlayers.map((otherPlayer) => {
-              const commanderDamage = player.commanderDamage?.[otherPlayer.id] ?? 0;
-              
-              return (
-                <div
-                  key={otherPlayer.id}
-                  style={{
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'space-between',
-                    gap: '8px',
-                    padding: '4px 0',
-                  }}
-                >
-                  <span style={{ color: '#f8fafc', fontSize: '12px' }}>
-                    {otherPlayer.name}:
-                  </span>
-                  <div style={{ display: 'flex', alignItems: 'center', gap: '4px' }}>
-                    <button
-                      onClick={() => {
-                        changeCommanderDamage(player.id, otherPlayer.id, -1);
-                      }}
-                      style={{
-                        width: '20px',
-                        height: '20px',
-                        backgroundColor: 'rgba(220, 38, 38, 0.8)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '12px',
-                        fontWeight: 'bold',
-                      }}
-                    >
-                      −
-                    </button>
-                    <span style={{ color: '#f8fafc', fontSize: '14px', minWidth: '30px', textAlign: 'center' }}>
-                      {commanderDamage}
-                    </span>
-                    <button
-                      onClick={() => {
-                        changeCommanderDamage(player.id, otherPlayer.id, 1);
-                      }}
-                      style={{
-                        width: '20px',
-                        height: '20px',
-                        backgroundColor: 'rgba(34, 197, 94, 0.8)',
-                        color: 'white',
-                        border: 'none',
-                        borderRadius: '4px',
-                        cursor: 'pointer',
-                        fontSize: '12px',
-                        fontWeight: 'bold',
-                      }}
-                    >
-                      +
-                    </button>
-                  </div>
-                </div>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  };
-
   return (
     <div className="board-container">
       {/* Contador de vida dos jogadores no topo */}
@@ -2774,6 +2824,8 @@ const Board = () => {
               changePlayerLife={changePlayerLife}
               changeCommanderDamage={changeCommanderDamage}
               allPlayers={allPlayers}
+              viewerPlayerId={playerId}
+              isHost={isHost}
             />
           );
         })}
