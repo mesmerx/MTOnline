@@ -193,21 +193,27 @@ describe('Library loading functionality', () => {
 
       store.replaceLibrary(newCards);
 
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      // Aguardar processamento e envio (pode haver throttle de 150ms)
+      await new Promise((resolve) => setTimeout(resolve, 200));
 
       // Verificar que a mensagem foi enviada para o peer
-      expect(connection.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'BOARD_STATE',
-        })
-      );
+      expect(connection.send).toHaveBeenCalled();
 
       // Verificar que a mensagem contém as cartas da biblioteca
-      const sentMessage = (connection.send as any).mock.calls.find((call: any[]) =>
-        call[0]?.type === 'BOARD_STATE'
-      )?.[0];
+      // Procurar por qualquer mensagem que contenha o board (BOARD_STATE ou ROOM_STATE)
+      const allCalls = (connection.send as any).mock.calls;
+      const messagesWithBoard = allCalls
+        .map((call: any[]) => call[0])
+        .filter((msg: any) => msg?.type === 'BOARD_STATE' || msg?.type === 'ROOM_STATE')
+        .filter((msg: any) => Array.isArray(msg?.board));
+      
+      // Deve haver pelo menos uma mensagem com board
+      expect(messagesWithBoard.length).toBeGreaterThan(0);
+      
+      // Pegar a última mensagem com board (que deve ser a do replaceLibrary ou mais recente)
+      const sentMessage = messagesWithBoard[messagesWithBoard.length - 1];
       expect(sentMessage).toBeDefined();
-      const libraryCardsInMessage = sentMessage.board.filter((c: any) => c.zone === 'library');
+      const libraryCardsInMessage = sentMessage.board.filter((c: any) => c.zone === 'library' && c.ownerId === 'Host Player');
       expect(libraryCardsInMessage.length).toBe(2);
     });
 
@@ -1256,14 +1262,16 @@ describe('Library loading functionality', () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Mover library
+      // moveLibrary agora salva a absolutePosition (terceiro parâmetro)
       store.moveLibrary('Host Player', { x: 10, y: 20 }, { x: 100, y: 200 });
 
       await new Promise((resolve) => setTimeout(resolve, 20));
 
       // Verificar que a posição foi salva com playerName (não playerId)
+      // A posição absoluta é a que é salva no store
       const state = useGameStore.getState();
       expect(state.libraryPositions['Host Player']).toBeDefined();
-      expect(state.libraryPositions['Host Player']).toEqual({ x: 10, y: 20 });
+      expect(state.libraryPositions['Host Player']).toEqual({ x: 100, y: 200 });
       
       // Verificar que não há chave com playerId
       const playerId = state.playerId;

@@ -27,6 +27,7 @@ export interface BoardViewProps {
   startDrag: (card: CardOnBoard, event: React.PointerEvent) => void;
   zoomedCard: string | null;
   setZoomedCard: (cardId: string | null) => void;
+  setLibraryContainerRef?: (playerName: string, element: HTMLDivElement | null) => void;
   startLibraryDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
   startCemeteryDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
   startExileDrag: (targetPlayerName: string, event: React.PointerEvent) => void;

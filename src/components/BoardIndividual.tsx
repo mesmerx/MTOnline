@@ -45,6 +45,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     getLibraryPosition,
     getCemeteryPosition,
     getExilePosition,
+    setLibraryContainerRef,
     selectedPlayerIndex,
     counters,
     moveCounter,
@@ -106,11 +107,12 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         draggingLibrary={draggingLibrary}
         startDrag={startDrag}
         handleCardZoom={handleCardZoom}
-          zoomedCard={props.zoomedCard}
+        zoomedCard={props.zoomedCard}
         changeCardZone={changeCardZone}
         getCemeteryPosition={getCemeteryPosition}
         board={board}
         reorderLibraryCard={props.reorderLibraryCard}
+        setLibraryContainerRef={setLibraryContainerRef}
       />
 
       <Cemetery

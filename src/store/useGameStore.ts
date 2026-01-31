@@ -95,6 +95,7 @@ type IncomingMessage =
   | { type: 'PLAYER_STATE'; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; zoomedCard?: string | null }
   | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point> }
   | { type: 'BOARD_PATCH'; cards: Array<{ id: string; position: Point }> }
+  | { type: 'LIBRARY_POSITION'; playerName: string; position: Point }
   | { type: 'ERROR'; message: string };
 
 type RoomStatus = 'idle' | 'initializing' | 'waiting' | 'connected' | 'error';
@@ -682,7 +683,7 @@ interface GameStore {
   replaceLibrary: (cards: NewCardPayload[]) => void;
   drawFromLibrary: () => void;
   moveCard: (cardId: string, position: Point, options?: { persist?: boolean }) => void;
-  moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point) => void;
+  moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point, skipEventSave?: boolean) => void;
   moveCemetery: (playerName: string, position: Point, skipEventSave?: boolean) => void;
   moveExile: (playerName: string, position: Point, skipEventSave?: boolean) => void;
   toggleTap: (cardId: string) => void;
@@ -1366,6 +1367,27 @@ const applyCounterAction = (counters: Counter[], action: CardAction): Counter[] 
 
 export const useGameStore = create<GameStore>((set, get) => {
   let peerEventLogger: ((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => void) | null = null;
+  const libraryPositionChannel =
+    typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('library-position') : null;
+  
+  if (libraryPositionChannel) {
+    libraryPositionChannel.onmessage = (event) => {
+      const message = event.data as { playerName?: string; position?: Point; senderId?: string } | undefined;
+      if (!message?.playerName || !message.position) return;
+      const current = get();
+      if (!current) return;
+      if (message.senderId && message.senderId === current.playerId) return;
+      if (current.playerName === message.playerName && draggingLibraries.has(current.playerName)) {
+        return;
+      }
+      set({
+        libraryPositions: {
+          ...current.libraryPositions,
+          [message.playerName]: message.position,
+        },
+      });
+    };
+  }
   
   // Função para carregar estado persistido do localStorage
   const loadPersistedState = () => {
@@ -1629,24 +1651,24 @@ export const useGameStore = create<GameStore>((set, get) => {
     return peer;
   };
 
-  const boardBroadcastQueue: IncomingMessage[] = [];
+  const boardBroadcastQueue: Array<{ message: IncomingMessage; excludePlayerId?: string }> = [];
   let boardBroadcastHandle: number | null = null;
-  const enqueueBoardBroadcast = (message: IncomingMessage) => {
+  const enqueueBoardBroadcast = (message: IncomingMessage, excludePlayerId?: string) => {
     boardBroadcastQueue.length = 0;
-    boardBroadcastQueue.push(message);
+    boardBroadcastQueue.push({ message, excludePlayerId });
     if (boardBroadcastHandle === null) {
       boardBroadcastHandle = window.setTimeout(() => {
         boardBroadcastHandle = null;
-        const msg = boardBroadcastQueue.shift();
-        if (msg) {
-          broadcastToPeersImmediate(msg);
+        const queued = boardBroadcastQueue.shift();
+        if (queued) {
+          broadcastToPeersImmediate(queued.message, queued.excludePlayerId);
         }
-      }, 100);
+      }, 0);
     }
   };
 
-  // Throttle para mensagens peer - 150ms
-  const MESSAGE_THROTTLE_MS = 150;
+  // Throttle para mensagens peer - reduzido para 50ms para movimento mais responsivo
+  const MESSAGE_THROTTLE_MS = 0;
   const messageThrottleQueue: IncomingMessage[] = [];
   let messageThrottleHandle: number | null = null;
   let lastMessageTime = 0;
@@ -1757,7 +1779,28 @@ export const useGameStore = create<GameStore>((set, get) => {
     lastMessageTime = Date.now();
   };
 
-  const broadcastToPeersImmediate = (message: IncomingMessage) => {
+  const sendToPeersDirect = (message: IncomingMessage, excludePlayerId?: string) => {
+    const state = get();
+    if (!state || !state.isHost) return;
+    
+    const connections = state.connections;
+    Object.entries(connections).forEach(([playerId, conn]) => {
+      if (excludePlayerId && playerId === excludePlayerId) return;
+      if (conn && conn.open) {
+        try {
+          conn.send(message);
+        } catch (error) {
+          debugLog('failed to send message', error);
+        }
+      }
+    });
+  };
+
+  const broadcastToPeersImmediate = (message: IncomingMessage, excludePlayerId?: string) => {
+    if (excludePlayerId) {
+      sendToPeersDirect(message, excludePlayerId);
+      return;
+    }
     const state = get();
     if (!state || !state.isHost) return;
     
@@ -1785,18 +1828,50 @@ export const useGameStore = create<GameStore>((set, get) => {
     if (cards.length === 0) return;
     broadcastToPeersImmediate({ type: 'BOARD_PATCH', cards });
   };
-  const broadcastToPeers = (message: IncomingMessage) => {
+  const broadcastToPeers = (message: IncomingMessage, excludePlayerId?: string) => {
     if (message.type === 'BOARD_STATE') {
-      enqueueBoardBroadcast(message);
+      enqueueBoardBroadcast(message, excludePlayerId);
     } else {
-      broadcastToPeersImmediate(message);
+      broadcastToPeersImmediate(message, excludePlayerId);
     }
   };
 
 
-  const handleHostAction = (action: CardAction, skipEventSave = false) => {
+  const handleHostAction = (action: CardAction, skipEventSave = false, excludePlayerId?: string) => {
+    // Se for uma ação de move e a carta está sendo arrastada localmente (já foi aplicada),
+    // não aplicar novamente - apenas fazer broadcast
+    if (action.kind === 'move' && pendingMoveActions.has(action.id)) {
+      // A ação já foi aplicada localmente via queueMoveAction, apenas fazer broadcast
+      const stateAfter = get();
+      if (stateAfter) {
+        broadcastBoardPatch([{ id: action.id, position: action.position }]);
+      }
+      // Não salvar evento se skipEventSave (durante drag)
+      if (stateAfter && stateAfter.roomId && !skipEventSave) {
+        saveEvent(
+          stateAfter.roomId,
+          'CARD_ACTION',
+          action,
+          stateAfter.playerId,
+          stateAfter.playerName
+        ).catch((err) => {
+          console.warn('[Store] Erro ao salvar evento (não crítico):', err);
+        });
+      }
+      return;
+    }
+    
     set((state) => {
       if (!state) return state;
+      if (action.kind === 'moveLibrary' && skipEventSave) {
+        return {
+          ...state,
+          libraryPositions: {
+            ...state.libraryPositions,
+            [action.playerName]: action.position,
+          },
+        };
+      }
       
       // Tratar setPlayerLife separadamente (não afeta o board)
       if (action.kind === 'setPlayerLife') {
@@ -1962,14 +2037,23 @@ export const useGameStore = create<GameStore>((set, get) => {
           simulatedPlayers: stateAfter.simulatedPlayers,
           zoomedCard: stateAfter.zoomedCard ?? null,
         });
+      } else if (action.kind === 'moveLibrary' && skipEventSave) {
+        broadcastToPeersImmediate(
+          { type: 'LIBRARY_POSITION', playerName: action.playerName, position: action.position },
+          excludePlayerId
+        );
       } else {
+        const shouldExclude =
+          excludePlayerId &&
+          skipEventSave &&
+          (action.kind === 'moveLibrary' || action.kind === 'moveCemetery' || action.kind === 'moveExile');
         broadcastToPeers({ 
           type: 'BOARD_STATE', 
           board: stateAfter.board,
           counters: stateAfter.counters,
           cemeteryPositions: stateAfter.cemeteryPositions,
           libraryPositions: stateAfter.libraryPositions,
-        });
+        }, shouldExclude ? excludePlayerId : undefined);
       }
     }
     
@@ -2041,7 +2125,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           peerEventLogger('RECEIVED', 'FROM_PEER', 'REQUEST_ACTION', message.action.kind, playerId, details);
         }
         
-        handleHostAction(message.action, message.skipEventSave || false);
+        handleHostAction(message.action, message.skipEventSave || false, playerId);
       } else if (message?.type) {
         // Log outros tipos de mensagens recebidas
         if (peerEventLogger) {
@@ -2259,72 +2343,46 @@ export const useGameStore = create<GameStore>((set, get) => {
           if (Array.isArray(message.board)) {
             const currentState = get();
             // Preservar posições locais se não vierem no BOARD_STATE ou se estivermos arrastando
+            // Preservar libraryPositions do player atual se ele estiver arrastando seu próprio library
+            let preservedLibraryPositions = message.libraryPositions || currentState?.libraryPositions || {};
+            if (currentState && currentState.playerName && draggingLibraries.has(currentState.playerName)) {
+              // Se o player atual está arrastando seu próprio library, preservar a posição local
+              preservedLibraryPositions = {
+                ...preservedLibraryPositions,
+                [currentState.playerName]: currentState.libraryPositions[currentState.playerName] || preservedLibraryPositions[currentState.playerName],
+              };
+            }
+            
             set({ 
               board: message.board,
               counters: message.counters || currentState?.counters || [],
               cemeteryPositions: message.cemeteryPositions || currentState?.cemeteryPositions || {},
-              libraryPositions: message.libraryPositions || currentState?.libraryPositions || {},
+              libraryPositions: preservedLibraryPositions,
             });
             // Sync contínuo vai cuidar da sincronização
           }
           break;
         case 'BOARD_PATCH':
           if (Array.isArray(message.cards) && message.cards.length > 0) {
-            // Throttle no receptor: aplicar no máximo 30fps (33ms)
-            // Guardar apenas a última posição recebida (descartar eventos antigos)
-            const now = Date.now();
-            const lastPatchTime = (window as any).__lastBoardPatchTime || 0;
-            const PATCH_APPLY_INTERVAL = 1000 / 30; // 30fps
-            
-            if (now - lastPatchTime >= PATCH_APPLY_INTERVAL) {
-              (window as any).__lastBoardPatchTime = now;
-              
-              set((state) => {
-                if (!state) return state;
-                // Aplicar apenas a última posição de cada carta (descartar eventos antigos)
-                const updatedBoard = state.board.map((card) => {
-                  const patch = message.cards.find((c) => c.id === card.id);
-                  return patch ? { ...card, position: patch.position } : card;
-                });
-                return {
-                  ...state,
-                  board: updatedBoard,
-                };
-              });
-            } else {
-              // Se ainda não passou o intervalo, agendar para aplicar no próximo frame
-              // Mas descartar este evento e usar apenas o último recebido
-              if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-                // Adicionar ao array de patches pendentes (será aplicado no próximo frame)
-                (window as any).__pendingBoardPatch = message.cards;
-                
-                if (!(window as any).__boardPatchRafScheduled) {
-                  (window as any).__boardPatchRafScheduled = true;
-                  window.requestAnimationFrame(() => {
-                    (window as any).__boardPatchRafScheduled = false;
-                    const lastPatch = (window as any).__pendingBoardPatch;
-                    if (lastPatch && Array.isArray(lastPatch) && lastPatch.length > 0) {
-                      (window as any).__pendingBoardPatch = null;
-                      (window as any).__lastBoardPatchTime = Date.now();
-                      
-                      set((state) => {
-                        if (!state) return state;
-                        const updatedBoard = state.board.map((card) => {
-                          const patch = lastPatch.find((c: any) => c.id === card.id);
-                          return patch ? { ...card, position: patch.position } : card;
-                        });
-                        return {
-                          ...state,
-                          board: updatedBoard,
-                        };
-                      });
-                    }
-                  });
-                }
-              }
-            }
+            // Usar o mesmo sistema de animação que o sender
+            // Colapsa múltiplas atualizações e processa via requestAnimationFrame
+            queueBoardPatch(message.cards);
           }
           break;
+        case 'LIBRARY_POSITION': {
+          const currentState = get();
+          if (!currentState) break;
+          if (currentState.playerName === message.playerName && draggingLibraries.has(currentState.playerName)) {
+            break;
+          }
+          set({
+            libraryPositions: {
+              ...currentState.libraryPositions,
+              [message.playerName]: message.position,
+            },
+          });
+          break;
+        }
         case 'HOST_TRANSFER':
           if (message.newHostId === get().playerId && Array.isArray(message.board) && Array.isArray(message.players)) {
             // Este jogador foi escolhido como novo host
@@ -2728,7 +2786,20 @@ export const useGameStore = create<GameStore>((set, get) => {
         return;
       } catch (error) {
         debugLog('failed to send action', error);
-        set({ error: 'Failed to send action. Connection may be lost.' });
+      }
+    }
+    
+    // Se não há host nem conexão, processar localmente (útil para testes e modo offline)
+    // Apenas para ações que não requerem sincronização com peers
+    // Verificar se não há host E (não há conexão OU conexão não está aberta)
+    const hasNoHost = !state.isHost;
+    const hasNoConnection = !state.hostConnection || !state.hostConnection.open;
+    
+    if (hasNoHost && hasNoConnection) {
+      // Processar localmente apenas ações de player life e commander damage
+      // Outras ações requerem sincronização e não devem ser processadas sem host
+      if (action.kind === 'setPlayerLife' || action.kind === 'setCommanderDamage' || action.kind === 'adjustCommanderDamage') {
+        handleHostAction(action, skipEventSave);
         return;
       }
     }
@@ -2736,49 +2807,69 @@ export const useGameStore = create<GameStore>((set, get) => {
     set({ error: 'You must join a room before interacting with the board.' });
   };
   
+  // Sistema unificado de animação baseado em requestAnimationFrame
+  // Funciona tanto para sender (quem arrasta) quanto para receiver (quem recebe BOARD_PATCH)
   type PendingMove = { position: Point; lastPersist: number; lastSent: number };
+  type PendingPatch = { id: string; position: Point };
+  
   const pendingMoveActions = new Map<string, PendingMove>();
-  let moveFlushHandle: number | null = null;
+  const pendingBoardPatches = new Map<string, PendingPatch>(); // Para receiver
+  const draggingLibraries = new Set<string>(); // Rastrear libraries sendo arrastadas (playerName)
+  let animationFrameHandle: number | null = null;
   let movePersistHandle: number | null = null;
   const MOVE_PERSIST_INTERVAL = 1000;
-  const MOVE_SEND_INTERVAL = 1000 / 30; // 30fps para envio durante drag
-  let lastSendTime = 0;
+  const ANIMATION_FPS = 30;
+  const ANIMATION_INTERVAL = 1000 / ANIMATION_FPS; // ~33ms
+  let lastAnimationTime = 0;
   
-  const flushPendingMoves = (timestamp: number) => {
-    moveFlushHandle = null;
-    if (pendingMoveActions.size === 0) return;
+  // Função unificada que processa tanto moves pendentes (sender) quanto patches pendentes (receiver)
+  const processAnimationFrame = (timestamp: number) => {
+    animationFrameHandle = null;
     
-    // Throttle: enviar no máximo 30fps (33ms entre envios)
-    const timeSinceLastSend = timestamp - lastSendTime;
-    if (timeSinceLastSend < MOVE_SEND_INTERVAL) {
+    // Throttle: processar no máximo 30fps
+    const timeSinceLastAnimation = timestamp - lastAnimationTime;
+    if (timeSinceLastAnimation < ANIMATION_INTERVAL) {
       // Agendar para o próximo frame
       if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-        moveFlushHandle = window.requestAnimationFrame(flushPendingMoves);
+        animationFrameHandle = window.requestAnimationFrame(processAnimationFrame);
       } else {
-        moveFlushHandle = setTimeout(() => {
-          flushPendingMoves(Date.now());
-        }, MOVE_SEND_INTERVAL - timeSinceLastSend) as unknown as number;
+        animationFrameHandle = setTimeout(() => {
+          processAnimationFrame(Date.now());
+        }, ANIMATION_INTERVAL - timeSinceLastAnimation) as unknown as number;
       }
       return;
     }
     
-    lastSendTime = timestamp;
+    lastAnimationTime = timestamp;
     
-    // Enviar apenas a última posição de cada carta (colapsar N eventos em 1)
-    pendingMoveActions.forEach((entry, cardId) => {
-      // Atualizar lastSent para evitar envios duplicados
-      entry.lastSent = timestamp;
-      requestAction({ kind: 'move', id: cardId, position: entry.position }, true);
-    });
+    // Limpar patches pendentes (receiver) - já foram aplicados visualmente em queueBoardPatch
+    // Isso serve apenas para limpar o cache e garantir que não processamos patches antigos
+    if (pendingBoardPatches.size > 0) {
+      pendingBoardPatches.clear();
+    }
+    
+    // Processar moves pendentes (sender) - enviar para peers
+    if (pendingMoveActions.size > 0) {
+      pendingMoveActions.forEach((entry, cardId) => {
+        // Atualizar lastSent para evitar envios duplicados
+        entry.lastSent = timestamp;
+        requestAction({ kind: 'move', id: cardId, position: entry.position }, true);
+      });
+    }
+    
+    // Se ainda há trabalho pendente, agendar próximo frame
+    if (pendingMoveActions.size > 0 || pendingBoardPatches.size > 0) {
+      scheduleAnimationFrame();
+    }
   };
   
-  const scheduleMoveFlush = () => {
-    if (moveFlushHandle !== null) return;
+  const scheduleAnimationFrame = () => {
+    if (animationFrameHandle !== null) return;
     if (typeof window !== 'undefined' && typeof window.requestAnimationFrame === 'function') {
-      moveFlushHandle = window.requestAnimationFrame(flushPendingMoves);
+      animationFrameHandle = window.requestAnimationFrame(processAnimationFrame);
     } else {
-      moveFlushHandle = setTimeout(() => {
-        flushPendingMoves(Date.now());
+      animationFrameHandle = setTimeout(() => {
+        processAnimationFrame(Date.now());
       }, 16) as unknown as number;
     }
   };
@@ -2830,8 +2921,88 @@ export const useGameStore = create<GameStore>((set, get) => {
       ensureMovePersistInterval();
     }
     
-    // Agendar envio (será throttled para 30fps)
-    scheduleMoveFlush();
+    // Agendar processamento (será throttled para 30fps via requestAnimationFrame)
+    scheduleAnimationFrame();
+  };
+  
+  // Função para receiver: enfileirar patches recebidos para processamento via requestAnimationFrame
+  const queueBoardPatch = (cards: Array<{ id: string; position: Point }>) => {
+    const state = get();
+    if (!state) return;
+    
+    // Capturar o estado atual de pendingMoveActions de forma síncrona
+    // Isso garante que não há race conditions quando verificamos dentro do set()
+    const currentlyDragging = new Set(pendingMoveActions.keys());
+    
+    // Filtrar cartas que estão sendo arrastadas localmente (não aplicar patches delas)
+    // Isso evita conflito quando o sender recebe seus próprios movimentos de volta
+    // IMPORTANTE: Para peers, quando arrastam uma carta, ela está em pendingMoveActions
+    // e não devemos aplicar patches dela até que o drag termine
+    const cardsToApply = cards.filter((card) => {
+      // Se a carta está em pendingMoveActions, significa que está sendo arrastada localmente
+      // Ignorar patches para essa carta enquanto está sendo arrastada
+      // Isso é especialmente importante para peers que enviam para o host e recebem de volta
+      if (currentlyDragging.has(card.id)) {
+        // NUNCA aplicar patches de cartas que estão sendo arrastadas localmente
+        // Isso causa pulos porque o patch vem com delay e sobrescreve o movimento suave local
+        return false;
+      }
+      
+      // Verificar se a posição recebida é significativamente diferente da atual
+      // Se for muito diferente, pode ser um patch antigo (devido ao delay de rede)
+      // Aplicar apenas se a diferença for pequena (movimento suave) ou se não houver posição atual
+      const currentCard = state.board.find((c) => c.id === card.id);
+      if (currentCard) {
+        const dx = Math.abs(currentCard.position.x - card.position.x);
+        const dy = Math.abs(currentCard.position.y - card.position.y);
+        const distance = Math.sqrt(dx * dx + dy * dy);
+        
+        // Se a diferença for muito grande (>100px), pode ser um patch antigo - ignorar
+        // Isso evita pulos causados por patches desatualizados devido ao delay de rede
+        if (distance > 100) {
+          return false;
+        }
+      }
+      
+      return true;
+    });
+    
+    // Se não há cartas para aplicar, não fazer nada
+    if (cardsToApply.length === 0) {
+      return;
+    }
+    
+    // Aplicar visualmente imediatamente (feedback visual suave, como o sender)
+    // IMPORTANTE: Não aplicar patches de cartas que estão em pendingMoveActions
+    // Isso garante que o movimento local suave não seja sobrescrito por patches com delay
+    set((state) => {
+      if (!state) return state;
+      // Aplicar apenas a última posição de cada carta (colapsar N eventos em 1)
+      // Mas NUNCA aplicar se a carta está sendo arrastada localmente
+      // Usar o Set capturado anteriormente para evitar race conditions
+      const updatedBoard = state.board.map((card) => {
+        // Verificar novamente se não está sendo arrastada (double-check para evitar race conditions)
+        if (currentlyDragging.has(card.id)) {
+          return card; // Manter posição local, não aplicar patch
+        }
+        const patch = cardsToApply.find((c) => c.id === card.id);
+        return patch ? { ...card, position: patch.position } : card;
+      });
+      return {
+        ...state,
+        board: updatedBoard,
+      };
+    });
+    
+    // Colapsar múltiplas atualizações: guardar apenas a última posição de cada carta
+    // Isso é usado apenas para garantir que não processamos patches antigos
+    cardsToApply.forEach((card) => {
+      pendingBoardPatches.set(card.id, { id: card.id, position: card.position });
+    });
+    
+    // Agendar processamento (será throttled para 30fps via requestAnimationFrame)
+    // Mas como já aplicamos visualmente, isso serve apenas para limpar o cache
+    scheduleAnimationFrame();
   };
   const commitMoveAction = (cardId: string | null, position?: Point) => {
     const state = get();
@@ -3354,24 +3525,57 @@ export const useGameStore = create<GameStore>((set, get) => {
         requestAction({ kind: 'move', id: cardId, position }, true);
       }
     },
-    moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point) => {
+    moveLibrary: (playerName: string, _relativePosition: Point, absolutePosition: Point, skipEventSave = false) => {
       const state = get();
       if (!state) return;
       
-      // Armazenar posição relativa no store (para sincronização)
-      set((s) => {
-        if (!s) return s;
-        return {
-          ...s,
-          libraryPositions: {
-            ...s.libraryPositions,
-            [playerName]: relativePosition,
-          },
-        };
-      });
+      // Se for host, aplicar ação diretamente (sem requestAction)
+      // O handleHostAction já atualiza o estado e faz broadcast para os peers
+      if (state.isHost) {
+        // Marcar como arrastando se skipEventSave (durante drag)
+        if (skipEventSave) {
+          draggingLibraries.add(playerName);
+        } else {
+          draggingLibraries.delete(playerName);
+        }
+        handleHostAction({ kind: 'moveLibrary', playerName, position: absolutePosition }, skipEventSave);
+      } else {
+        // Se for cliente, atualizar localmente primeiro para feedback imediato
+        // Marcar como arrastando se skipEventSave (durante drag)
+        if (skipEventSave) {
+          draggingLibraries.add(playerName);
+        } else {
+          draggingLibraries.delete(playerName);
+        }
+        
+        // Evitar atualizar o store durante o drag no cliente para reduzir re-renders
+        // A UI local já é atualizada via estado do Board
+        if (!skipEventSave) {
+          set((s) => {
+            if (!s) return s;
+            return {
+              ...s,
+              libraryPositions: {
+                ...s.libraryPositions,
+                [playerName]: absolutePosition,
+              },
+            };
+          });
+        }
+        
+        // Sempre enviar para o host, mesmo durante drag
+        // O host fará broadcast para os outros players, mas não salvará no banco se skipEventSave = true
+        requestAction({ kind: 'moveLibrary', playerName, position: absolutePosition }, skipEventSave);
+      }
       
-      // Passar posição absoluta para a ação (para atualizar as cartas)
-      requestAction({ kind: 'moveLibrary', playerName, position: absolutePosition });
+      // Enviar update local ultra-rápido para peers no mesmo browser/origin
+      if (libraryPositionChannel) {
+        libraryPositionChannel.postMessage({
+          playerName,
+          position: absolutePosition,
+          senderId: state.playerId,
+        });
+      }
     },
     moveCemetery: (playerName: string, position: Point, skipEventSave = false) => {
       const state = get();
@@ -3496,6 +3700,16 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (!state) return;
       const currentPlayerId = state.playerId;
       const isHost = state.isHost;
+      const hasNoConnection = !state.hostConnection || !state.hostConnection.open;
+      
+      // Se não há host nem conexão, permitir processamento local (para testes e modo offline)
+      if (!isHost && hasNoConnection) {
+        // Processar localmente sem verificação de autorização
+        requestAction({ kind: 'adjustCommanderDamage', targetPlayerId, attackerPlayerId, delta });
+        return;
+      }
+      
+      // Verificar autorização apenas quando há host ou conexão
       if (!isHost && currentPlayerId !== targetPlayerId && currentPlayerId !== attackerPlayerId) {
         debugLog('ignoring changeCommanderDamage for unauthorized players', { actor: currentPlayerId, target: targetPlayerId, attacker: attackerPlayerId });
         return;

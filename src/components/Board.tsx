@@ -16,7 +16,12 @@ type Point = { x: number; y: number };
 // CARD_WIDTH, CARD_HEIGHT, BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT já estão importados
 const LIBRARY_CARD_WIDTH = 100;
 const LIBRARY_CARD_HEIGHT = 140;
-const THROTTLE_MS = 8; // ~120fps para melhor responsividade durante drag
+const THROTTLE_MS = 0; // Sem throttling durante drag para evitar stutters - atualizações imediatas
+const LIBRARY_SYNC_THROTTLE_MS = 0; // Enviar updates o mais rápido possível
+const LIBRARY_MAX_STEP_PX = 5; // Limitar salto por frame para suavidade
+const LIBRARY_EVENT_MAX_DELTA = 30; // Limitar salto por evento de mouse
+const LIBRARY_PEER_SMOOTH_STEP_PX = 1000; // Aplicar updates remotos imediatamente
+const LIBRARY_MIN_STEP_PX = 1; // Garantir movimento perceptível por frame
 const DRAG_THRESHOLD = 5; // Pixels para distinguir clique de drag
 const CLICK_BLOCK_DELAY = 300; // ms para bloquear cliques após drag
 
@@ -454,6 +459,10 @@ const Board = () => {
     return cardOwnerId === playerName || isSimulatedPlayer(cardOwnerId);
   }, [playerName, isSimulatedPlayer]);
   const boardRef = useRef<HTMLDivElement>(null);
+  const libraryContainerRefs = useRef<Record<string, HTMLDivElement | null>>({});
+  const setLibraryContainerRef = useCallback((player: string, element: HTMLDivElement | null) => {
+    libraryContainerRefs.current[player] = element;
+  }, []);
   
   // Sistema centralizado de drag - apenas uma carta pode ser arrastada por vez
   const dragStateRef = useRef<DragState | null>(null);
@@ -466,6 +475,9 @@ const Board = () => {
   const [libraryMoved, setLibraryMoved] = useState(false);
   const libraryMovedRef = useRef<boolean>(false);
   const libraryClickExecutedRef = useRef<boolean>(false);
+  const librarySyncRafRef = useRef<number | null>(null);
+  const librarySyncTargetsRef = useRef<Record<string, Point>>({});
+  const librarySyncRenderedRef = useRef<Record<string, Point>>({});
   
   // Estados para cemetery (sincronizar com store)
   const [cemeteryPositions, setCemeteryPositions] = useState<Record<string, Point>>({});
@@ -484,8 +496,31 @@ const Board = () => {
   }, [storeCemeteryPositions, draggingCemetery]);
   
   useEffect(() => {
-    setLibraryPositions(storeLibraryPositions);
-  }, [storeLibraryPositions]);
+    // Se estamos arrastando o library, não atualizar o estado local
+    // para evitar que atualizações remotas (com latência) sobrescrevam o drag local
+    if (draggingLibrary) {
+      return;
+    }
+    librarySyncTargetsRef.current = storeLibraryPositions;
+    if (librarySyncRafRef.current !== null) {
+      cancelAnimationFrame(librarySyncRafRef.current);
+      librarySyncRafRef.current = null;
+    }
+    Object.entries(storeLibraryPositions).forEach(([player, target]) => {
+      const area = getPlayerArea(player);
+      if (!area) return;
+      const relativeTarget = {
+        x: target.x - area.x,
+        y: target.y - area.y,
+      };
+      librarySyncRenderedRef.current[player] = relativeTarget;
+      const container = libraryContainerRefs.current[player];
+      if (container) {
+        container.style.left = `${target.x}px`;
+        container.style.top = `${target.y - 20}px`;
+      }
+    });
+  }, [storeLibraryPositions, draggingLibrary]);
   const [cemeteryMoved, setCemeteryMoved] = useState(false);
   const cemeteryMovedRef = useRef<boolean>(false);
   const [showHand, setShowHand] = useState(true);
@@ -1273,6 +1308,38 @@ const Board = () => {
     const area = getPlayerArea(ownerName);
     if (!area) return null;
     
+    // Se está arrastando, usar posição renderizada atual
+    if (draggingLibrary?.playerName === ownerName && libraryDragRenderedRef.current) {
+      return {
+        x: libraryDragRenderedRef.current.x,
+        y: libraryDragRenderedRef.current.y,
+      };
+    }
+    
+    // Se há posição local, usar ela primeiro
+    // Durante o drag, a posição local é relativa à área do player
+    if (libraryPositions[ownerName]) {
+      const localPos = libraryPositions[ownerName];
+      if (draggingLibrary?.playerName === ownerName) {
+        return {
+          x: localPos.x + area.x,
+          y: localPos.y + area.y,
+        };
+      }
+      return {
+        x: localPos.x,
+        y: localPos.y,
+      };
+    }
+    
+    // Se há posição salva no store, usar ela (já está no espaço base)
+    if (storeLibraryPositions[ownerName]) {
+      return {
+        x: storeLibraryPositions[ownerName].x,
+        y: storeLibraryPositions[ownerName].y,
+      };
+    }
+    
     const playerLibraryCards = libraryCards
       .filter((c) => c.ownerId === ownerName)
       .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0))
@@ -1284,14 +1351,6 @@ const Board = () => {
       return {
         x: topCard.position.x,
         y: topCard.position.y,
-      };
-    }
-    
-    // Se há posição salva no store, usar ela (já está no espaço base)
-    if (storeLibraryPositions[ownerName]) {
-      return {
-        x: storeLibraryPositions[ownerName].x,
-        y: storeLibraryPositions[ownerName].y,
       };
     }
     
@@ -1529,7 +1588,11 @@ const Board = () => {
         }
       }
 
-      // Limpar estado de drag
+        // Limpar estado de drag
+        libraryDragTargetRef.current = null;
+        libraryDragRenderedRef.current = null;
+        libraryDragRenderedRelativeRef.current = null;
+        libraryDragLastSentRef.current = null;
       const hadMoved = dragState.hasMoved;
       const cardId = dragState.cardId;
       
@@ -1743,6 +1806,15 @@ const Board = () => {
     setIsDragging(false);
     setDraggingLibrary(null);
     setLibraryMoved(false);
+    libraryDragRenderedRef.current = { x: libraryPos.x, y: libraryPos.y };
+    libraryDragTargetRef.current = {
+      playerName: targetPlayerName,
+      relativePosition: {
+        x: libraryPos.x - (getPlayerArea(targetPlayerName)?.x || 0),
+        y: libraryPos.y - (getPlayerArea(targetPlayerName)?.y || 0),
+      },
+      absolutePosition: { x: libraryPos.x, y: libraryPos.y },
+    };
     // NÃO resetar draggingCemetery aqui - ele é gerenciado pelo seu próprio useEffect
     // setDraggingCemetery(null);
     // setCemeteryMoved(false);
@@ -2479,6 +2551,20 @@ const Board = () => {
   };
 
   const libraryDragUpdateRef = useRef<number>(0);
+  const libraryDragRafRef = useRef<number | null>(null);
+  const pendingLibraryPositionRef = useRef<{
+    playerName: string;
+    relativePosition: Point;
+    absolutePosition: Point;
+  } | null>(null);
+  const libraryDragTargetRef = useRef<{
+    playerName: string;
+    relativePosition: Point;
+    absolutePosition: Point;
+  } | null>(null);
+  const libraryDragRenderedRef = useRef<Point | null>(null);
+  const libraryDragRenderedRelativeRef = useRef<Point | null>(null);
+  const libraryDragLastSentRef = useRef<Point | null>(null);
 
   useEffect(() => {
     if (!draggingLibrary || !boardRef.current) {
@@ -2489,10 +2575,7 @@ const Board = () => {
     }
 
     const handleMove = (event: PointerEvent) => {
-      const now = Date.now();
-      if (now - libraryDragUpdateRef.current < THROTTLE_MS) return;
-      libraryDragUpdateRef.current = now;
-
+      // Atualização imediata sem requestAnimationFrame para evitar atraso de 1 frame
       const deltaX = Math.abs(event.clientX - draggingLibrary.startX);
       const deltaY = Math.abs(event.clientY - draggingLibrary.startY);
       if (deltaX > DRAG_THRESHOLD || deltaY > DRAG_THRESHOLD) {
@@ -2503,10 +2586,10 @@ const Board = () => {
       }
 
       const rect = boardRef.current!.getBoundingClientRect();
+      if (!rect) return;
+      
       let cursorX = event.clientX - rect.left;
       let cursorY = event.clientY - rect.top;
-      
-      // Log: mouse real
       
       // Converter coordenadas do mouse baseado no modo
       if (viewMode === 'separated') {
@@ -2535,33 +2618,122 @@ const Board = () => {
 
       // Clamp dentro da área
       const playerArea = getPlayerArea(draggingLibrary.playerName);
-      let clampedX = x;
-      let clampedY = y;
+      if (!playerArea) return;
       
-      if (playerArea) {
-        clampedX = Math.max(
-          playerArea.x,
-          Math.min(playerArea.x + playerArea.width - LIBRARY_CARD_WIDTH, x)
-        );
-        clampedY = Math.max(
-          playerArea.y,
-          Math.min(playerArea.y + playerArea.height - LIBRARY_CARD_HEIGHT, y)
-        );
+      let clampedX = Math.max(
+        playerArea.x,
+        Math.min(playerArea.x + playerArea.width - LIBRARY_CARD_WIDTH, x)
+      );
+      let clampedY = Math.max(
+        playerArea.y,
+        Math.min(playerArea.y + playerArea.height - LIBRARY_CARD_HEIGHT, y)
+      );
+
+      const lastTarget =
+        libraryDragTargetRef.current?.absolutePosition ??
+        libraryDragRenderedRef.current ??
+        { x: clampedX, y: clampedY };
+      const eventDeltaX = clampedX - lastTarget.x;
+      const eventDeltaY = clampedY - lastTarget.y;
+      const eventDeltaDistance = Math.hypot(eventDeltaX, eventDeltaY);
+      if (eventDeltaDistance > LIBRARY_EVENT_MAX_DELTA) {
+        const scale = LIBRARY_EVENT_MAX_DELTA / eventDeltaDistance;
+        clampedX = lastTarget.x + eventDeltaX * scale;
+        clampedY = lastTarget.y + eventDeltaY * scale;
       }
       
-      // Atualizar posição
-      if (playerArea) {
-        const relativePosition = {
-            x: clampedX - playerArea.x,
-            y: clampedY - playerArea.y,
+      const relativePosition = {
+        x: clampedX - playerArea.x,
+        y: clampedY - playerArea.y,
+      };
+      
+      libraryDragTargetRef.current = {
+        playerName: draggingLibrary.playerName,
+        relativePosition,
+        absolutePosition: { x: clampedX, y: clampedY },
+      };
+      
+      if (libraryDragRafRef.current === null) {
+        const stepDrag = () => {
+          const target = libraryDragTargetRef.current;
+          if (!draggingLibrary || !target) {
+          libraryDragRafRef.current = null;
+            return;
+          }
+          
+          const current = libraryDragRenderedRef.current ?? target.absolutePosition;
+          const dx = target.absolutePosition.x - current.x;
+          const dy = target.absolutePosition.y - current.y;
+          
+          let nextX = current.x;
+          let nextY = current.y;
+          
+          if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
+            let stepX = Math.max(-LIBRARY_MAX_STEP_PX, Math.min(LIBRARY_MAX_STEP_PX, dx));
+            let stepY = Math.max(-LIBRARY_MAX_STEP_PX, Math.min(LIBRARY_MAX_STEP_PX, dy));
+            
+            if (Math.abs(stepX) < LIBRARY_MIN_STEP_PX && Math.abs(dx) > 0.5) {
+              stepX = Math.sign(dx) * LIBRARY_MIN_STEP_PX;
+            }
+            if (Math.abs(stepY) < LIBRARY_MIN_STEP_PX && Math.abs(dy) > 0.5) {
+              stepY = Math.sign(dy) * LIBRARY_MIN_STEP_PX;
+            }
+            
+            nextX = current.x + stepX;
+            nextY = current.y + stepY;
+          } else {
+            nextX = target.absolutePosition.x;
+            nextY = target.absolutePosition.y;
+          }
+          
+          libraryDragRenderedRef.current = { x: nextX, y: nextY };
+          
+          const container = libraryContainerRefs.current[target.playerName];
+          if (container) {
+            container.style.left = `${nextX}px`;
+            container.style.top = `${nextY - 20}px`;
+          }
+          
+          const targetArea = getPlayerArea(target.playerName);
+          if (targetArea) {
+            const renderedRelative = {
+              x: nextX - targetArea.x,
+              y: nextY - targetArea.y,
+            };
+            
+            libraryDragRenderedRelativeRef.current = renderedRelative;
+            
+            pendingLibraryPositionRef.current = {
+              playerName: target.playerName,
+              relativePosition: renderedRelative,
+              absolutePosition: { x: nextX, y: nextY },
+            };
+            
+            const now = Date.now();
+            if (now - libraryDragUpdateRef.current >= LIBRARY_SYNC_THROTTLE_MS) {
+              libraryDragUpdateRef.current = now;
+              libraryDragLastSentRef.current = { x: nextX, y: nextY };
+              moveLibrary(
+                target.playerName,
+                renderedRelative,
+                { x: nextX, y: nextY },
+                true
+              );
+            }
+          }
+          
+          if (
+            Math.abs(target.absolutePosition.x - nextX) <= 0.5 &&
+            Math.abs(target.absolutePosition.y - nextY) <= 0.5
+          ) {
+            libraryDragRafRef.current = null;
+            return;
+          }
+          
+          libraryDragRafRef.current = requestAnimationFrame(stepDrag);
         };
         
-        setLibraryPositions((prev) => ({
-          ...prev,
-          [draggingLibrary.playerName]: relativePosition,
-        }));
-
-        moveLibrary(draggingLibrary.playerName, relativePosition, { x: clampedX, y: clampedY });
+        libraryDragRafRef.current = requestAnimationFrame(stepDrag);
       }
     };
 
@@ -2571,12 +2743,37 @@ const Board = () => {
       const actuallyMoved = libraryMoved || libraryMovedRef.current;
       
       // Log movimento do library se realmente moveu
-      if (actuallyMoved) {
+      if (actuallyMoved && draggingLibrary) {
         const playerName = draggingLibrary.playerName;
-        addEventLog('MOVE_LIBRARY', `Movendo library: ${playerName}`, undefined, undefined, {
-          playerName,
-          position: libraryPositions[draggingLibrary.playerName],
-        });
+        const pending = pendingLibraryPositionRef.current;
+        const target = libraryDragTargetRef.current;
+        const finalPosition =
+          pending && pending.playerName === playerName
+            ? pending.relativePosition
+            : libraryPositions[playerName];
+        
+        if (finalPosition) {
+          const playerArea = getPlayerArea(playerName);
+          const absolutePosition = target?.absolutePosition
+            ?? {
+              x: finalPosition.x + (playerArea?.x || 0),
+              y: finalPosition.y + (playerArea?.y || 0),
+            };
+          
+          // Garantir que a posição final seja aplicada localmente antes de salvar
+          setLibraryPositions((prev) => ({
+            ...prev,
+            [playerName]: finalPosition,
+          }));
+          
+          // Salvar posição final no banco (skipEventSave = false)
+          moveLibrary(playerName, finalPosition, absolutePosition, false);
+          
+          addEventLog('MOVE_LIBRARY', `Movendo library: ${playerName}`, undefined, undefined, {
+            playerName,
+            position: finalPosition,
+          });
+        }
       }
       
       // Só fazer draw se NÃO moveu e não foi um clique executado anteriormente
@@ -2598,6 +2795,23 @@ const Board = () => {
             libraryClickExecutedRef.current = false;
           }, 100);
       }
+      }
+      
+      // Limpar estado de drag
+      // Se não moveu, ainda precisamos limpar o rastreamento no store
+      if (draggingLibrary && !actuallyMoved) {
+        const playerName = draggingLibrary.playerName;
+        const currentPosition = libraryPositions[playerName];
+        if (currentPosition) {
+          // Chamar moveLibrary com skipEventSave = false para limpar o rastreamento
+          const playerArea = getPlayerArea(playerName);
+          if (playerArea) {
+            moveLibrary(playerName, currentPosition, {
+              x: currentPosition.x + playerArea.x,
+              y: currentPosition.y + playerArea.y,
+            }, false);
+          }
+        }
       }
       
       setDraggingLibrary(null);
@@ -2977,6 +3191,7 @@ const Board = () => {
       startDrag,
       zoomedCard,
       setZoomedCard,
+      setLibraryContainerRef,
       startLibraryDrag,
       startCemeteryDrag,
       startExileDrag,
@@ -3032,6 +3247,7 @@ const Board = () => {
     startDrag,
     zoomedCard,
     setZoomedCard,
+    setLibraryContainerRef,
     startLibraryDrag,
     startCemeteryDrag,
     changeCardZone,

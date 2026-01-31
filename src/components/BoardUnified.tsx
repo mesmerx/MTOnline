@@ -48,6 +48,7 @@ export const BoardUnified = (props: BoardViewProps) => {
     modifyCounter,
     removeCounterToken,
     flipCard,
+    setLibraryContainerRef,
   } = props;
 
   return (
@@ -98,6 +99,7 @@ export const BoardUnified = (props: BoardViewProps) => {
         getCemeteryPosition={getCemeteryPosition}
         board={board}
         reorderLibraryCard={props.reorderLibraryCard}
+        setLibraryContainerRef={setLibraryContainerRef}
       />
 
       <Cemetery

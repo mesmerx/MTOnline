@@ -48,6 +48,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
     removeCounterToken,
     getCemeteryPosition,
     getLibraryPosition,
+    setLibraryContainerRef,
   } = props;
 
   if (!boardRef.current) return null;
@@ -237,6 +238,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
                     }}
                     board={board}
                     reorderLibraryCard={props.reorderLibraryCard}
+                    setLibraryContainerRef={setLibraryContainerRef}
                   />
 
                   <Cemetery

@@ -27,6 +27,7 @@ interface LibraryProps {
   getCemeteryPosition?: (playerName: string) => Point | null;
   board?: CardOnBoard[];
   reorderLibraryCard?: (cardId: string, newIndex: number) => void;
+  setLibraryContainerRef?: (playerName: string, element: HTMLDivElement | null) => void;
 }
 
 const Library = ({
@@ -46,6 +47,7 @@ const Library = ({
   getCemeteryPosition,
   board = [],
   reorderLibraryCard,
+  setLibraryContainerRef,
 }: LibraryProps) => {
   const [showLibrarySearch, setShowLibrarySearch] = useState(false);
   
@@ -68,6 +70,7 @@ const Library = ({
         return (
           <div
             key={player.id}
+            ref={(element) => setLibraryContainerRef?.(player.name, element)}
             style={{
               position: 'absolute',
               left: `${libraryPos.x}px`,
@@ -95,6 +98,8 @@ const Library = ({
             </div>
             <div
               className={`library-stack ${isCurrentPlayer ? 'draggable' : ''}`}
+              data-testid={`library-${player.name}`}
+              draggable={isCurrentPlayer}
               style={{
                 position: 'absolute',
                 left: '0px',

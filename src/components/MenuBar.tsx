@@ -124,6 +124,7 @@ const MenuBar = () => {
               className={openMenu === 'room' ? 'menu-button active' : 'menu-button'}
               onClick={() => toggleMenu('room')}
               title="Room Settings"
+              data-testid="menu-room-button"
             >
               <span className="menu-icon">🏠</span>
             </button>
@@ -200,7 +201,7 @@ const MenuBar = () => {
         title="Deck Manager"
         icon="📚"
       >
-        <DeckManager />
+        <DeckManager onClose={() => setOpenMenu(null)} />
       </MenuModal>
 
       <MenuModal

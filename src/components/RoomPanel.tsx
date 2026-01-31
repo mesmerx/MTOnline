@@ -84,6 +84,7 @@ const RoomPanel = () => {
           value={playerName}
           onChange={(event) => setPlayerName(event.target.value)}
           disabled={inRoom}
+          data-testid="room-player-name-input"
         />
         {inRoom && (
           <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
@@ -100,6 +101,7 @@ const RoomPanel = () => {
             placeholder="alpha-betagamma"
             value={localRoomId}
             onChange={(event) => setLocalRoomId(event.target.value)}
+            data-testid="room-id-input"
           />
         </label>
 
@@ -114,10 +116,10 @@ const RoomPanel = () => {
         </label>
 
         <div className="button-row">
-          <button className="primary" onClick={onCreate} disabled={!playerName || !playerName.trim()}>
+          <button className="primary" onClick={onCreate} disabled={!playerName || !playerName.trim()} data-testid="room-create-button">
             Create
           </button>
-          <button onClick={onJoin} disabled={!canSubmit}>
+          <button onClick={onJoin} disabled={!canSubmit} data-testid="room-join-button">
             Join
           </button>
           <button type="button" className="ghost" onClick={leaveRoom} disabled={!inRoom}>
