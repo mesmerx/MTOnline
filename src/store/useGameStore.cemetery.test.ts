@@ -1,67 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const peerControl = vi.hoisted(() => ({
-  peers: [] as any[],
-  lastConnection: null as null | { targetId: string; options: any; connection: any },
-}));
-
-vi.mock('peerjs', () => {
-  class TinyEmitter {
-    private listeners = new Map<string, ((...args: any[]) => void)[]>();
-
-    on(event: string, handler: (...args: any[]) => void) {
-      const handlers = this.listeners.get(event) ?? [];
-      handlers.push(handler);
-      this.listeners.set(event, handlers);
-      return this;
-    }
-
-    emit(event: string, ...args: any[]) {
-      this.listeners.get(event)?.forEach((handler) => handler(...args));
-    }
-  }
-
-  class MockDataConnection extends TinyEmitter {
-    public open = true;
-    public metadata: any;
-
-    constructor(public peer: string, public options?: any) {
-      super();
-      this.metadata = options?.metadata;
-    }
-
-    send = vi.fn();
-
-    close = vi.fn(() => {
-      this.open = false;
-      this.emit('close');
-    });
-  }
-
-  class MockPeer extends TinyEmitter {
-    public id?: string;
-
-    constructor(idOrOptions?: any, _options?: any) {
-      super();
-      if (typeof idOrOptions === 'string') {
-        this.id = idOrOptions;
-      }
-      peerControl.peers.push(this);
-    }
-
-    connect(targetId: string, options?: any) {
-      const connection = new MockDataConnection(targetId, options);
-      peerControl.lastConnection = { targetId, options, connection };
-      return connection;
-    }
-
-    destroy() {
-      this.emit('close');
-    }
-  }
-
-  return { default: MockPeer };
-});
+const wsControl = (globalThis as any).__WS_CONTROL__;
+const openRoomAsHost = async (store: { roomId: string; playerId: string; playerName: string }, roomId: string) => {
+  wsControl.openLast();
+  wsControl.receiveLast({
+    type: 'room:created',
+    payload: {
+      roomId,
+      playerId: store.playerId,
+      playerName: store.playerName || 'Host',
+      socketId: 'socket-host',
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
+const openRoomAsClient = async (store: { roomId: string; playerId: string; playerName: string }, roomId: string) => {
+  wsControl.openLast();
+  wsControl.receiveLast({
+    type: 'room:joined',
+    payload: {
+      roomId,
+      playerId: store.playerId,
+      playerName: store.playerName || 'Player',
+      socketId: 'socket-client',
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
 // Mock fetch para evitar chamadas reais à API
 global.fetch = vi.fn();
@@ -70,9 +35,8 @@ import { useGameStore } from './useGameStore';
 
 describe('Cemetery drag functionality', () => {
   beforeEach(() => {
-    peerControl.peers.length = 0;
-    peerControl.lastConnection = null;
-    vi.clearAllMocks();
+    wsControl.reset();
+            vi.clearAllMocks();
     useGameStore.getState().leaveRoom();
     useGameStore.getState().setPlayerName('');
     (global.fetch as any).mockResolvedValue({
@@ -90,9 +54,8 @@ describe('Cemetery drag functionality', () => {
       // Aguardar peer ser criado (createPeerInstance é assíncrono)
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       // Aguardar conexão
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -115,9 +78,8 @@ describe('Cemetery drag functionality', () => {
       store.setPlayerName('Host Player');
       await store.createRoom('test-room', 'password');
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -144,20 +106,17 @@ describe('Cemetery drag functionality', () => {
       // Aguardar peer ser criado (createPeerInstance é assíncrono)
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      // Simular conexão de um peer - o store registra conexões quando recebe evento 'connection'
-      const connection = hostPeer.connect('peer-1', { metadata: { name: 'Peer Player', playerId: 'peer-1', password: 'password' } });
-      // Emitir evento 'connection' no hostPeer para que o store registre a conexão
-      hostPeer.emit('connection', connection);
-      connection.emit('open');
-
-      // Aguardar registro da conexão
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      const connection = { open: true, send: vi.fn(), close: vi.fn() };
+      useGameStore.setState((s) => ({
+        ...s,
+        connections: { ...s.connections, peer1: connection as any },
+        players: [...s.players, { id: 'peer1', name: 'Peer Player' }],
+      }));
 
       const newPosition = { x: 200, y: 300 };
       store.moveCemetery('Host Player', newPosition);
@@ -180,9 +139,8 @@ describe('Cemetery drag functionality', () => {
       store.setPlayerName('Host Player');
       await store.createRoom('test-room', 'password');
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -213,28 +171,27 @@ describe('Cemetery drag functionality', () => {
       store.setPlayerName('Client Player');
       await store.joinRoom('test-room', 'password');
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const clientPeer = peerControl.peers[peerControl.peers.length - 1];
-      clientPeer.emit('open');
-
-      const connection = peerControl.lastConnection?.connection;
-      if (connection) {
-        connection.emit('open');
-      }
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsClient(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Simular recebimento de ROOM_STATE do host
-      connection?.emit('data', {
-        type: 'ROOM_STATE',
-        board: [],
-        counters: [],
-        players: [
-          { id: 'host-id', name: 'Host Player' },
-          { id: store.playerId, name: 'Client Player' },
-        ],
-        cemeteryPositions: {},
-        libraryPositions: {},
+      wsControl.receiveLast({
+        type: 'room:host_message',
+        payload: {
+          message: {
+            type: 'ROOM_STATE',
+            board: [],
+            counters: [],
+            players: [
+              { id: 'host-id', name: 'Host Player' },
+              { id: store.playerId, name: 'Client Player' },
+            ],
+            cemeteryPositions: {},
+            libraryPositions: {},
+          },
+        },
       });
 
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -243,8 +200,7 @@ describe('Cemetery drag functionality', () => {
       expect(nextState.status).toBe('connected');
       expect(nextState.isHost).toBe(false);
 
-      // Limpar chamadas anteriores
-      connection.send.mockClear();
+      wsControl.last().send.mockClear();
 
       // Mover cemitério como cliente
       const newPosition = { x: 300, y: 400 };
@@ -253,16 +209,16 @@ describe('Cemetery drag functionality', () => {
       await new Promise((resolve) => setTimeout(resolve, 10));
 
       // Verificar que a ação foi enviada para o host
-      expect(connection.send).toHaveBeenCalledWith(
-        expect.objectContaining({
-          type: 'REQUEST_ACTION',
-          action: expect.objectContaining({
-            kind: 'moveCemetery',
-            playerName: 'Client Player',
-            position: newPosition,
-          }),
-        })
-      );
+      const sent = wsControl.last().send.mock.calls.map((call) => JSON.parse(call[0]));
+      expect(
+        sent.some(
+          (msg: any) =>
+            msg.type === 'room:client_message' &&
+            msg.payload?.message?.type === 'REQUEST_ACTION' &&
+            msg.payload?.message?.action?.kind === 'moveCemetery' &&
+            msg.payload?.message?.action?.playerName === 'Client Player',
+        ),
+      ).toBe(true);
     });
 
     it('should update local cemetery position immediately when client moves', async () => {
@@ -270,27 +226,26 @@ describe('Cemetery drag functionality', () => {
       store.setPlayerName('Client Player');
       await store.joinRoom('test-room', 'password');
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const clientPeer = peerControl.peers[peerControl.peers.length - 1];
-      clientPeer.emit('open');
-
-      const connection = peerControl.lastConnection?.connection;
-      if (connection) {
-        connection.emit('open');
-      }
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsClient(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      connection?.emit('data', {
-        type: 'ROOM_STATE',
-        board: [],
-        counters: [],
-        players: [
-          { id: 'host-id', name: 'Host Player' },
-          { id: store.playerId, name: 'Client Player' },
-        ],
-        cemeteryPositions: {},
-        libraryPositions: {},
+      wsControl.receiveLast({
+        type: 'room:host_message',
+        payload: {
+          message: {
+            type: 'ROOM_STATE',
+            board: [],
+            counters: [],
+            players: [
+              { id: 'host-id', name: 'Host Player' },
+              { id: store.playerId, name: 'Client Player' },
+            ],
+            cemeteryPositions: {},
+            libraryPositions: {},
+          },
+        },
       });
 
       await new Promise((resolve) => setTimeout(resolve, 10));
@@ -344,9 +299,8 @@ describe('Cemetery drag functionality', () => {
       store.setPlayerName('New Player');
       await store.joinRoom('test-room', 'password');
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const clientPeer = peerControl.peers[peerControl.peers.length - 1];
-      clientPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsClient(store, store.roomId);
 
       // Aguardar carregamento dos eventos
       await new Promise((resolve) => setTimeout(resolve, 50));
@@ -366,9 +320,8 @@ describe('Cemetery drag functionality', () => {
       store.setPlayerName('Host Player');
       await store.createRoom('test-room', 'password');
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -384,9 +337,8 @@ describe('Cemetery drag functionality', () => {
       store.setPlayerName('Host Player');
       await store.createRoom('test-room', 'password');
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -402,9 +354,8 @@ describe('Cemetery drag functionality', () => {
       store.setPlayerName('Host Player');
       await store.createRoom('test-room', 'password');
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -436,18 +387,17 @@ describe('Cemetery drag functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      // Simular conexão de um peer
-      const connection = hostPeer.connect('peer-1', { metadata: { name: 'Peer Player', playerId: 'peer-1', password: 'password' } });
-      hostPeer.emit('connection', connection);
-      connection.emit('open');
-
-      await new Promise((resolve) => setTimeout(resolve, 10));
+      const connection = { open: true, send: vi.fn(), close: vi.fn() };
+      useGameStore.setState((s) => ({
+        ...s,
+        connections: { ...s.connections, peer1: connection as any },
+        players: [...s.players, { id: 'peer1', name: 'Peer Player' }],
+      }));
 
       // Mover cemitério
       const newPosition = { x: 150, y: 250 };
@@ -474,9 +424,8 @@ describe('Cemetery drag functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -564,9 +513,8 @@ describe('Cemetery drag functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -622,9 +570,8 @@ describe('Cemetery drag functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -730,9 +677,8 @@ describe('Cemetery drag functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -785,9 +731,8 @@ describe('Cemetery drag functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 

@@ -3,29 +3,21 @@ import type { FormEvent } from 'react';
 import { parseDecklist } from '../lib/deck';
 import type { DeckEntry } from '../lib/deck';
 import { fetchCardByCollector, fetchCardByName, fetchCardsBatch } from '../lib/scryfall';
+import type { BatchCardRequest } from '../lib/scryfall';
 import { useGameStore } from '../store/useGameStore';
 
-interface DeckManagerProps {
-  onClose?: () => void;
-}
-
-const DeckManager = ({ onClose }: DeckManagerProps) => {
+const DeckManager = () => {
   const [deckText, setDeckText] = useState('');
   const [deckName, setDeckName] = useState('');
   const [entries, setEntries] = useState<DeckEntry[]>([]);
   const [error, setError] = useState<string>();
   const [busyCard, setBusyCard] = useState<string>();
-  const [isPublic, setIsPublic] = useState(false);
-  const [showPublicDecks, setShowPublicDecks] = useState(false);
+  const [busyLibrary, setBusyLibrary] = useState(false);
 
   const saveDeckDefinition = useGameStore((state) => state.saveDeckDefinition);
   const deleteDeckDefinition = useGameStore((state) => state.deleteDeckDefinition);
   const savedDecks = useGameStore((state) => state.savedDecks);
-  const publicDecks = useGameStore((state) => state.publicDecks);
-  const loadPublicDecks = useGameStore((state) => state.loadPublicDecks);
-  const user = useGameStore((state) => state.user);
   const addCard = useGameStore((state) => state.addCardToBoard);
-  const addCardToLibrary = useGameStore((state) => state.addCardToLibrary);
   const replaceLibrary = useGameStore((state) => state.replaceLibrary);
 
   const parse = (event: FormEvent) => {
@@ -35,27 +27,14 @@ const DeckManager = ({ onClose }: DeckManagerProps) => {
     setError(nextEntries.length === 0 ? 'No valid cards found in list.' : undefined);
   };
 
-  const saveDeck = async () => {
+  const saveDeck = () => {
     if (entries.length === 0) {
       setError('Parse a deck list before saving.');
       return;
     }
-    try {
-      const name = deckName.trim() || 'Untitled deck';
-      await saveDeckDefinition(name, entries, deckText, user ? isPublic : false);
-      setDeckName('');
-      setIsPublic(false);
-      setError(undefined);
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Failed to save deck');
-    }
-  };
-
-  const handleShowPublicDecks = () => {
-    if (!showPublicDecks) {
-      loadPublicDecks();
-    }
-    setShowPublicDecks(!showPublicDecks);
+    const name = deckName.trim() || 'Untitled deck';
+    saveDeckDefinition(name, entries, deckText);
+    setDeckName('');
   };
 
   const loadDeck = (deckId: string) => {
@@ -65,6 +44,54 @@ const DeckManager = ({ onClose }: DeckManagerProps) => {
     setDeckName(target.name);
     setEntries(target.entries);
     setError(undefined);
+  };
+
+  const loadEntriesToLibrary = async (targetEntries: DeckEntry[]) => {
+    if (targetEntries.length === 0) {
+      setError('Parse a deck list before loading.');
+      return;
+    }
+    setBusyLibrary(true);
+    setError(undefined);
+    try {
+      const requests: BatchCardRequest[] = targetEntries.flatMap((entry) =>
+        Array.from({ length: entry.quantity }).map(() => ({
+          name: entry.name,
+          setCode: entry.setCode,
+          collectorNumber: entry.collectorNumber,
+        })),
+      );
+      const results = await fetchCardsBatch(requests);
+      const errors: string[] = [];
+      const cards = results.flatMap((result, index) => {
+        if ('error' in result) {
+          const request = (result.request as BatchCardRequest | undefined)?.name ?? requests[index]?.name ?? 'unknown';
+          errors.push(`${request}: ${result.error}`);
+          return [];
+        }
+        return [
+          {
+            name: result.name,
+            oracleText: result.oracleText,
+            manaCost: result.manaCost,
+            typeLine: result.typeLine,
+            setName: result.setName,
+            imageUrl: result.imageUrl,
+            backImageUrl: result.backImageUrl,
+          },
+        ];
+      });
+      if (errors.length > 0) {
+        setError(`Some cards failed to load: ${errors.slice(0, 5).join('; ')}${errors.length > 5 ? '...' : ''}`);
+      }
+      if (cards.length > 0) {
+        replaceLibrary(cards);
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Unable to load deck into library');
+    } finally {
+      setBusyLibrary(false);
+    }
   };
 
   const addEntryToBoard = async (entry: DeckEntry) => {
@@ -81,30 +108,6 @@ const DeckManager = ({ onClose }: DeckManagerProps) => {
         typeLine: card.typeLine,
         setName: card.setName,
         imageUrl: card.imageUrl,
-        backImageUrl: card.backImageUrl,
-      });
-    } catch (err) {
-      setError(err instanceof Error ? err.message : 'Unable to load card');
-    } finally {
-      setBusyCard(undefined);
-    }
-  };
-
-  const addEntryToLibrary = async (entry: DeckEntry) => {
-    setBusyCard(entry.name);
-    try {
-      const card =
-        entry.setCode && entry.collectorNumber
-          ? await fetchCardByCollector(entry.setCode, entry.collectorNumber)
-          : await fetchCardByName(entry.name, entry.setCode);
-      addCardToLibrary({
-        name: card.name,
-        oracleText: card.oracleText,
-        manaCost: card.manaCost,
-        typeLine: card.typeLine,
-        setName: card.setName,
-        imageUrl: card.imageUrl,
-        backImageUrl: card.backImageUrl,
       });
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load card');
@@ -138,127 +141,11 @@ const DeckManager = ({ onClose }: DeckManagerProps) => {
             value={deckName}
             onChange={(event) => setDeckName(event.target.value)}
           />
-          {user && (
-            <label className="checkbox-field" style={{ margin: 0 }}>
-              <input
-                type="checkbox"
-                checked={isPublic}
-                onChange={(e) => setIsPublic(e.target.checked)}
-              />
-              <span>Public</span>
-            </label>
-          )}
-          <button 
-            type="button" 
-            className="primary" 
-            onClick={async () => {
-              // Parse do deck
-              const nextEntries = parseDecklist(deckText);
-              if (nextEntries.length === 0) {
-                setError('No valid cards found in list.');
-                return;
-              }
-              setEntries(nextEntries);
-              setError(undefined);
-              
-              // Preparar requisições batch
-              const batchRequests = nextEntries.map((entry) => ({
-                name: entry.name,
-                setCode: entry.setCode,
-                collectorNumber: entry.collectorNumber,
-              }));
-
-              setBusyCard('loading deck');
-              try {
-                // Buscar todas as cartas de uma vez
-                const results = await fetchCardsBatch(batchRequests);
-                
-                // Processar resultados e expandir pela quantidade
-                const cards: {
-                  name: string;
-                  oracleText?: string;
-                  manaCost?: string;
-                  typeLine?: string;
-                  setName?: string;
-                  imageUrl?: string;
-                  backImageUrl?: string;
-                }[] = [];
-                
-                for (let i = 0; i < results.length; i++) {
-                  const result = results[i];
-                  const entry = nextEntries[i];
-                  
-                  if ('error' in result) {
-                    throw new Error(`Erro ao carregar carta "${entry.name}": ${result.error}`);
-                  }
-                  
-                  // Expandir pela quantidade
-                  for (let j = 0; j < entry.quantity; j++) {
-                    cards.push({
-                      name: result.name,
-                      oracleText: result.oracleText,
-                      manaCost: result.manaCost,
-                      typeLine: result.typeLine,
-                      setName: result.setName,
-                      imageUrl: result.imageUrl,
-                      backImageUrl: result.backImageUrl,
-                    });
-                  }
-                }
-                
-                // Adicionar à library
-                replaceLibrary(cards);
-                
-                // Salvar o deck se tiver nome
-                if (deckName.trim()) {
-                  const name = deckName.trim();
-                  await saveDeckDefinition(name, nextEntries, deckText, user ? isPublic : false);
-                }
-                
-                // Fechar o modal
-                if (onClose) {
-                  onClose();
-                }
-              } catch (err) {
-                // Fallback offline: carregar cartas mínimas para não bloquear testes
-                const fallbackCards: {
-                  name: string;
-                  oracleText?: string;
-                  manaCost?: string;
-                  typeLine?: string;
-                  setName?: string;
-                  imageUrl?: string;
-                  backImageUrl?: string;
-                }[] = [];
-                
-                for (const entry of nextEntries) {
-                  for (let j = 0; j < entry.quantity; j++) {
-                    fallbackCards.push({
-                      name: entry.name,
-                      typeLine: entry.typeLine,
-                    });
-                  }
-                }
-                
-                if (fallbackCards.length > 0) {
-                  replaceLibrary(fallbackCards);
-                  if (onClose) {
-                    onClose();
-                  }
-                }
-                
-                setError(err instanceof Error ? err.message : 'Unable to load deck');
-              } finally {
-                setBusyCard(undefined);
-              }
-            }}
-            disabled={!deckText.trim() || busyCard !== undefined}
-            data-testid="load-to-library-button"
-          >
-            {busyCard === 'loading deck' ? 'Loading...' : 'Load to Library'}
-          </button>
           <button type="button" className="primary" onClick={saveDeck} disabled={entries.length === 0}>
             Save deck
+          </button>
+          <button type="button" onClick={() => loadEntriesToLibrary(entries)} disabled={entries.length === 0 || busyLibrary}>
+            {busyLibrary ? 'Loading…' : 'Load to library'}
           </button>
         </div>
       </form>
@@ -275,77 +162,22 @@ const DeckManager = ({ onClose }: DeckManagerProps) => {
                   {entry.quantity}x {entry.name}{' '}
                   {entry.printTag && <small className="muted">({entry.printTag})</small>}
                 </span>
-                <div className="button-row">
-                  <button
-                    type="button"
-                    onClick={() => addEntryToBoard(entry)}
-                    disabled={busyCard === entry.name}
-                  >
-                    {busyCard === entry.name ? 'Adding…' : 'To Board'}
-                  </button>
-                  <button
-                    type="button"
-                    className="ghost"
-                    onClick={() => addEntryToLibrary(entry)}
-                    disabled={busyCard === entry.name}
-                  >
-                    {busyCard === entry.name ? 'Adding…' : 'To Library'}
-                  </button>
-                </div>
+                <button
+                  type="button"
+                  onClick={() => addEntryToBoard(entry)}
+                  disabled={busyCard === entry.name}
+                >
+                  {busyCard === entry.name ? 'Adding…' : 'Add'}
+                </button>
               </li>
             ))}
           </ul>
         </div>
       )}
 
-      <div style={{ marginTop: '1rem', borderTop: '1px solid #ccc', paddingTop: '1rem' }}>
-        <button
-          type="button"
-          className="ghost"
-          onClick={handleShowPublicDecks}
-          style={{ marginBottom: '0.5rem' }}
-        >
-          {showPublicDecks ? '▼' : '▶'} Public Decks
-        </button>
-        {showPublicDecks && (
-          <div className="public-decks">
-            {publicDecks.length === 0 ? (
-              <p className="muted">No public decks available.</p>
-            ) : (
-              <ul>
-                {publicDecks.map((deck: any) => (
-                  <li key={deck.id}>
-                    <div>
-                      <strong>{deck.name}</strong>
-                      {deck.author && <small className="muted"> by {deck.author}</small>}
-                      <small className="muted" style={{ display: 'block' }}>
-                        {new Date(deck.createdAt).toLocaleString()}
-                      </small>
-                    </div>
-                    <div className="button-row">
-                      <button
-                        type="button"
-                        onClick={() => {
-                          setDeckText(deck.rawText);
-                          setDeckName(deck.name);
-                          setEntries(deck.entries);
-                          setError(undefined);
-                        }}
-                      >
-                        Load
-                      </button>
-                    </div>
-                  </li>
-                ))}
-              </ul>
-            )}
-          </div>
-        )}
-      </div>
-
       {savedDecks.length > 0 && (
-        <div className="saved-decks" style={{ marginTop: '1rem', borderTop: '1px solid #ccc', paddingTop: '1rem' }}>
-          <h3>{user ? 'My Decks' : 'Local Decks'}</h3>
+        <div className="saved-decks">
+          <h3>Saved decks</h3>
           <ul>
             {savedDecks.map((deck) => (
               <li key={deck.id}>
@@ -357,77 +189,10 @@ const DeckManager = ({ onClose }: DeckManagerProps) => {
                   <button type="button" onClick={() => loadDeck(deck.id)}>
                     Load
                   </button>
-                  <button
-                    type="button"
-                    className="primary"
-                    onClick={async () => {
-                      setBusyCard('loading deck');
-                      try {
-                        // Preparar requisições batch
-                        const batchRequests = deck.entries.map((entry) => ({
-                          name: entry.name,
-                          setCode: entry.setCode,
-                          collectorNumber: entry.collectorNumber,
-                        }));
-
-                        // Buscar todas as cartas de uma vez
-                        const results = await fetchCardsBatch(batchRequests);
-                        
-                        // Processar resultados e expandir pela quantidade
-                        const cards: {
-                          name: string;
-                          oracleText?: string;
-                          manaCost?: string;
-                          typeLine?: string;
-                          setName?: string;
-                          imageUrl?: string;
-                          backImageUrl?: string;
-                        }[] = [];
-                        
-                        for (let i = 0; i < results.length; i++) {
-                          const result = results[i];
-                          const entry = deck.entries[i];
-                          
-                          if ('error' in result) {
-                            throw new Error(`Erro ao carregar carta "${entry.name}": ${result.error}`);
-                          }
-                          
-                          // Expandir pela quantidade
-                          for (let j = 0; j < entry.quantity; j++) {
-                            cards.push({
-                              name: result.name,
-                              oracleText: result.oracleText,
-                              manaCost: result.manaCost,
-                              typeLine: result.typeLine,
-                              setName: result.setName,
-                              imageUrl: result.imageUrl,
-                              backImageUrl: result.backImageUrl,
-                            });
-                          }
-                        }
-                        
-                        replaceLibrary(cards);
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : 'Unable to load deck');
-                      } finally {
-                        setBusyCard(undefined);
-                      }
-                    }}
-                    disabled={busyCard !== undefined}
-                  >
-                    {busyCard === 'loading deck' ? 'Loading...' : 'Load to Library'}
+                  <button type="button" onClick={() => loadEntriesToLibrary(deck.entries)} disabled={busyLibrary}>
+                    {busyLibrary ? 'Loading…' : 'Load to library'}
                   </button>
-                  <button 
-                    type="button" 
-                    className="ghost" 
-                    onClick={async () => {
-                      try {
-                        await deleteDeckDefinition(deck.id);
-                      } catch (err) {
-                        setError(err instanceof Error ? err.message : 'Failed to delete deck');
-                      }
-                    }}
-                  >
+                  <button type="button" className="ghost" onClick={() => deleteDeckDefinition(deck.id)}>
                     Delete
                   </button>
                 </div>

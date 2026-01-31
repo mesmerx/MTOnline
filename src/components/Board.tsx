@@ -17,10 +17,6 @@ type Point = { x: number; y: number };
 const LIBRARY_CARD_WIDTH = 100;
 const LIBRARY_CARD_HEIGHT = 140;
 const THROTTLE_MS = 0; // Sem throttling durante drag para evitar stutters - atualizações imediatas
-const LIBRARY_SYNC_THROTTLE_MS = 0; // Enviar updates o mais rápido possível
-const LIBRARY_MAX_STEP_PX = 20; // Reduzir atraso no acompanhamento do mouse
-const LIBRARY_EVENT_MAX_DELTA = 60; // Permitir deltas maiores por evento
-const LIBRARY_MIN_STEP_PX = 1; // Garantir movimento perceptível por frame
 const DRAG_THRESHOLD = 5; // Pixels para distinguir clique de drag
 const CLICK_BLOCK_DELAY = 300; // ms para bloquear cliques após drag
 
@@ -32,7 +28,6 @@ interface DragState {
   startX: number;
   startY: number;
   hasMoved: boolean;
-  lastPosition?: Point;
 }
 
 interface ClickBlockState {
@@ -81,10 +76,11 @@ const selectBoardState = createShallowCachedSelector((state: ReturnType<typeof u
   setZoomedCard: state.setZoomedCard,
   zoomedCard: state.zoomedCard ?? null,
   flipCard: state.flipCard,
+  resetBoard: state.resetBoard,
   changePlayerLife: state.changePlayerLife,
   changeCommanderDamage: state.changeCommanderDamage,
   status: state.status,
-  peer: state.peer,
+  socket: state.socket,
   connections: state.connections,
   hostConnection: state.hostConnection,
   isHost: state.isHost,
@@ -436,10 +432,11 @@ const Board = () => {
     setZoomedCard: setZoomedCardSync,
     zoomedCard: zoomedCardSync,
     flipCard,
+    resetBoard,
     changePlayerLife,
     changeCommanderDamage,
     status,
-    peer,
+    socket,
     connections,
     hostConnection,
     isHost,
@@ -472,6 +469,7 @@ const Board = () => {
   const [libraryPositions, setLibraryPositions] = useState<Record<string, Point>>({});
   const [draggingLibrary, setDraggingLibrary] = useState<{ playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
   const [libraryMoved, setLibraryMoved] = useState(false);
+  const librarySyncLockRef = useRef<Record<string, Point>>({});
   const libraryMovedRef = useRef<boolean>(false);
   const libraryClickExecutedRef = useRef<boolean>(false);
   const librarySyncRafRef = useRef<number | null>(null);
@@ -498,7 +496,23 @@ const Board = () => {
     if (draggingLibrary) {
       return;
     }
-    setLibraryPositions(storeLibraryPositions);
+    setLibraryPositions((prev) => {
+      const next = { ...prev };
+      const locks = { ...librarySyncLockRef.current };
+      Object.entries(storeLibraryPositions).forEach(([player, position]) => {
+        const lock = locks[player];
+        if (lock) {
+          const matches = Math.abs(lock.x - position.x) < 1 && Math.abs(lock.y - position.y) < 1;
+          if (!matches) {
+            return;
+          }
+          delete locks[player];
+        }
+        next[player] = position;
+      });
+      librarySyncLockRef.current = locks;
+      return next;
+    });
     if (librarySyncRafRef.current !== null) {
       cancelAnimationFrame(librarySyncRafRef.current);
       librarySyncRafRef.current = null;
@@ -522,8 +536,8 @@ const Board = () => {
   
   const simulatePlayers = simulatedPlayers.length;
   
-  // Modos de visualização: 'unified' (todos juntos), 'individual' (um por vez), 'separated' (boards separados)
-  const [viewMode, setViewMode] = useState<'unified' | 'individual' | 'separated'>('unified');
+  // Modos de visualização: 'individual' (um por vez), 'separated' (boards separados)
+  const [viewMode, setViewMode] = useState<'individual' | 'separated'>('individual');
   const [selectedPlayerIndex, setSelectedPlayerIndex] = useState(0); // Para modo individual
   const [contextMenu, setContextMenu] = useState<{
     x: number;
@@ -689,7 +703,7 @@ const Board = () => {
             updatedLogs[firstMoveIndex] = {
               ...firstMove,
               timestamp: firstMove.timestamp, // Manter timestamp original (primeiro movimento)
-              message: `Movendo carta: ${cardName || cardId}${moveCount > 1 ? ` (${moveCount} movimentos)` : ''}`,
+              message: `Moving card: ${cardName || cardId}${moveCount > 1 ? ` (${moveCount} moves)` : ''}`,
               details: {
                 ...firstMove.details,
                 from: firstMove.details?.from || firstMove.details?.position, // Manter posição inicial
@@ -747,7 +761,7 @@ const Board = () => {
         let text = `${log.type} ${timeStr}\n${log.message}`;
         
         if (log.cardName) {
-          text += `\nCarta: ${log.cardName}`;
+          text += `\nCard: ${log.cardName}`;
           if (log.cardId) {
             text += ` (${log.cardId})`;
           }
@@ -791,7 +805,7 @@ const Board = () => {
         try {
           document.execCommand('copy');
         } catch (fallbackErr) {
-          console.error('Erro no fallback de cópia:', fallbackErr);
+          console.error('Error in copy fallback:', fallbackErr);
         }
         document.body.removeChild(textArea);
       }
@@ -818,7 +832,7 @@ const Board = () => {
       let text = `${log.type} ${timeStr}\n${log.message}`;
       
       if (log.cardName) {
-        text += `\nCarta: ${log.cardName}`;
+        text += `\nCard: ${log.cardName}`;
         if (log.cardId) {
           text += ` (${log.cardId})`;
         }
@@ -870,13 +884,13 @@ const Board = () => {
           }, 2000);
         }
       } catch (fallbackErr) {
-        console.error('Erro no fallback de cópia:', fallbackErr);
+        console.error('Error in copy fallback:', fallbackErr);
       }
       document.body.removeChild(textArea);
     }
   };
   
-  // Memoizar filtros de cartas para evitar recálculos desnecessários
+  // Memoizar filtros de cards para evitar recálculos desnecessários
   const battlefieldCards = useMemo(() => board.filter((c) => c.zone === 'battlefield'), [board]);
   const libraryCards = useMemo(() => board.filter((c) => c.zone === 'library'), [board]);
   const handCards = useMemo(() => board.filter((c) => c.zone === 'hand'), [board]);
@@ -889,7 +903,7 @@ const Board = () => {
     [handCards, playerName]
   );
   
-  // Ajustar posição de cartas recém-adicionadas para o centro da área do player
+  // Ajustar posição de cards recém-adicionadas para o centro da área do player
   const processedCardsRef = useRef<Set<string>>(new Set());
   useEffect(() => {
     if (!boardRef.current) return;
@@ -918,7 +932,7 @@ const Board = () => {
       }
     }
     
-    // Limpar ref de cartas que não existem mais
+    // Limpar ref de cards que não existem mais
     const currentCardIds = new Set(battlefieldCards.map(c => c.id));
     processedCardsRef.current.forEach((id) => {
       if (!currentCardIds.has(id)) {
@@ -929,7 +943,7 @@ const Board = () => {
 
   // Tamanho base do board em 1080p (importado de BoardTypes.ts)
   
-  // Calcular scale baseado na resolução atual (para individual/unified)
+  // Calcular scale baseado na resolução atual (para individual)
   const getBoardScale = useCallback(() => {
     if (!boardRef.current) return 1;
     const rect = boardRef.current.getBoundingClientRect();
@@ -984,7 +998,7 @@ const Board = () => {
     return { x: cursorX, y: cursorY };
   };
 
-  // Função auxiliar para converter coordenadas do mouse no modo individual/unified
+  // Função auxiliar para converter coordenadas do mouse no modo individual
   const convertMouseToUnifiedCoordinates = useCallback((
     mouseX: number,
     mouseY: number,
@@ -1088,7 +1102,7 @@ const Board = () => {
       };
     }
     
-    // No modo individual ou unified, usar o espaço base
+    // No modo individual, usar o espaço base
     return {
       x: 0,
       y: 0,
@@ -1155,7 +1169,7 @@ const Board = () => {
       return cemeteryPositions[playerName];
     }
     
-    // Terceiro, verificar se há cartas no board com posição (vindo dos peers)
+    // Terceiro, verificar se há cards no board com posição (vindo dos peers)
     const playerCemeteryCards = cemeteryCards
       .filter((c) => c.ownerId === playerName)
       .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0))
@@ -1266,7 +1280,12 @@ const Board = () => {
       return storeExilePositions[ownerName];
     }
     
-    // Segundo, verificar se há cartas no board com posição
+    // Segundo, verificar se há posição salva localmente
+    if (exilePositions[ownerName]) {
+      return exilePositions[ownerName];
+    }
+    
+    // Segundo, verificar se há cards no board com posição
     const playerExileCards = exileCards
       .filter((c) => c.ownerId === ownerName)
       .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0))
@@ -1291,27 +1310,11 @@ const Board = () => {
     const area = getPlayerArea(ownerName);
     if (!area) return null;
     
-    // Se está arrastando, usar posição renderizada atual
-    if (draggingLibrary?.playerName === ownerName && libraryDragRenderedRef.current) {
-      return {
-        x: libraryDragRenderedRef.current.x,
-        y: libraryDragRenderedRef.current.y,
-      };
-    }
-    
-    // Se há posição local, usar ela primeiro
-    // Durante o drag, a posição local é relativa à área do player
+    // Se há posição local, usar ela primeiro (sempre em coordenadas absolutas)
     if (libraryPositions[ownerName]) {
-      const localPos = libraryPositions[ownerName];
-      if (draggingLibrary?.playerName === ownerName) {
-        return {
-          x: localPos.x + area.x,
-          y: localPos.y + area.y,
-        };
-      }
       return {
-        x: localPos.x,
-        y: localPos.y,
+        x: libraryPositions[ownerName].x,
+        y: libraryPositions[ownerName].y,
       };
     }
     
@@ -1330,7 +1333,7 @@ const Board = () => {
     
     const topCard = playerLibraryCards[0];
     if (topCard && topCard.position.x !== 0 && topCard.position.y !== 0) {
-      // As posições das cartas já estão no espaço base
+      // As posições das cards já estão no espaço base
       return {
         x: topCard.position.x,
         y: topCard.position.y,
@@ -1350,9 +1353,7 @@ const Board = () => {
     if (!isDragging || !dragState || !boardRef.current) return;
 
     const handleMove = (event: PointerEvent) => {
-      // Durante o drag, pointermove acontece → atualiza lastPosition
-      // requestAnimationFrame roda (~60fps) e decide quando enviar
-      // Guardar apenas a última posição (colapsar N eventos em 1 estado final)
+      // Durante o drag, pointermove acontece → envia cada posição
 
       // Verificar se a carta ainda existe
       const currentBoard = useGameStore.getState().board;
@@ -1395,7 +1396,7 @@ const Board = () => {
       cursorX = coords.x;
       cursorY = coords.y;
     } else {
-      // Modo individual/unified: usar função auxiliar específica
+      // Modo individual: usar função auxiliar específica
       // Garantir que estamos usando o mesmo rect e scale do render
       const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
       cursorX = coords.x;
@@ -1426,7 +1427,7 @@ const Board = () => {
         clampedY = Math.max(0, Math.min(BASE_BOARD_HEIGHT - CARD_HEIGHT, y));
       }
     } else {
-      // No modo individual/unified, trabalhar com pixels no espaço base (1920x1080)
+      // No modo individual, trabalhar com pixels no espaço base (1920x1080)
       const playerArea = getPlayerArea(card.ownerId);
       if (playerArea) {
         clampedX = Math.max(
@@ -1446,9 +1447,6 @@ const Board = () => {
 
       // Mover a carta apenas se realmente moveu
       if (dragState.hasMoved) {
-        // Atualizar apenas a última posição (será enviada pelo requestAnimationFrame no store)
-        // O moveCard já faz throttling interno para 30fps e colapsa N eventos em 1
-        dragState.lastPosition = { x: clampedX, y: clampedY };
         moveCard(dragState.cardId, { x: clampedX, y: clampedY });
       }
     };
@@ -1459,7 +1457,7 @@ const Board = () => {
 
       // Ignorar se foi botão direito ou botão do meio
       if (event.button === 1 || event.button === 2) {
-        console.log('[Board] handleUp: Ignorando porque foi botão direito ou do meio');
+      console.log('[Board] handleUp: Ignoring because it was right/middle click');
         dragStateRef.current = null;
         setIsDragging(false);
         return;
@@ -1562,9 +1560,7 @@ const Board = () => {
               clickBlockTimeoutRef.current = { cardId: card.id, timeoutId };
               
             // Resetar todos os estados de drag
-              requestAnimationFrame(() => {
-                resetAllDragStates();
-              });
+            resetAllDragStates();
               
               return;
           }
@@ -1572,10 +1568,6 @@ const Board = () => {
       }
 
         // Limpar estado de drag
-        libraryDragTargetRef.current = null;
-        libraryDragRenderedRef.current = null;
-        libraryDragRenderedRelativeRef.current = null;
-        libraryDragLastSentRef.current = null;
       const hadMoved = dragState.hasMoved;
       const cardId = dragState.cardId;
       
@@ -1609,7 +1601,7 @@ const Board = () => {
                   const moveCount = (moveEvent.details?.moveCount as number) || 1;
                   updatedLogs[moveIndex] = {
                     ...moveEvent,
-                    message: `Movendo carta: ${card.name}${moveCount > 1 ? ` (${moveCount} movimentos, final)` : ' (final)'}`,
+                    message: `Moving card: ${card.name}${moveCount > 1 ? ` (${moveCount} moves, final)` : ' (final)'}`,
                     details: {
                       ...moveEvent.details,
                       to: card.position, // Atualizar com posição final
@@ -1630,7 +1622,7 @@ const Board = () => {
             }
           }
           
-          moveCard(cardId, dragState.lastPosition || card.position, { persist: true });
+          moveCard(cardId, card.position, { persist: true });
         }
       }
       
@@ -1644,7 +1636,7 @@ const Board = () => {
         const currentBoard = useGameStore.getState().board;
         const card = currentBoard.find((c) => c.id === cardId);
         
-        console.log('[Board] handleUp: Não moveu, verificando se deve fazer tap:', {
+        console.log('[Board] handleUp: Didn\'t move, checking whether to tap:', {
           cardId,
           card: card ? { id: card.id, name: card.name, zone: card.zone, ownerId: card.ownerId, tapped: card.tapped } : null,
           playerId,
@@ -1658,7 +1650,7 @@ const Board = () => {
           });
           toggleTap(cardId);
         } else {
-          console.log('[Board] handleUp: Não fez tap porque:', {
+          console.log('[Board] handleUp: Didn\'t tap because:', {
             cardExists: !!card,
             zone: card?.zone,
             ownerId: card?.ownerId,
@@ -1672,7 +1664,7 @@ const Board = () => {
           clearTimeout(clickBlockTimeoutRef.current.timeoutId);
           clickBlockTimeoutRef.current = null;
         }
-        console.log('[Board] handleUp: Não moveu, limpando estado imediatamente');
+        console.log('[Board] handleUp: Didn\'t move, clearing state immediately');
         return;
       }
 
@@ -1684,7 +1676,7 @@ const Board = () => {
         clickBlockTimeoutRef.current = null;
       }, CLICK_BLOCK_DELAY);
       clickBlockTimeoutRef.current = { cardId: dragState.cardId, timeoutId };
-      console.log('[Board] handleUp: Moveu, bloqueando cliques por', CLICK_BLOCK_DELAY, 'ms');
+      console.log('[Board] handleUp: Moved, blocking clicks for', CLICK_BLOCK_DELAY, 'ms');
     };
 
     window.addEventListener('pointermove', handleMove);
@@ -1699,7 +1691,7 @@ const Board = () => {
     // Ignorar botão direito e botão do meio
     if (event.button === 1 || event.button === 2) return;
     
-    // Só pode mover suas próprias cartas
+    // Só pode mover suas próprias cards
     if (card.ownerId !== playerName) return;
     if ((event.target as HTMLElement).closest('button')) return;
     event.preventDefault();
@@ -1714,7 +1706,7 @@ const Board = () => {
     const currentBoard = useGameStore.getState().board;
     const currentCard = currentBoard.find((c) => c.id === card.id);
     if (!currentCard) {
-      console.log('[Board] startDrag: Carta não encontrada no board, cancelando drag');
+      console.log('[Board] startDrag: Card not found on board, canceling drag');
       return;
     }
     
@@ -1761,7 +1753,7 @@ const Board = () => {
         cursorY = coords.y;
       }
     } else {
-      // Modo individual/unified: usar função auxiliar específica
+      // Modo individual: usar função auxiliar específica
       const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
       cursorX = coords.x;
       cursorY = coords.y;
@@ -1785,19 +1777,18 @@ const Board = () => {
   };
 
   const resetAllDragStates = () => {
+    const currentLibraryPlayer = draggingLibrary?.playerName;
+    const currentLibraryPos = currentLibraryPlayer ? getLibraryPosition(currentLibraryPlayer) : null;
     dragStateRef.current = null;
     setIsDragging(false);
     setDraggingLibrary(null);
     setLibraryMoved(false);
-    libraryDragRenderedRef.current = { x: libraryPos.x, y: libraryPos.y };
-    libraryDragTargetRef.current = {
-      playerName: targetPlayerName,
-      relativePosition: {
-        x: libraryPos.x - (getPlayerArea(targetPlayerName)?.x || 0),
-        y: libraryPos.y - (getPlayerArea(targetPlayerName)?.y || 0),
-      },
-      absolutePosition: { x: libraryPos.x, y: libraryPos.y },
-    };
+    if (currentLibraryPlayer && currentLibraryPos) {
+    setLibraryPositions((prev) => ({
+      ...prev,
+      [currentLibraryPlayer]: currentLibraryPos,
+    }));
+    }
     // NÃO resetar draggingCemetery aqui - ele é gerenciado pelo seu próprio useEffect
     // setDraggingCemetery(null);
     // setCemeteryMoved(false);
@@ -1851,7 +1842,7 @@ const Board = () => {
 
     // Bloquear clique apenas se há um drag realmente ativo
     if (isDragging) {
-      console.log('[Board] Bloqueado: isDragging = true');
+      console.log('[Board] Blocked: isDragging = true');
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1860,7 +1851,7 @@ const Board = () => {
     // Bloquear clique apenas se acabou de fazer drag com movimento na mesma carta
     // (o timeout só é definido se houve movimento real)
     if (clickBlockTimeoutRef.current && clickBlockTimeoutRef.current.cardId === card.id) {
-      console.log('[Board] Bloqueado: clickBlockTimeout ativo para esta carta');
+      console.log('[Board] Blocked: clickBlockTimeout active for this card');
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1868,7 +1859,7 @@ const Board = () => {
 
     // Bloquear se há drag da hand ativo
     if (showHand && dragStartedFromHandRef.current) {
-      console.log('[Board] Bloqueado: dragStartedFromHand = true');
+      console.log('[Board] Blocked: dragStartedFromHand = true');
       event.preventDefault();
       event.stopPropagation();
       dragStartedFromHandRef.current = false;
@@ -1883,7 +1874,7 @@ const Board = () => {
     const currentBoard = useGameStore.getState().board;
     const currentCard = currentBoard.find((c) => c.id === card.id);
     if (currentCard && currentCard.zone !== card.zone) {
-      console.log('[Board] Bloqueado: carta mudou de zona', {
+      console.log('[Board] Blocked: card changed zone', {
         cardZone: card.zone,
         currentZone: currentCard.zone,
       });
@@ -1896,7 +1887,7 @@ const Board = () => {
     const target = event.target as HTMLElement;
     const clickedOnHandArea = target.closest('.hand-area, .hand-cards, .hand-card-wrapper');
     if (clickedOnHandArea && card.zone === 'battlefield') {
-      console.log('[Board] Bloqueado: clicou na área da mão');
+      console.log('[Board] Blocked: clicked on hand area');
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1922,7 +1913,7 @@ const Board = () => {
 
     // Se está na mão, colocar no board
     if (card.zone === 'hand' && canInteractWithCard(card.ownerId) && showHand) {
-      console.log('[Board] Colocando carta da mão no board:', card.id);
+      console.log('[Board] Placing card from hand onto board:', card.id);
       const playerArea = getPlayerArea(playerName);
       if (playerArea) {
         const position = {
@@ -1939,7 +1930,7 @@ const Board = () => {
       return;
     }
 
-    console.log('[Board] Nenhuma ação tomada para o clique');
+    console.log('[Board] No action taken for the click');
   };
 
   const handleCardZoom = (card: CardOnBoard, event: React.PointerEvent) => {
@@ -2095,7 +2086,7 @@ const Board = () => {
         
         setContextMenuPosition({ x: adjustedX, y: adjustedY });
         
-        // Remover overflow se o menu couber completamente na tela
+        // Remove overflow se o menu couber completamente na tela
         const finalSpaceBelow = window.innerHeight - adjustedY - padding;
         if (realMenuHeight <= finalSpaceBelow) {
           menuElement.style.overflowY = 'visible';
@@ -2133,7 +2124,7 @@ const Board = () => {
     
     // Não bloquear context menu por drag, apenas se está realmente arrastando
     if (isDragging) {
-      console.log('[Board] handleCardContextMenu: Bloqueado porque isDragging = true');
+      console.log('[Board] handleCardContextMenu: Blocked because isDragging = true');
       return;
     }
     
@@ -2149,7 +2140,7 @@ const Board = () => {
   const parseManaCost = (manaCost?: string): number => {
     if (!manaCost || manaCost.trim() === '') return 0;
     
-    // Remover chaves e contar números e símbolos
+    // Remove chaves e contar números e símbolos
     // Ex: "{2}{R}" -> 2 + 1 = 3, "{X}{R}{G}" -> 0 + 1 + 1 = 2 (X conta como 0)
     const matches = manaCost.match(/\{(\d+|[XWUBRGC]|W\/U|W\/B|U\/B|U\/R|B\/R|B\/G|R\/G|R\/W|G\/W|G\/U|2\/W|2\/U|2\/B|2\/R|2\/G)\}/g);
     if (!matches) return 0;
@@ -2182,8 +2173,8 @@ const Board = () => {
     // Fechar submenu
     setContextSubmenu(null);
     
-    // Perguntar o valor do cascade
-    const cascadeValueStr = window.prompt('Digite o valor do Cascade:');
+    // Perguntar o valor do CMC maximo
+    const cascadeValueStr = window.prompt('Enter the max CMC value:');
     if (!cascadeValueStr) {
       setContextMenu(null);
       return;
@@ -2191,27 +2182,27 @@ const Board = () => {
     
     const cascadeValue = parseInt(cascadeValueStr, 10);
     if (isNaN(cascadeValue) || cascadeValue < 0) {
-      alert('Valor inválido. Digite um número maior ou igual a 0.');
+      alert('Invalid value. Enter a number greater than or equal to 0.');
       setContextMenu(null);
       return;
     }
     
     setContextMenu(null);
     
-    // Obter cartas do library do jogador, ordenadas por stackIndex (descendente - topo primeiro)
+    // Obter cards do library do jogador, ordenadas por stackIndex (descendente - topo primeiro)
     const currentBoard = useGameStore.getState().board;
     const libraryCards = currentBoard
       .filter((c) => c.zone === 'library' && c.ownerId === card.ownerId)
       .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
     
     if (libraryCards.length === 0) {
-      alert('Não há cartas no deck.');
+      alert('There are no cards in the deck.');
       return;
     }
     
     const revealedCards: CardOnBoard[] = [];
     
-    // Revelar cartas uma por uma até encontrar uma carta com CMC <= cascadeValue
+    // Revelar cards uma por uma até encontrar uma carta com CMC <= cascadeValue
     for (const libraryCard of libraryCards) {
       const cardMana = parseManaCost(libraryCard.manaCost);
       revealedCards.push(libraryCard);
@@ -2241,13 +2232,13 @@ const Board = () => {
       }
     }
     
-    // Fechar zoom se estava mostrando cartas
+    // Fechar zoom se estava mostrando cards
     if (showEachCard) {
       setZoomedCardSync(null);
     }
     
     if (revealedCards.length === 0) {
-      alert('Nenhuma carta foi revelada.');
+      alert('No cards were revealed.');
       return;
     }
     
@@ -2269,7 +2260,7 @@ const Board = () => {
     });
     changeCardZone(lastCard.id, 'battlefield', position);
     
-    // Mover outras cartas para o fundo do deck
+    // Mover outras cards para o fundo do deck
     for (const otherCard of otherCards) {
       const libraryPos = getLibraryPosition(card.ownerId);
       const libraryPosition = libraryPos || { x: 0, y: 0 };
@@ -2279,6 +2270,12 @@ const Board = () => {
     
     // Pequena pausa antes de finalizar
     await new Promise((resolve) => setTimeout(resolve, 500));
+  };
+
+  const handleShowToOthers = () => {
+    if (!contextMenu) return;
+    setZoomedCardSync(contextMenu.card.id);
+    setContextMenu(null);
   };
 
   const handleContextMenuAction = (
@@ -2320,7 +2317,7 @@ const Board = () => {
       // Mover de zona (não inclui library aqui)
       if (card.ownerId === playerName && card.zone !== targetZone) {
         if (targetZone === 'cemetery') {
-          // Cemitério = mover para cemitério (não remover)
+          // Cemetery = mover para cemitério (não remover)
           const cemeteryPos = getCemeteryPosition(card.ownerId);
           const position = cemeteryPos || { x: 0, y: 0 };
           
@@ -2402,9 +2399,9 @@ const Board = () => {
         createCounter(playerName, counterType, position);
       }
     } else {
-      // Cemitério ou Remover - ambos deletam
+      // Cemetery ou Remove - ambos deletam
       if (canInteractWithCard(card.ownerId)) {
-        const actionName = action === 'cemetery' ? 'Cemitério' : 'Remover';
+        const actionName = action === 'cemetery' ? 'Cemetery' : 'Remove';
         addEventLog('REMOVE_CARD', `${actionName}: ${card.name}`, card.id, card.name, {
         zone: card.zone,
           ownerId: card.ownerId,
@@ -2514,7 +2511,7 @@ const Board = () => {
         cursorY = coords.y;
       }
     } else {
-      // Modo individual/unified: usar função auxiliar específica
+      // Modo individual: usar função auxiliar específica
       const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
       cursorX = coords.x;
       cursorY = coords.y;
@@ -2533,21 +2530,11 @@ const Board = () => {
     });
   };
 
-  const libraryDragUpdateRef = useRef<number>(0);
-  const libraryDragRafRef = useRef<number | null>(null);
   const pendingLibraryPositionRef = useRef<{
     playerName: string;
     relativePosition: Point;
     absolutePosition: Point;
   } | null>(null);
-  const libraryDragTargetRef = useRef<{
-    playerName: string;
-    relativePosition: Point;
-    absolutePosition: Point;
-  } | null>(null);
-  const libraryDragRenderedRef = useRef<Point | null>(null);
-  const libraryDragRenderedRelativeRef = useRef<Point | null>(null);
-  const libraryDragLastSentRef = useRef<Point | null>(null);
 
   useEffect(() => {
     if (!draggingLibrary || !boardRef.current) {
@@ -2590,7 +2577,7 @@ const Board = () => {
         cursorX = coords.x;
         cursorY = coords.y;
       } else {
-        // Modo individual/unified: usar função auxiliar específica
+        // Modo individual: usar função auxiliar específica
         const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
         cursorX = coords.x;
         cursorY = coords.y;
@@ -2612,112 +2599,30 @@ const Board = () => {
         Math.min(playerArea.y + playerArea.height - LIBRARY_CARD_HEIGHT, y)
       );
 
-      const lastTarget =
-        libraryDragTargetRef.current?.absolutePosition ??
-        libraryDragRenderedRef.current ??
-        { x: clampedX, y: clampedY };
-      const eventDeltaX = clampedX - lastTarget.x;
-      const eventDeltaY = clampedY - lastTarget.y;
-      const eventDeltaDistance = Math.hypot(eventDeltaX, eventDeltaY);
-      if (eventDeltaDistance > LIBRARY_EVENT_MAX_DELTA) {
-        const scale = LIBRARY_EVENT_MAX_DELTA / eventDeltaDistance;
-        clampedX = lastTarget.x + eventDeltaX * scale;
-        clampedY = lastTarget.y + eventDeltaY * scale;
-      }
-      
       const relativePosition = {
         x: clampedX - playerArea.x,
         y: clampedY - playerArea.y,
       };
-      
-      libraryDragTargetRef.current = {
+
+      setLibraryPositions((prev) => ({
+        ...prev,
+        [draggingLibrary.playerName]: { x: clampedX, y: clampedY },
+      }));
+      librarySyncLockRef.current = {
+        ...librarySyncLockRef.current,
+        [draggingLibrary.playerName]: { x: clampedX, y: clampedY },
+      };
+      pendingLibraryPositionRef.current = {
         playerName: draggingLibrary.playerName,
         relativePosition,
         absolutePosition: { x: clampedX, y: clampedY },
       };
-      
-      if (libraryDragRafRef.current === null) {
-        const stepDrag = () => {
-          const target = libraryDragTargetRef.current;
-          if (!draggingLibrary || !target) {
-          libraryDragRafRef.current = null;
-            return;
-          }
-          
-          const current = libraryDragRenderedRef.current ?? target.absolutePosition;
-          const dx = target.absolutePosition.x - current.x;
-          const dy = target.absolutePosition.y - current.y;
-          
-          let nextX = current.x;
-          let nextY = current.y;
-          
-          if (Math.abs(dx) > 0.5 || Math.abs(dy) > 0.5) {
-            let stepX = Math.max(-LIBRARY_MAX_STEP_PX, Math.min(LIBRARY_MAX_STEP_PX, dx));
-            let stepY = Math.max(-LIBRARY_MAX_STEP_PX, Math.min(LIBRARY_MAX_STEP_PX, dy));
-            
-            if (Math.abs(stepX) < LIBRARY_MIN_STEP_PX && Math.abs(dx) > 0.5) {
-              stepX = Math.sign(dx) * LIBRARY_MIN_STEP_PX;
-            }
-            if (Math.abs(stepY) < LIBRARY_MIN_STEP_PX && Math.abs(dy) > 0.5) {
-              stepY = Math.sign(dy) * LIBRARY_MIN_STEP_PX;
-            }
-            
-            nextX = current.x + stepX;
-            nextY = current.y + stepY;
-          } else {
-            nextX = target.absolutePosition.x;
-            nextY = target.absolutePosition.y;
-          }
-          
-          libraryDragRenderedRef.current = { x: nextX, y: nextY };
-          
-          const container = libraryContainerRefs.current[target.playerName];
-          if (container) {
-            container.style.left = `${nextX}px`;
-            container.style.top = `${nextY - 20}px`;
-          }
-          
-          const targetArea = getPlayerArea(target.playerName);
-          if (targetArea) {
-            const renderedRelative = {
-              x: nextX - targetArea.x,
-              y: nextY - targetArea.y,
-            };
-            
-            libraryDragRenderedRelativeRef.current = renderedRelative;
-            
-            pendingLibraryPositionRef.current = {
-              playerName: target.playerName,
-              relativePosition: renderedRelative,
-              absolutePosition: { x: nextX, y: nextY },
-            };
-            
-            const now = Date.now();
-            if (now - libraryDragUpdateRef.current >= LIBRARY_SYNC_THROTTLE_MS) {
-              libraryDragUpdateRef.current = now;
-              libraryDragLastSentRef.current = { x: nextX, y: nextY };
-              moveLibrary(
-                target.playerName,
-                renderedRelative,
-                { x: nextX, y: nextY },
-                true
-              );
-            }
-          }
-          
-          if (
-            Math.abs(target.absolutePosition.x - nextX) <= 0.5 &&
-            Math.abs(target.absolutePosition.y - nextY) <= 0.5
-          ) {
-            libraryDragRafRef.current = null;
-            return;
-          }
-          
-          libraryDragRafRef.current = requestAnimationFrame(stepDrag);
-        };
-        
-        libraryDragRafRef.current = requestAnimationFrame(stepDrag);
-      }
+      moveLibrary(
+        draggingLibrary.playerName,
+        relativePosition,
+        { x: clampedX, y: clampedY },
+        true
+      );
     };
 
     const stopDrag = (event?: PointerEvent) => {
@@ -2729,32 +2634,34 @@ const Board = () => {
       if (actuallyMoved && draggingLibrary) {
         const playerName = draggingLibrary.playerName;
         const pending = pendingLibraryPositionRef.current;
-        const target = libraryDragTargetRef.current;
-        const finalPosition =
+        const absolutePosition =
           pending && pending.playerName === playerName
-            ? pending.relativePosition
+            ? pending.absolutePosition
             : libraryPositions[playerName];
         
-        if (finalPosition) {
+        if (absolutePosition) {
           const playerArea = getPlayerArea(playerName);
-          const absolutePosition = target?.absolutePosition
-            ?? {
-              x: finalPosition.x + (playerArea?.x || 0),
-              y: finalPosition.y + (playerArea?.y || 0),
-            };
+          const relativePosition = {
+            x: absolutePosition.x - (playerArea?.x || 0),
+            y: absolutePosition.y - (playerArea?.y || 0),
+          };
           
           // Garantir que a posição final seja aplicada localmente antes de salvar
           setLibraryPositions((prev) => ({
             ...prev,
-            [playerName]: finalPosition,
+            [playerName]: absolutePosition,
           }));
+          librarySyncLockRef.current = {
+            ...librarySyncLockRef.current,
+            [playerName]: absolutePosition,
+          };
           
           // Salvar posição final no banco (skipEventSave = false)
-          moveLibrary(playerName, finalPosition, absolutePosition, false);
+          moveLibrary(playerName, relativePosition, absolutePosition, false);
           
-          addEventLog('MOVE_LIBRARY', `Movendo library: ${playerName}`, undefined, undefined, {
+          addEventLog('MOVE_LIBRARY', `Moving library: ${playerName}`, undefined, undefined, {
             playerName,
-            position: finalPosition,
+            position: relativePosition,
           });
         }
       }
@@ -2817,18 +2724,18 @@ const Board = () => {
     console.log('[Board] startCemeteryDrag chamado', { targetPlayerName, currentPlayerName: playerName, matches: targetPlayerName === playerName });
     
     if ((event.target as HTMLElement).closest('button')) {
-      console.log('[Board] Bloqueado - botão');
+      console.log('[Board] Blocked - button');
       return;
     }
     // Não iniciar drag com botão direito (button 2)
     if (event.button === 2) {
-      console.log('[Board] Bloqueado - botão direito');
+      console.log('[Board] Blocked - right click');
       return;
     }
     // A verificação de permissão já é feita no componente Cemetery
     event.preventDefault();
     if (!boardRef.current) {
-      console.log('[Board] Bloqueado - sem boardRef');
+      console.log('[Board] Blocked - no boardRef');
       return;
     }
 
@@ -2869,7 +2776,7 @@ const Board = () => {
         cursorY = coords.y;
       }
     } else {
-      // Modo individual/unified: usar função auxiliar específica
+      // Modo individual: usar função auxiliar específica
       const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
       cursorX = coords.x;
       cursorY = coords.y;
@@ -2933,7 +2840,7 @@ const Board = () => {
         cursorX = coords.x;
         cursorY = coords.y;
       } else {
-        // Modo individual/unified: usar função auxiliar específica
+        // Modo individual: usar função auxiliar específica
         const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
         cursorX = coords.x;
         cursorY = coords.y;
@@ -2975,7 +2882,7 @@ const Board = () => {
           // Salvar posição final no banco (skipEventSave = false)
           moveCemetery(playerName, finalPosition, false);
           
-          addEventLog('MOVE_CEMETERY', `Movendo cemetery: ${playerName}`, undefined, undefined, {
+          addEventLog('MOVE_CEMETERY', `Moving cemetery: ${playerName}`, undefined, undefined, {
             playerName,
             position: finalPosition,
           });
@@ -3002,28 +2909,26 @@ const Board = () => {
 
   useEffect(() => {
     if (draggingExile) {
-      setExilePositions((prev) => ({
-        ...prev,
-        [draggingExile.playerName]: getExilePosition(draggingExile.playerName) || { x: 0, y: 0 },
-      }));
+      return;
     }
+    setExilePositions(storeExilePositions);
   }, [storeExilePositions, draggingExile]);
 
   // Sistema de drag para exílio
   const startExileDrag = (targetPlayerName: string, event: ReactPointerEvent) => {
-    console.log('[Board] startExileDrag chamado', { targetPlayerName, currentPlayerName: playerName, matches: targetPlayerName === playerName });
+    console.log('[Board] startExileDrag called', { targetPlayerName, currentPlayerName: playerName, matches: targetPlayerName === playerName });
     
     if ((event.target as HTMLElement).closest('button')) {
-      console.log('[Board] Bloqueado - botão');
+      console.log('[Board] Blocked - button');
       return;
     }
     if (event.button === 2) {
-      console.log('[Board] Bloqueado - botão direito');
+      console.log('[Board] Blocked - right click');
       return;
     }
     event.preventDefault();
     if (!boardRef.current) {
-      console.log('[Board] Bloqueado - sem boardRef');
+      console.log('[Board] Blocked - no boardRef');
       return;
     }
 
@@ -3041,17 +2946,37 @@ const Board = () => {
       } : { x: 0, y: 0 };
     }
 
-    const startX = event.clientX - rect.left;
-    const startY = event.clientY - rect.top;
-    const offsetX = startX - exilePos.x;
-    const offsetY = startY - exilePos.y;
+    // Converter coordenadas do mouse baseado no modo
+    let cursorX, cursorY;
+    if (viewMode === 'separated') {
+      const coords = convertMouseToSeparatedCoordinates(
+        event.clientX,
+        event.clientY,
+        targetPlayerName,
+        rect
+      );
+      if (!coords) {
+        cursorX = exilePos.x;
+        cursorY = exilePos.y;
+      } else {
+        cursorX = coords.x;
+        cursorY = coords.y;
+      }
+    } else {
+      const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+      cursorX = coords.x;
+      cursorY = coords.y;
+    }
+
+    const offsetX = cursorX - exilePos.x;
+    const offsetY = cursorY - exilePos.y;
 
     setDraggingExile({
       playerName: targetPlayerName,
       offsetX,
       offsetY,
-      startX,
-      startY,
+      startX: event.clientX,
+      startY: event.clientY,
     });
   };
 
@@ -3090,8 +3015,9 @@ const Board = () => {
       const clampedX = Math.max(minX, Math.min(maxX, x));
       const clampedY = Math.max(minY, Math.min(maxY, y));
 
-      if (Math.abs(clampedX - (draggingExile.startX - draggingExile.offsetX)) > 5 || 
-          Math.abs(clampedY - (draggingExile.startY - draggingExile.offsetY)) > 5) {
+      const deltaX = Math.abs(event.clientX - draggingExile.startX);
+      const deltaY = Math.abs(event.clientY - draggingExile.startY);
+      if (deltaX > DRAG_THRESHOLD || deltaY > DRAG_THRESHOLD) {
         exileMovedRef.current = true;
       }
 
@@ -3108,7 +3034,7 @@ const Board = () => {
         const finalPosition = exilePositions[draggingExile.playerName];
         if (finalPosition) {
           moveExile(draggingExile.playerName, finalPosition, false);
-          addEventLog('MOVE_EXILE', `Movendo exile: ${draggingExile.playerName}`, undefined, undefined, {
+          addEventLog('MOVE_EXILE', `Moving exile: ${draggingExile.playerName}`, undefined, undefined, {
             playerName: draggingExile.playerName,
             position: finalPosition,
           });
@@ -3331,21 +3257,6 @@ const Board = () => {
           {/* Controles de modo de visualização */}
           <div style={{ display: 'flex', gap: '4px', alignItems: 'center' }}>
             <button
-              onClick={() => setViewMode('unified')}
-              style={{
-                padding: '6px 12px',
-                backgroundColor: viewMode === 'unified' ? '#6366f1' : '#475569',
-                color: 'white',
-                border: 'none',
-                borderRadius: '4px',
-                cursor: 'pointer',
-                fontSize: '12px',
-              }}
-              title="Todos os boards juntos"
-            >
-              🎯 Unificado
-            </button>
-            <button
               onClick={() => {
                 setViewMode('individual');
                 // Começar com o player atual
@@ -3361,7 +3272,7 @@ const Board = () => {
                 cursor: 'pointer',
                 fontSize: '12px',
               }}
-              title="Ver um player por vez"
+              title="View one player at a time"
             >
               👤 Individual
             </button>
@@ -3376,9 +3287,9 @@ const Board = () => {
                 cursor: 'pointer',
                 fontSize: '12px',
               }}
-              title="Boards separados"
+              title="View all players separately"
             >
-              📑 Separado
+              📑 Separated
             </button>
           </div>
           
@@ -3418,7 +3329,7 @@ const Board = () => {
                   cursor: 'pointer',
                   fontSize: '14px',
                 }}
-                title="Próximo player"
+                title="Next player"
               >
                 →
               </button>
@@ -3458,7 +3369,7 @@ const Board = () => {
             opacity: (!handButtonEnabled && !showHand) ? 0.5 : 1,
           }}
         >
-          {showHand ? 'Esconder Hand' : 'Mostrar Hand'}
+          {showHand ? 'Hide Hand' : 'Show Hand'}
         </button>
           </div>
           
@@ -3475,9 +3386,9 @@ const Board = () => {
                 cursor: 'pointer',
                 fontSize: '12px',
               }}
-              title="Simular múltiplos players"
+              title="Simulate multiple players"
             >
-              {simulatePlayers > 0 ? `👥 Simular: ${simulatePlayers}` : '👥 Simular Players'}
+              {simulatePlayers > 0 ? `👥 Simulate: ${simulatePlayers}` : '👥 Simulate Players'}
             </button>
             {showSimulatePanel && (
               <div style={{ display: 'flex', flexDirection: 'column', gap: '4px', padding: '4px', backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: '4px' }}>
@@ -3718,7 +3629,7 @@ const Board = () => {
                     <div style={{ fontSize: '10px', marginBottom: '2px' }}>{log.message}</div>
                     {log.cardName && (
                       <div style={{ fontSize: '9px', opacity: 0.7, marginTop: '2px' }}>
-                        Carta: {log.cardName} {log.cardId && `(${log.cardId.slice(0, 8)}...)`}
+                        Card: {log.cardName} {log.cardId && `(${log.cardId.slice(0, 8)}...)`}
                       </div>
                     )}
                     {log.details && Object.keys(log.details).length > 0 && (
@@ -3784,25 +3695,23 @@ const Board = () => {
                 <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Status Geral</div>
                 <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                   <div>Status: <span style={{ color: currentStatus === 'connected' ? '#10b981' : currentStatus === 'waiting' ? '#f59e0b' : '#ef4444' }}>{currentStatus}</span></div>
-                  <div>É Host: <span style={{ color: isHost ? '#10b981' : '#94a3b8' }}>{isHost ? 'Sim' : 'Não'}</span></div>
+                  <div>Is Host: <span style={{ color: isHost ? '#10b981' : '#94a3b8' }}>{isHost ? 'Yes' : 'No'}</span></div>
                   <div>Room ID: <span style={{ opacity: 0.7 }}>{roomId || 'N/A'}</span></div>
                   <div>Player ID: <span style={{ opacity: 0.7 }}>{playerId.slice(0, 8)}...</span></div>
                 </div>
               </div>
 
-              {/* Peer Instance */}
+              {/* WebSocket */}
               <div style={{ padding: '8px', backgroundColor: 'rgba(255, 255, 255, 0.05)', borderRadius: '4px' }}>
-                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Peer Instance</div>
+                <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>WebSocket</div>
                 <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
-                  {peer ? (
+                  {socket ? (
                     <>
-                      <div>ID: <span style={{ opacity: 0.7 }}>{peer.id || 'N/A'}</span></div>
-                      <div>Open: <span style={{ color: peer.open ? '#10b981' : '#ef4444' }}>{peer.open ? 'Sim' : 'Não'}</span></div>
-                      <div>Destroyed: <span style={{ color: peer.destroyed ? '#ef4444' : '#10b981' }}>{peer.destroyed ? 'Sim' : 'Não'}</span></div>
-                      <div>Disconnected: <span style={{ color: peer.disconnected ? '#ef4444' : '#10b981' }}>{peer.disconnected ? 'Sim' : 'Não'}</span></div>
+                      <div>State: <span style={{ opacity: 0.7 }}>{socket.readyState}</span></div>
+                      <div>Open: <span style={{ color: socket.readyState === WebSocket.OPEN ? '#10b981' : '#ef4444' }}>{socket.readyState === WebSocket.OPEN ? 'Yes' : 'No'}</span></div>
                     </>
                   ) : (
-                    <div style={{ opacity: 0.5, fontStyle: 'italic' }}>Nenhum peer ativo</div>
+                    <div style={{ opacity: 0.5, fontStyle: 'italic' }}>Nenhum websocket ativo</div>
                   )}
                 </div>
               </div>
@@ -3813,8 +3722,7 @@ const Board = () => {
                   <div style={{ fontWeight: 'bold', marginBottom: '4px' }}>Host Connection</div>
                   <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '2px' }}>
                     <div>Peer: <span style={{ opacity: 0.7 }}>{hostConnection.peer || 'N/A'}</span></div>
-                    <div>Open: <span style={{ color: hostConnection.open ? '#10b981' : '#ef4444' }}>{hostConnection.open ? 'Sim' : 'Não'}</span></div>
-                    <div>Label: <span style={{ opacity: 0.7 }}>{hostConnection.label || 'N/A'}</span></div>
+                    <div>Open: <span style={{ color: hostConnection.open ? '#10b981' : '#ef4444' }}>{hostConnection.open ? 'Yes' : 'No'}</span></div>
                     <div>Metadata: <span style={{ opacity: 0.7 }}>{hostConnection.metadata ? JSON.stringify(hostConnection.metadata).slice(0, 50) + '...' : 'N/A'}</span></div>
                   </div>
                 </div>
@@ -3827,14 +3735,13 @@ const Board = () => {
                 </div>
                 <div style={{ fontSize: '10px', display: 'flex', flexDirection: 'column', gap: '4px' }}>
                   {Object.keys(connections).length === 0 ? (
-                    <div style={{ opacity: 0.5, fontStyle: 'italic' }}>Nenhuma conexão de cliente</div>
+                    <div style={{ opacity: 0.5, fontStyle: 'italic' }}>No client connections</div>
                   ) : (
                     Object.entries(connections).map(([peerId, conn]) => (
                       <div key={peerId} style={{ padding: '6px', backgroundColor: 'rgba(0, 0, 0, 0.3)', borderRadius: '4px', borderLeft: `3px solid ${conn.open ? '#10b981' : '#ef4444'}` }}>
                         <div style={{ fontWeight: 'bold', marginBottom: '2px' }}>Peer: {peerId.slice(0, 8)}...</div>
                         <div style={{ display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '9px', opacity: 0.8 }}>
-                          <div>Open: <span style={{ color: conn.open ? '#10b981' : '#ef4444' }}>{conn.open ? 'Sim' : 'Não'}</span></div>
-                          <div>Label: <span style={{ opacity: 0.7 }}>{conn.label || 'N/A'}</span></div>
+                          <div>Open: <span style={{ color: conn.open ? '#10b981' : '#ef4444' }}>{conn.open ? 'Yes' : 'No'}</span></div>
                           {conn.metadata && (
                             <div>Metadata: <span style={{ opacity: 0.7 }}>{JSON.stringify(conn.metadata).slice(0, 40) + '...'}</span></div>
                           )}
@@ -3912,7 +3819,7 @@ const Board = () => {
                             {log.details && (
                               <div style={{ opacity: 0.7, marginTop: '4px', display: 'flex', flexDirection: 'column', gap: '2px', fontSize: '7px' }}>
                                 {log.details.boardSize !== undefined && (
-                                  <div>Board: {String(log.details.boardSize)} cartas</div>
+                                  <div>Board: {String(log.details.boardSize)} cards</div>
                                 )}
                                 {(() => {
                                   const cardsByZone = log.details.cardsByZone;
@@ -3936,7 +3843,7 @@ const Board = () => {
                                 {(() => {
                                   const cardName = log.details.cardName;
                                   return cardName && typeof cardName === 'string' ? (
-                                    <div>Carta: {cardName}</div>
+                                    <div>Card: {cardName}</div>
                                   ) : null;
                                 })()}
                                 {(() => {
@@ -4020,7 +3927,7 @@ const Board = () => {
             </div>
             
             <div style={{ marginBottom: '8px' }}>
-              <div><strong>Posição:</strong></div>
+              <div><strong>Position:</strong></div>
               <div style={{ marginLeft: '8px' }}>
                 Screen: ({mousePosition.x}, {mousePosition.y})
               </div>
@@ -4031,14 +3938,14 @@ const Board = () => {
             
             {lastTouchedCard && (
               <div style={{ marginBottom: '8px', borderTop: '1px solid #555', paddingTop: '8px' }}>
-                <div><strong>📇 Última Carta Tocada:</strong></div>
+                <div><strong>📇 Last Touched Card:</strong></div>
                 <div style={{ marginLeft: '8px', marginTop: '4px' }}>
                   <div>ID: {lastTouchedCard.id}</div>
                   <div>Nome: {lastTouchedCard.name}</div>
                   <div>Zona: {lastTouchedCard.zone}</div>
                   <div>Owner: {lastTouchedCard.ownerId}</div>
-                  <div>Posição: ({Math.round(lastTouchedCard.position.x)}, {Math.round(lastTouchedCard.position.y)})</div>
-                  <div>Tapped: {lastTouchedCard.tapped ? 'Sim' : 'Não'}</div>
+                  <div>Position: ({Math.round(lastTouchedCard.position.x)}, {Math.round(lastTouchedCard.position.y)})</div>
+                  <div>Tapped: {lastTouchedCard.tapped ? 'Yes' : 'No'}</div>
                   {lastTouchedCard.handIndex !== undefined && (
                     <div>Hand Index: {lastTouchedCard.handIndex}</div>
                   )}
@@ -4053,34 +3960,34 @@ const Board = () => {
             <div style={{ marginBottom: '8px', borderTop: '1px solid #555', paddingTop: '8px' }}>
               <div><strong>🖱️ Estado de Drag:</strong></div>
               <div style={{ marginLeft: '8px', marginTop: '4px' }}>
-                <div>Board Drag Ativo: {isDragging ? '✅ Sim' : '❌ Não'}</div>
+                <div>Board Drag Active: {isDragging ? '✅ Yes' : '❌ No'}</div>
                 {dragStateRef.current && (
                   <>
                     <div style={{ marginTop: '4px', paddingLeft: '8px', borderLeft: '2px solid #555' }}>
                       <div><strong>Board Drag:</strong></div>
-                      <div>Carta ID: {dragStateRef.current.cardId}</div>
-                      <div>Moveu: {dragStateRef.current.hasMoved ? '✅ Sim' : '❌ Não'}</div>
+                      <div>Card ID: {dragStateRef.current.cardId}</div>
+                      <div>Moved: {dragStateRef.current.hasMoved ? '✅ Yes' : '❌ No'}</div>
                       <div>Offset: ({Math.round(dragStateRef.current.offsetX)}, {Math.round(dragStateRef.current.offsetY)})</div>
                       <div>Start: ({Math.round(dragStateRef.current.startX)}, {Math.round(dragStateRef.current.startY)})</div>
                     </div>
                   </>
                 )}
                 <div style={{ marginTop: '4px' }}>
-                  Veio da Hand: {dragStartedFromHandRef.current ? '✅ Sim' : '❌ Não'}
+                  Came from Hand: {dragStartedFromHandRef.current ? '✅ Yes' : '❌ No'}
                 </div>
                 <div>
-                  Hand Card Placed: {handCardPlacedRef.current ? '✅ Sim' : '❌ Não'}
+                  Hand Card Placed: {handCardPlacedRef.current ? '✅ Yes' : '❌ No'}
                 </div>
                 {handDragStateRef.current.draggingHandCard && (
                   <div style={{ marginTop: '4px', paddingLeft: '8px', borderLeft: '2px solid #555', backgroundColor: 'rgba(59, 130, 246, 0.1)' }}>
                     <div><strong>Hand Drag:</strong></div>
-                    <div>Carta ID: {handDragStateRef.current.draggingHandCard}</div>
-                    <div>Moveu: {handDragStateRef.current.handCardMoved ? '✅ Sim' : '❌ Não'}</div>
+                    <div>Card ID: {handDragStateRef.current.draggingHandCard}</div>
+                    <div>Moved: {handDragStateRef.current.handCardMoved ? '✅ Yes' : '❌ No'}</div>
                     {handDragStateRef.current.previewHandOrder !== null && (
                       <div>Preview Order: {handDragStateRef.current.previewHandOrder}</div>
                     )}
                     {handDragStateRef.current.dragPosition && (
-                      <div>Posição: ({Math.round(handDragStateRef.current.dragPosition.x)}, {Math.round(handDragStateRef.current.dragPosition.y)})</div>
+                      <div>Position: ({Math.round(handDragStateRef.current.dragPosition.x)}, {Math.round(handDragStateRef.current.dragPosition.y)})</div>
                     )}
                     {handDragStateRef.current.dragStartPosition && (
                       <div>Start: ({Math.round(handDragStateRef.current.dragStartPosition.x)}, {Math.round(handDragStateRef.current.dragStartPosition.y)})</div>
@@ -4089,15 +3996,15 @@ const Board = () => {
                 )}
                 {clickBlockTimeoutRef.current && (
                   <div style={{ marginTop: '4px', paddingLeft: '8px', borderLeft: '2px solid #555' }}>
-                    <div>Click Bloqueado: ✅ Sim</div>
-                    <div>Carta: {clickBlockTimeoutRef.current.cardId}</div>
+                    <div>Click Blocked: ✅ Sim</div>
+                    <div>Card: {clickBlockTimeoutRef.current.cardId}</div>
                   </div>
                 )}
                 {draggingLibrary && (
                   <div style={{ marginTop: '4px', paddingLeft: '8px', borderLeft: '2px solid #555' }}>
                     <div><strong>Library Drag:</strong></div>
                     <div>Player: {draggingLibrary.playerName}</div>
-                    <div>Moveu: {libraryMoved ? '✅ Sim' : '❌ Não'}</div>
+                    <div>Moved: {libraryMoved ? '✅ Yes' : '❌ No'}</div>
                   </div>
                 )}
               </div>
@@ -4106,17 +4013,17 @@ const Board = () => {
             <div style={{ marginBottom: '8px', borderTop: '1px solid #555', paddingTop: '8px' }}>
               <div><strong>⚔️ Battlefield:</strong></div>
               <div style={{ marginLeft: '8px', marginTop: '4px' }}>
-                <div>Total: {battlefieldCards.length} cartas</div>
+                <div>Total: {battlefieldCards.length} cards</div>
               </div>
             </div>
             
             <div style={{ borderTop: '1px solid #555', paddingTop: '8px' }}>
               <div><strong>🃏 Hand:</strong></div>
               <div style={{ marginLeft: '8px', marginTop: '4px' }}>
-                <div>Total: {handCards.length} cartas</div>
+                <div>Total: {handCards.length} cards</div>
                 {playerId && (
                   <div>
-                    Suas cartas: {handCards.filter(c => c.ownerId === playerName).length}
+                    Your cards: {handCards.filter(c => c.ownerId === playerName).length}
                   </div>
                 )}
               </div>
@@ -4144,6 +4051,31 @@ const Board = () => {
               data-context-menu
               onClick={(e) => e.stopPropagation()}
             >
+              <button
+                onClick={handleShowToOthers}
+                style={{
+                  width: '100%',
+                  padding: '8px 12px',
+                  textAlign: 'left',
+                  background: 'transparent',
+                  border: 'none',
+                  color: '#f8fafc',
+                  cursor: 'pointer',
+                  borderRadius: '4px',
+                  fontSize: '14px',
+                }}
+                onMouseEnter={(e) => {
+                  e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                }}
+                onMouseLeave={(e) => {
+                  e.currentTarget.style.backgroundColor = 'transparent';
+                }}
+              >
+                👁️ Show to other players
+              </button>
+
+              <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
+
               {canInteractWithCard(contextMenu.card.ownerId) && (
                 <>
                   {/* Tap/Untap - apenas para battlefield */}
@@ -4283,7 +4215,7 @@ const Board = () => {
                           e.currentTarget.style.backgroundColor = 'transparent';
                         }}
                       >
-                        <span>🌊 Cascade</span>
+                        <span>🌊 Reveal up to X CMC</span>
                         <span style={{ fontSize: '12px', opacity: 0.7 }}>▶</span>
                       </button>
                       
@@ -4326,7 +4258,7 @@ const Board = () => {
                               e.currentTarget.style.backgroundColor = 'transparent';
                             }}
                           >
-                            👁️ Mostrar cada carta
+                            👁️ Show each card
                           </button>
                           <button
                             onClick={() => handleCascade(false)}
@@ -4348,7 +4280,7 @@ const Board = () => {
                               e.currentTarget.style.backgroundColor = 'transparent';
                             }}
                           >
-                            ⚡ Executar tudo de uma vez
+                            ⚡ Run all at once
                           </button>
                         </div>
                       )}
@@ -4362,7 +4294,7 @@ const Board = () => {
                       <button
                         onClick={() => {
                           if (playerHandCards.length > 0) {
-                            addEventLog('MULLIGAN', `Mulligan: ${playerHandCards.length} cartas da mão para o library`, undefined, undefined, {
+                            addEventLog('MULLIGAN', `Mulligan: ${playerHandCards.length} cards from hand to the library`, undefined, undefined, {
                               playerId,
                               cardsCount: playerHandCards.length,
                             });
@@ -4656,7 +4588,7 @@ const Board = () => {
                             e.currentTarget.style.backgroundColor = 'transparent';
                           }}
                         >
-                          ⚰️ Cemitério
+                          ⚰️ Cemetery
                         </button>
                         {contextMenu.card.zone !== 'exile' && (
                           <button
@@ -4682,7 +4614,7 @@ const Board = () => {
                               e.currentTarget.style.backgroundColor = 'transparent';
                             }}
                           >
-                            🚫 Exílio
+                            🚫 Exile
                           </button>
                         )}
                       </div>
@@ -4692,7 +4624,7 @@ const Board = () => {
                   {/* Separador */}
                   <div style={{ height: '1px', backgroundColor: 'rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
                   
-                  {/* Remover */}
+                  {/* Remove */}
                   <button
                     onClick={() => handleContextMenuAction('remove')}
                     style={{
@@ -4713,7 +4645,7 @@ const Board = () => {
                       e.currentTarget.style.backgroundColor = 'transparent';
                     }}
                   >
-                    🗑️ Remover
+                    🗑️ Remove
                   </button>
                 </>
               )}

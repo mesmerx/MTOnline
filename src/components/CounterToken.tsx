@@ -9,7 +9,7 @@ interface CounterTokenProps {
   onRemove: (counterId: string) => void;
   onContextMenu?: (counter: Counter, event: React.MouseEvent) => void;
   boardRef?: React.RefObject<HTMLDivElement | null>;
-  viewMode?: 'unified' | 'individual' | 'separated';
+  viewMode?: 'individual' | 'separated';
   convertMouseToSeparatedCoordinates?: (mouseX: number, mouseY: number, playerId: string, rect: DOMRect) => { x: number; y: number } | null;
   convertMouseToUnifiedCoordinates?: (mouseX: number, mouseY: number, rect: DOMRect) => { x: number; y: number };
 }
@@ -22,7 +22,7 @@ const CounterToken: React.FC<CounterTokenProps> = ({
   onRemove,
   onContextMenu,
   boardRef,
-  viewMode = 'unified',
+  viewMode = 'individual',
   convertMouseToSeparatedCoordinates,
   convertMouseToUnifiedCoordinates,
 }) => {
@@ -362,7 +362,7 @@ const CounterToken: React.FC<CounterTokenProps> = ({
                   type="number"
                   value={inputValue}
                   onChange={(e) => setInputValue(e.target.value)}
-                  placeholder="Valor"
+                  placeholder="Value"
                   style={{
                     flex: 1,
                     padding: '4px 8px',

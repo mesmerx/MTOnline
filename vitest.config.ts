@@ -4,13 +4,12 @@ import react from '@vitejs/plugin-react';
 export default defineConfig({
   plugins: [react()],
   test: {
+    pool: 'threads',
     environment: 'jsdom',
     setupFiles: ['./vitest.setup.ts'],
     globals: true,
     coverage: {
       reporter: ['text', 'html'],
     },
-    include: ['src/**/*.test.ts', 'src/**/*.spec.ts'],
-    exclude: ['src/**/*.browser.test.ts'],
   },
 });

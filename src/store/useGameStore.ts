@@ -1,10 +1,69 @@
 import { create } from 'zustand';
-import Peer from 'peerjs';
-import type { DataConnection, PeerJSOption } from 'peerjs';
 import { randomId } from '../lib/id';
 import type { DeckEntry, SavedDeck } from '../lib/deck';
 import { loadDecks as loadLocalDecks, saveDeck as saveLocalDeck, deleteDeck as deleteLocalDeck } from '../lib/deck';
 import { debugLog } from '../lib/debug';
+
+type WsEnvelope<T = unknown> = {
+  type: string;
+  payload?: T;
+};
+
+class PseudoConnection {
+  public open = true;
+  public peer: string;
+  public metadata?: Record<string, unknown>;
+  private listeners = new Map<string, Array<(...args: any[]) => void>>();
+  private sendFn: (message: unknown) => void;
+
+  constructor(peer: string, sendFn: (message: unknown) => void, metadata?: Record<string, unknown>) {
+    this.peer = peer;
+    this.sendFn = sendFn;
+    this.metadata = metadata;
+  }
+
+  on(event: string, handler: (...args: any[]) => void) {
+    const handlers = this.listeners.get(event) ?? [];
+    handlers.push(handler);
+    this.listeners.set(event, handlers);
+    return this;
+  }
+
+  emit(event: string, ...args: any[]) {
+    this.listeners.get(event)?.forEach((handler) => handler(...args));
+  }
+
+  send(message: unknown) {
+    if (!this.open) return;
+    this.sendFn(message);
+  }
+
+  close() {
+    if (!this.open) return;
+    this.open = false;
+    this.emit('close');
+  }
+}
+
+const resolveWsUrl = (): string => {
+  const env = import.meta.env;
+  if (env.VITE_API_URL) {
+    return env.VITE_API_URL.replace(/^http/i, 'ws');
+  }
+  if (typeof window !== 'undefined') {
+    const { protocol, hostname, port, origin } = window.location;
+    const wsProtocol = protocol === 'https:' ? 'wss:' : 'ws:';
+    const resolvedHost = hostname === 'localhost' || hostname === '::1' ? '127.0.0.1' : hostname;
+    if (port === '5173' || port === '4173') {
+      return `${wsProtocol}//${resolvedHost}:3000`;
+    }
+    if (hostname !== resolvedHost) {
+      return `${wsProtocol}//${resolvedHost}${port ? `:${port}` : ''}`;
+    }
+    return origin.replace(/^http/i, 'ws');
+  }
+  return 'ws://localhost:3000';
+};
 
 export interface PlayerSummary {
   id: string;
@@ -100,288 +159,9 @@ type IncomingMessage =
 
 type RoomStatus = 'idle' | 'initializing' | 'waiting' | 'connected' | 'error';
 
-const deriveStunUrlFromTurn = (turnUrl: string): string | undefined => {
-  const match = turnUrl.match(/^(turns?):/i);
-  if (!match) return undefined;
-  const protocol = match[1]?.toLowerCase();
-  const rest = turnUrl.slice(match[0].length);
-  if (!protocol || !rest) return undefined;
-  return `${protocol === 'turns' ? 'stuns' : 'stun'}:${rest}`;
-};
-
-const buildCoturnServers = (turnUrl: string, username?: string, credential?: string): RTCIceServer[] => {
-  const servers: RTCIceServer[] = [];
-  const stunUrl = deriveStunUrlFromTurn(turnUrl);
-  if (stunUrl) {
-    servers.push({ urls: stunUrl });
-  }
-  
-  // Validar que username e credential estão presentes e não vazios antes de adicionar TURN
-  if (username && credential && username.trim() !== '' && credential.trim() !== '') {
-    servers.push({
-      urls: turnUrl,
-      username,
-      credential,
-    });
-  } else {
-    console.warn('[TURN] Ignorando servidor TURN sem credenciais válidas:', turnUrl);
-  }
-  
-  return servers;
-};
-
-// Cache para credenciais TURN da API
-let turnCredentialsCache: { username: string; credential: string; urls: string[]; expiresAt: number } | null = null;
-let turnCredentialsPromise: Promise<void> | null = null;
-let turnCredentialsInitialized = false;
-
-const fetchTurnCredentials = async (): Promise<{ username: string; credential: string; urls: string[] } | null> => {
-  const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
-  
-  try {
-    const startTime = performance.now();
-    console.log('[TURN] Buscando credenciais da API...');
-    const response = await fetch(`${API_URL}/api/turn-credentials`, {
-      credentials: 'include',
-    });
-    
-    if (!response.ok) {
-      throw new Error(`HTTP ${response.status}: ${response.statusText}`);
-    }
-    
-    const fetchTime = performance.now() - startTime;
-    const data = await response.json();
-    const totalTime = performance.now() - startTime;
-    console.log('[TURN] Credenciais recebidas da API:', {
-      username: data.username,
-      credential: data.credential,
-      urls: data.urls,
-      fetchTime: `${fetchTime.toFixed(2)}ms`,
-      totalTime: `${totalTime.toFixed(2)}ms`,
-    });
-    
-    // Cache válido por 50 minutos (menos que 1 hora para garantir validade)
-    const expiresAt = Date.now() + (50 * 60 * 1000);
-    turnCredentialsCache = {
-      username: data.username,
-      credential: data.credential,
-      urls: data.urls,
-      expiresAt,
-    };
-    
-    return {
-      username: data.username,
-      credential: data.credential,
-      urls: data.urls,
-    };
-  } catch (error) {
-    console.warn('[TURN] Falha ao buscar credenciais da API, usando fallback local:', error);
-    return null;
-  }
-};
-
-const getTurnCredentials = async (): Promise<{ username: string; credential: string; urls: string[] } | null> => {
-  // Verificar cache
-  if (turnCredentialsCache && turnCredentialsCache.expiresAt > Date.now()) {
-    console.log('[TURN] Usando credenciais do cache');
-    return {
-      username: turnCredentialsCache.username,
-      credential: turnCredentialsCache.credential,
-      urls: turnCredentialsCache.urls,
-    };
-  }
-  
-  // Se já há uma requisição em andamento, aguardar ela
-  if (turnCredentialsPromise) {
-    await turnCredentialsPromise;
-    if (turnCredentialsCache && turnCredentialsCache.expiresAt > Date.now()) {
-      return {
-        username: turnCredentialsCache.username,
-        credential: turnCredentialsCache.credential,
-        urls: turnCredentialsCache.urls,
-      };
-    }
-  }
-  
-  // Fazer nova requisição
-  turnCredentialsPromise = fetchTurnCredentials().then(() => {
-    turnCredentialsPromise = null;
-  });
-  await turnCredentialsPromise;
-  
-  if (turnCredentialsCache && turnCredentialsCache.expiresAt > Date.now()) {
-    return {
-      username: turnCredentialsCache.username,
-      credential: turnCredentialsCache.credential,
-      urls: turnCredentialsCache.urls,
-    };
-  }
-  
-  return null;
-};
-
-const parseIceServersFromEnv = (): RTCIceServer[] => {
-  const env = import.meta.env;
-  const internalIp = env.VITE_INTERNAL_IP;
-
-  // Começar com lista vazia - apenas servidores locais
-  let servers: RTCIceServer[] = [];
-
-  if (env.VITE_PEER_ICE_SERVERS) {
-    try {
-      const parsed = JSON.parse(env.VITE_PEER_ICE_SERVERS);
-      if (Array.isArray(parsed)) {
-        // Filtrar apenas servidores locais e adicionar aos padrões
-        const localServers = parsed.filter((server: RTCIceServer) => {
-          const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-          return urls.some((url: string) => 
-            url.includes('127.0.0.1') || 
-            url.includes('0.0.0.0') || 
-            url.includes('localhost') ||
-            (internalIp && url.includes(internalIp)) ||
-            url.includes('turn:127.0.0.1') ||
-            url.includes('turn:0.0.0.0') ||
-            (internalIp && url.includes(`turn:${internalIp}`)) ||
-            url.includes('stun:127.0.0.1') ||
-            url.includes('stun:0.0.0.0') ||
-            (internalIp && url.includes(`stun:${internalIp}`))
-          );
-        });
-        servers = [...servers, ...localServers];
-      }
-    } catch (error) {
-      console.warn('Failed to parse VITE_PEER_ICE_SERVERS', error);
-    }
-  }
-
-  const turnUrl = env.VITE_TURN_URL?.trim();
-  if (turnUrl && (
-    turnUrl.startsWith('turn:127.0.0.1') || 
-    turnUrl.startsWith('turn:0.0.0.0') || 
-    turnUrl.includes('localhost') ||
-    (internalIp && turnUrl.includes(internalIp))
-  )) {
-    servers = [...servers, ...buildCoturnServers(turnUrl, env.VITE_TURN_USERNAME, env.VITE_TURN_CREDENTIAL)];
-  }
-
-  // Adicionar servidores TURN externos usando credenciais da API (se disponíveis no cache)
-  if (turnCredentialsCache && turnCredentialsCache.expiresAt > Date.now()) {
-    const { username, credential, urls } = turnCredentialsCache;
-    console.log('[TURN] Adicionando servidores externos do cache:', { username, urls });
-    
-    if (urls && Array.isArray(urls)) {
-      urls.forEach((url) => {
-        if (url.startsWith('turn:') || url.startsWith('turns:')) {
-          // Só adicionar se username e credential estiverem presentes e não vazios
-          if (username && credential && username.trim() !== '' && credential.trim() !== '') {
-            servers.push({
-              urls: url,
-              username,
-              credential,
-            });
-          } else {
-            console.warn('[TURN] Ignorando servidor TURN sem credenciais válidas:', url);
-          }
-        } else if (url.startsWith('stun:') || url.startsWith('stuns:')) {
-          servers.push({ urls: url });
-        }
-      });
-    }
-  } else {
-    // Se não há cache, verificar se já há uma busca em andamento (pré-carregamento)
-    if (!turnCredentialsPromise) {
-      // Iniciar busca se não houver pré-carregamento em andamento
-      turnCredentialsPromise = getTurnCredentials().then(() => {
-        turnCredentialsPromise = null;
-        console.log('[TURN] Credenciais obtidas. Elas estarão disponíveis na próxima criação do peer.');
-      }).catch((error) => {
-        console.warn('[TURN] Erro ao buscar credenciais:', error);
-        turnCredentialsPromise = null;
-      });
-    } else {
-      console.log('[TURN] Busca de credenciais já em andamento (pré-carregamento). Peer criado sem servidores TURN externos por enquanto.');
-    }
-  }
-
-  return servers;
-};
-
-const resolvePeerEndpoint = (): Omit<PeerJSOption, 'config'> => {
-  const hasWindow = typeof window !== 'undefined';
-  const env = import.meta.env;
-  const defaultHost = hasWindow ? window.location.hostname : 'localhost';
-  const isHttps = hasWindow ? window.location.protocol === 'https:' : false;
-  const rawPort = env.VITE_PEER_PORT ?? (isHttps ? '443' : '9910');
-  const port = Number(rawPort);
-  const host = env.VITE_PEER_HOST || defaultHost;
-  const secure = typeof env.VITE_PEER_SECURE === 'string' ? env.VITE_PEER_SECURE === 'true' : isHttps;
-  // Remover aspas e espaços do path se vier do .env
-  // O path deve corresponder exatamente ao path configurado no servidor PeerJS
-  const rawPath = env.VITE_PEER_PATH || '/peerjs';
-  const path = typeof rawPath === 'string' ? rawPath.replace(/^["']|["']$/g, '').trim() : '/peerjs';
-
-  const result: Omit<PeerJSOption, 'config'> = {
-    host,
-    path,
-    secure,
-  };
-
-  if (Number.isFinite(port)) {
-    result.port = port;
-  }
-
-  console.log('[PeerJS] Configurando endpoint:', {
-    host,
-    port,
-    path,
-    secure,
-    env: {
-      VITE_PEER_HOST: env.VITE_PEER_HOST,
-      VITE_PEER_PORT: env.VITE_PEER_PORT,
-      VITE_PEER_PATH: env.VITE_PEER_PATH,
-      VITE_PEER_SECURE: env.VITE_PEER_SECURE,
-    },
-  });
-
-  return result;
-};
-
-interface TurnConfig {
-  mode: 'env' | 'custom';
-  url: string;
-  username: string;
-  credential: string;
-}
-
-const TURN_STORAGE_KEY = 'mtonline.turnConfig';
-const defaultTurnConfig = (): TurnConfig => ({
-  mode: 'env',
-  url: '',
-  username: '',
-  credential: '',
-});
-
-const loadTurnConfig = (): TurnConfig => {
-  if (typeof window === 'undefined') {
-    return defaultTurnConfig();
-  }
-  try {
-    const raw = window.localStorage.getItem(TURN_STORAGE_KEY);
-    if (!raw) return defaultTurnConfig();
-    const parsed = JSON.parse(raw) as TurnConfig;
-    return parsed && typeof parsed === 'object' ? { ...defaultTurnConfig(), ...parsed } : defaultTurnConfig();
-  } catch {
-    return defaultTurnConfig();
-  }
-};
-
-const persistTurnConfig = (config: TurnConfig) => {
-  if (typeof window === 'undefined') return;
-  window.localStorage.setItem(TURN_STORAGE_KEY, JSON.stringify(config));
-};
+const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 // Funções para event sourcing - salvar e carregar eventos
-const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 
 // Salvar um evento no backend
 const saveEvent = async (roomId: string, eventType: string, eventData: CardAction, playerId?: string, playerName?: string): Promise<void> => {
@@ -660,10 +440,9 @@ interface GameStore {
   exilePositions: Record<string, Point>;
   zoomedCard: string | null;
   savedDecks: SavedDeck[];
-  turnConfig: TurnConfig;
-  peer?: Peer;
-  connections: Record<string, DataConnection>;
-  hostConnection?: DataConnection;
+  socket?: WebSocket;
+  connections: Record<string, PseudoConnection>;
+  hostConnection?: PseudoConnection;
   user: User | null;
   setUser: (user: User | null) => void;
   checkAuth: () => Promise<void>;
@@ -672,9 +451,6 @@ interface GameStore {
   deleteDeckDefinition: (deckId: string) => Promise<void>;
   publicDecks: SavedDeck[];
   loadPublicDecks: () => Promise<void>;
-  setTurnMode: (mode: TurnConfig['mode']) => void;
-  updateTurnCredentials: (credentials: Partial<Omit<TurnConfig, 'mode'>>) => void;
-  resetTurnConfig: () => void;
   createRoom: (roomId: string, password: string) => void;
   joinRoom: (roomId: string, password: string) => void;
   leaveRoom: () => void;
@@ -1367,27 +1143,6 @@ const applyCounterAction = (counters: Counter[], action: CardAction): Counter[] 
 
 export const useGameStore = create<GameStore>((set, get) => {
   let peerEventLogger: ((type: 'SENT' | 'RECEIVED', direction: 'TO_HOST' | 'TO_PEERS' | 'FROM_HOST' | 'FROM_PEER', messageType: string, actionKind?: string, target?: string, details?: Record<string, unknown>) => void) | null = null;
-  const libraryPositionChannel =
-    typeof BroadcastChannel !== 'undefined' ? new BroadcastChannel('library-position') : null;
-  
-  if (libraryPositionChannel) {
-    libraryPositionChannel.onmessage = (event) => {
-      const message = event.data as { playerName?: string; position?: Point; senderId?: string } | undefined;
-      if (!message?.playerName || !message.position) return;
-      const current = get();
-      if (!current) return;
-      if (message.senderId && message.senderId === current.playerId) return;
-      if (current.playerName === message.playerName && draggingLibraries.has(current.playerName)) {
-        return;
-      }
-      set({
-        libraryPositions: {
-          ...current.libraryPositions,
-          [message.playerName]: message.position,
-        },
-      });
-    };
-  }
   
   // Função para carregar estado persistido do localStorage
   const loadPersistedState = () => {
@@ -1396,7 +1151,7 @@ export const useGameStore = create<GameStore>((set, get) => {
         roomId: '',
         roomPassword: '',
         playerName: '',
-        isHost: false,
+    isHost: false,
       };
     }
     
@@ -1416,8 +1171,8 @@ export const useGameStore = create<GameStore>((set, get) => {
     }
     
     return {
-      roomId: '',
-      roomPassword: '',
+    roomId: '',
+    roomPassword: '',
       playerName: '',
       isHost: false,
     };
@@ -1465,192 +1220,22 @@ export const useGameStore = create<GameStore>((set, get) => {
     libraryPositions: {} as Record<string, Point>,
     exilePositions: {} as Record<string, Point>,
     zoomedCard: null as string | null,
-    connections: {} as Record<string, DataConnection>,
-    hostConnection: undefined as DataConnection | undefined,
-    peer: undefined as Peer | undefined,
+    socket: undefined as WebSocket | undefined,
+    connections: {} as Record<string, PseudoConnection>,
+    hostConnection: undefined as PseudoConnection | undefined,
   });
 
-  const logIceServers = (servers: RTCIceServer[]): void => {
-    console.log('[ICE Servers] Configurando servidores TURN/STUN:');
-    servers.forEach((server, index) => {
-      const urls = Array.isArray(server.urls) ? server.urls : [server.urls];
-      urls.forEach((url) => {
-        const isStun = url.startsWith('stun:') || url.startsWith('stuns:');
-        const hasAuth = server.username && server.credential;
-        let authInfo: string;
-        if (isStun) {
-          authInfo = ' (STUN não requer autenticação)';
-        } else if (hasAuth) {
-          authInfo = ` (username: ${server.username})`;
-        } else {
-          authInfo = ' (sem autenticação)';
-        }
-        console.log(`  [${index + 1}] ${url}${authInfo}`);
-      });
-    });
+  const createSocket = () => {
+    const url = new URL('/ws', resolveWsUrl()).toString();
+    debugLog('connecting ws', url);
+    return new WebSocket(url);
   };
 
-  const buildIceServers = (): RTCIceServer[] => {
-    const state = get();
-    if (!state) {
-      const servers = parseIceServersFromEnv();
-      logIceServers(servers);
-      return servers;
-    }
-    const config = state.turnConfig;
-    if (config.mode === 'custom' && config.url && config.username && config.credential) {
-      debugLog('using custom turn server', config.url);
-      // Apenas servidores customizados (locais)
-      const customServers = buildCoturnServers(config.url, config.username, config.credential);
-      logIceServers(customServers);
-      return customServers;
-    }
-    const servers = parseIceServersFromEnv();
-    logIceServers(servers);
-    return servers;
+  const sendWs = (socket: WebSocket | undefined, message: WsEnvelope) => {
+    if (!socket || socket.readyState !== WebSocket.OPEN) return;
+    socket.send(JSON.stringify(message));
   };
-
-  const createPeerInstance = async (peerId?: string): Promise<Peer> => {
-    const createStartTime = performance.now();
-    
-    // Aguardar credenciais TURN se ainda não foram inicializadas
-    if (!turnCredentialsInitialized && turnCredentialsPromise) {
-      console.log('[TURN] Aguardando credenciais antes de criar peer...');
-      const waitStart = performance.now();
-      await turnCredentialsPromise;
-      console.log(`[TURN] Credenciais aguardadas em ${(performance.now() - waitStart).toFixed(2)}ms`);
-    }
-    
-    // Se ainda não há cache e não há promise em andamento, tentar buscar agora
-    if (!turnCredentialsCache && !turnCredentialsPromise) {
-      console.log('[TURN] Buscando credenciais antes de criar peer...');
-      const fetchStart = performance.now();
-      await getTurnCredentials();
-      console.log(`[TURN] Credenciais buscadas em ${(performance.now() - fetchStart).toFixed(2)}ms`);
-    }
-    
-    const iceServers = buildIceServers();
-    const options: PeerJSOption = {
-      ...resolvePeerEndpoint(),
-      debug: 0,
-      config: { iceServers },
-    };
-    debugLog('creating peer instance', peerId ?? 'anonymous', options);
-    
-    const peerCreationStart = performance.now();
-    const peer = peerId ? new Peer(peerId, options) : new Peer(options);
-    const peerCreationTime = performance.now() - peerCreationStart;
-    console.log(`[Peer] Instância criada em ${peerCreationTime.toFixed(2)}ms`);
-    console.log(`[Peer] Tempo total de criação: ${(performance.now() - createStartTime).toFixed(2)}ms`);
-    
-    // DEBUG ICE e Performance - Adicionar handlers para logar candidatos ICE e estatísticas
-    peer.on('open', () => {
-      // Acessar RTCPeerConnection interno do PeerJS
-      const pc = (peer as any)._pc as RTCPeerConnection | undefined;
-      if (pc) {
-        // Log de candidatos ICE
-        pc.onicecandidate = (event) => {
-          if (event.candidate) {
-            console.log('[ICE] Candidate:', event.candidate.candidate, {
-              type: event.candidate.type,
-              protocol: event.candidate.protocol,
-              address: event.candidate.address,
-              port: event.candidate.port,
-            });
-          } else {
-            console.log('[ICE] Gathering finished');
-          }
-        };
-
-        // Log de mudanças de estado ICE
-        pc.oniceconnectionstatechange = () => {
-          console.log('[ICE] Connection state:', pc.iceConnectionState);
-        };
-
-        pc.onicegatheringstatechange = () => {
-          console.log('[ICE] Gathering state:', pc.iceGatheringState);
-        };
-
-        // Coletar estatísticas de performance periodicamente
-        const statsInterval = setInterval(async () => {
-          try {
-            const stats = await pc.getStats();
-            const statsMap = new Map(stats);
-            
-            // Encontrar estatísticas de transporte (candidate-pair)
-            const candidatePairs: any[] = [];
-            const localCandidates: any[] = [];
-            const remoteCandidates: any[] = [];
-            
-            statsMap.forEach((report) => {
-              if (report.type === 'candidate-pair' && report.state === 'succeeded') {
-                candidatePairs.push({
-                  id: report.id,
-                  localCandidateId: report.localCandidateId,
-                  remoteCandidateId: report.remoteCandidateId,
-                  state: report.state,
-                  priority: report.priority,
-                  nominated: report.nominated,
-                  bytesReceived: report.bytesReceived,
-                  bytesSent: report.bytesSent,
-                  packetsReceived: report.packetsReceived,
-                  packetsSent: report.packetsSent,
-                  lastPacketReceivedTimestamp: report.lastPacketReceivedTimestamp,
-                  lastPacketSentTimestamp: report.lastPacketSentTimestamp,
-                  totalRoundTripTime: report.totalRoundTripTime,
-                  currentRoundTripTime: report.currentRoundTripTime,
-                });
-              } else if (report.type === 'local-candidate') {
-                localCandidates.push({
-                  id: report.id,
-                  candidateType: report.candidateType,
-                  ip: report.ip,
-                  port: report.port,
-                  protocol: report.protocol,
-                  priority: report.priority,
-                });
-              } else if (report.type === 'remote-candidate') {
-                remoteCandidates.push({
-                  id: report.id,
-                  candidateType: report.candidateType,
-                  ip: report.ip,
-                  port: report.port,
-                  protocol: report.protocol,
-                  priority: report.priority,
-                });
-              }
-            });
-
-            if (candidatePairs.length > 0) {
-              console.log('[RTC Stats] Active candidate pairs:', candidatePairs);
-              console.log('[RTC Stats] Local candidates:', localCandidates);
-              console.log('[RTC Stats] Remote candidates:', remoteCandidates);
-              
-              // Calcular latência média se disponível
-              const activePair = candidatePairs[0];
-              if (activePair.currentRoundTripTime) {
-                console.log(`[RTC Stats] RTT: ${(activePair.currentRoundTripTime * 1000).toFixed(2)}ms`);
-              }
-            }
-          } catch (error) {
-            console.warn('[RTC Stats] Erro ao coletar estatísticas:', error);
-          }
-        }, 5000); // Coletar a cada 5 segundos
-
-        // Limpar intervalo quando o peer for fechado
-        peer.on('close', () => {
-          clearInterval(statsInterval);
-        });
-
-        peer.on('error', () => {
-          clearInterval(statsInterval);
-        });
-      }
-    });
-    
-    return peer;
-  };
-
+  
   const boardBroadcastQueue: Array<{ message: IncomingMessage; excludePlayerId?: string }> = [];
   let boardBroadcastHandle: number | null = null;
   const enqueueBoardBroadcast = (message: IncomingMessage, excludePlayerId?: string) => {
@@ -1723,7 +1308,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     messagesToSend.forEach((message) => {
       openConnections.forEach((conn) => {
         try {
-          conn.send(message);
+        conn.send(message);
         } catch (error) {
           debugLog('failed to send message', error);
         }
@@ -1788,7 +1373,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (excludePlayerId && playerId === excludePlayerId) return;
       if (conn && conn.open) {
         try {
-          conn.send(message);
+        conn.send(message);
         } catch (error) {
           debugLog('failed to send message', error);
         }
@@ -2072,7 +1657,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     }
   };
 
-    const registerHostConn = (conn: DataConnection, playerId: string, playerName: string) => {
+  const registerHostConn = (conn: PseudoConnection, playerId: string, playerName: string) => {
     conn.on('data', (raw: unknown) => {
       // Ignorar mensagens que não são objetos ou não têm tipo válido
       if (!raw || typeof raw !== 'object') return;
@@ -2173,7 +1758,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       const existingPlayers = state.players.filter((player) => player.id !== playerId);
       
       return {
-        connections: { ...state.connections, [playerId]: conn },
+      connections: { ...state.connections, [playerId]: conn },
         players: [...existingPlayers, { id: playerId, name: playerName, life: 40 }],
       };
     });
@@ -2191,7 +1776,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           cemeteryPositions: currentState.cemeteryPositions,
           libraryPositions: currentState.libraryPositions,
         });
-        debugLog('host registered connection', playerId, playerName);
+    debugLog('host registered connection', playerId, playerName);
         // Sync contínuo vai cuidar da sincronização
       }
     };
@@ -2203,7 +1788,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     }
   };
 
-  const registerClientConn = (conn: DataConnection) => {
+  const registerClientConn = (conn: PseudoConnection) => {
     conn.on('data', (raw: unknown) => {
       // Ignorar mensagens que não são objetos ou não têm tipo válido
       if (!raw || typeof raw !== 'object') return;
@@ -2295,12 +1880,12 @@ export const useGameStore = create<GameStore>((set, get) => {
             }, [] as typeof message.players);
             
             const newState = {
-              board: message.board,
+            board: message.board,
               counters: message.counters || [],
               players: uniquePlayers,
               simulatedPlayers: message.simulatedPlayers || [],
               status: 'connected' as RoomStatus,
-              error: undefined,
+            error: undefined,
               // Atualizar playerId se necessário
               ...(newPlayerId !== currentPlayerId ? { playerId: newPlayerId } : {}),
             };
@@ -2342,22 +1927,11 @@ export const useGameStore = create<GameStore>((set, get) => {
         case 'BOARD_STATE':
           if (Array.isArray(message.board)) {
             const currentState = get();
-            // Preservar posições locais se não vierem no BOARD_STATE ou se estivermos arrastando
-            // Preservar libraryPositions do player atual se ele estiver arrastando seu próprio library
-            let preservedLibraryPositions = message.libraryPositions || currentState?.libraryPositions || {};
-            if (currentState && currentState.playerName && draggingLibraries.has(currentState.playerName)) {
-              // Se o player atual está arrastando seu próprio library, preservar a posição local
-              preservedLibraryPositions = {
-                ...preservedLibraryPositions,
-                [currentState.playerName]: currentState.libraryPositions[currentState.playerName] || preservedLibraryPositions[currentState.playerName],
-              };
-            }
-            
             set({ 
               board: message.board,
               counters: message.counters || currentState?.counters || [],
               cemeteryPositions: message.cemeteryPositions || currentState?.cemeteryPositions || {},
-              libraryPositions: preservedLibraryPositions,
+              libraryPositions: message.libraryPositions || currentState?.libraryPositions || {},
             });
             // Sync contínuo vai cuidar da sincronização
           }
@@ -2372,9 +1946,6 @@ export const useGameStore = create<GameStore>((set, get) => {
         case 'LIBRARY_POSITION': {
           const currentState = get();
           if (!currentState) break;
-          if (currentState.playerName === message.playerName && draggingLibraries.has(currentState.playerName)) {
-            break;
-          }
           set({
             libraryPositions: {
               ...currentState.libraryPositions,
@@ -2384,356 +1955,120 @@ export const useGameStore = create<GameStore>((set, get) => {
           break;
         }
         case 'HOST_TRANSFER':
-          if (message.newHostId === get().playerId && Array.isArray(message.board) && Array.isArray(message.players)) {
-            // Este jogador foi escolhido como novo host
-            debugLog('becoming new host');
-            const state = get();
-            destroyPeer();
-            
-            // Criar novo peer como host
-            createPeerInstance(state.roomId).then((peer) => {
-              const newState = {
-              ...baseState(),
-              peer,
-              isHost: true,
-              status: 'initializing' as RoomStatus,
-              roomId: state.roomId,
-              roomPassword: state.roomPassword,
-              board: message.board,
-              counters: message.counters || [],
-              // Garantir que todos os players usam ID como nome
-              players: message.players,
-              playerId: state.playerId,
-              playerName: state.playerName,
-            };
-            set(newState);
-
-            peer.on('open', () => {
-              set((s) => {
-                if (!s) return s;
-                const updatedState = {
-                  status: 'connected' as RoomStatus,
-                  players: s.players,
-                };
-                // Salvar estado quando conectar
-                savePersistedState(s.roomId, s.roomPassword, s.playerName || '', s.isHost);
-                return updatedState;
-              });
-            });
-
-            peer.on('connection', (conn) => {
-              const metadata = conn.metadata as { password?: string; name?: string; playerId?: string } | undefined;
-              debugLog('incoming connection', metadata);
-              if (!metadata || metadata.password !== get().roomPassword) {
-                conn.send({ type: 'ERROR', message: 'Incorrect password' });
-                conn.close();
-                return;
-              }
-              const remoteId = metadata.playerId || randomId();
-              const remoteName = metadata.name || 'Guest';
-              registerHostConn(conn, remoteId, remoteName);
-            });
-
-              peer.on('error', (error) => {
-                debugLog('peer host error', error);
-                set({ status: 'error', error: error.message });
-              });
-            }).catch((error) => {
-              console.error('[TURN] Erro ao criar peer:', error);
-              set({ status: 'error', error: error.message });
-            });
-          } else if (Array.isArray(message.board) && Array.isArray(message.players)) {
-            // Outro jogador se tornou host, atualizar estado e reconectar
-            debugLog('new host assigned, reconnecting');
-            const state = get();
-            destroyPeer();
-            
-            // Reconectar ao novo host
-            createPeerInstance().then((peer) => {
-              set({
-                ...baseState(),
-                peer,
-                status: 'initializing' as RoomStatus,
-                roomId: state.roomId,
-                roomPassword: state.roomPassword,
-                board: message.board,
-                players: message.players,
-                isHost: false,
-                playerId: state.playerId,
-                playerName: state.playerName,
-              });
-
-              peer.on('open', () => {
-                const connection = peer.connect(state.roomId, {
-                  metadata: {
-                    password: state.roomPassword,
-                    name: state.playerName || 'Player',
-                    playerId: state.playerId,
-                  },
-                });
-                debugLog('client dialing new host', state.roomId);
-
-                registerClientConn(connection);
-
-                connection.on('open', () => {
-                  debugLog('client connected to new host');
-                  set({ status: 'waiting', hostConnection: connection });
-                });
-              });
-
-              peer.on('error', (error) => {
-                debugLog('peer client error', error);
-                set({ status: 'error', error: error.message });
-              });
-            }).catch((error) => {
-              console.error('[TURN] Erro ao criar peer:', error);
-              set({ status: 'error', error: error.message });
-            });
-          }
           break;
         case 'ERROR':
           if (typeof message.message === 'string') {
-            set({ status: 'error', error: message.message });
+          set({ status: 'error', error: message.message });
           }
           break;
         default:
           break;
       }
     });
-
-    const disconnected = () => {
-      const state = get();
-      
-      // Se não há mais players na sala, apenas marcar como erro
-      if (state.players.length <= 1) {
-        set((s) => {
-          if (!s) return s;
-          return {
-            ...s,
-            status: s.status === 'idle' ? s.status : 'error',
-            error: s.error ?? 'Lost connection to host',
-            hostConnection: undefined,
-          };
-        });
-        return;
-      }
-      
-      // Se o host desconectou e ainda há outros players, o primeiro player restante deve se tornar host
-      // O host é sempre o primeiro player na lista, então removemos ele
-      const hostPlayer = state.players[0];
-      const remainingPlayers = state.players.filter((p) => p.id !== hostPlayer?.id);
-      
-      // Se este player não é o host que desconectou e ainda há players restantes
-      if (hostPlayer && hostPlayer.id !== state.playerId && remainingPlayers.length > 0) {
-        // Atualizar lista de players removendo o host
-        set((s) => ({
-          ...s,
-          players: remainingPlayers,
-        }));
-        
-        const stateAfter = get();
-        // Se este player é o primeiro na lista agora, tornar-se host
-        const firstPlayer = stateAfter.players[0];
-        if (firstPlayer && firstPlayer.id === stateAfter.playerId && !stateAfter.isHost) {
-          debugLog('host disconnected, becoming new host');
-          
-          // Destruir peer atual e criar um novo como host
-          // O novo host usa o roomId como peerId, permitindo que outros players se conectem
-          destroyPeer();
-          
-          // Aguardar um pouco para garantir que o peer antigo foi destruído
-          // O PeerJS pode levar um tempo para liberar o ID
-          const attemptCreateHostPeer = (retryCount = 0) => {
-            const maxRetries = 3;
-            const delay = retryCount * 1000; // 0s, 1s, 2s
-            
-            setTimeout(() => {
-              // Criar novo peer como host usando o roomId como peerId
-              // Isso permite que outros players se conectem usando o roomId
-              createPeerInstance(stateAfter.roomId).then((peer) => {
-                const newState = {
-                  ...baseState(),
-                  peer,
-                  isHost: true,
-                  status: 'initializing' as RoomStatus,
-                  roomId: stateAfter.roomId,
-                  roomPassword: stateAfter.roomPassword,
-                  board: stateAfter.board,
-                  counters: stateAfter.counters,
-                  players: stateAfter.players,
-                  cemeteryPositions: stateAfter.cemeteryPositions,
-                  libraryPositions: stateAfter.libraryPositions,
-                  playerId: stateAfter.playerId,
-                  playerName: stateAfter.playerName,
-                };
-                set(newState);
-
-                peer.on('open', () => {
-                  set((s) => {
-                    if (!s) return s;
-                    const updatedState = {
-                      status: 'connected' as RoomStatus,
-                      players: s.players,
-                    };
-                    return updatedState;
-                  });
-                  
-                  // Notificar outros players que este é o novo host
-                  // Eles devem tentar se conectar ao roomId (que é o peerId deste host)
-                  debugLog('new host peer opened, other players should connect to', stateAfter.roomId);
-                });
-
-                peer.on('connection', (conn) => {
-                  const metadata = conn.metadata as { password?: string; name?: string; playerId?: string } | undefined;
-                  debugLog('incoming connection from player', metadata);
-                  if (!metadata || metadata.password !== get().roomPassword) {
-                    conn.send({ type: 'ERROR', message: 'Incorrect password' });
-                    conn.close();
-                    return;
-                  }
-                  const remoteId = metadata.playerId || randomId();
-                  registerHostConn(conn, remoteId, metadata.name || 'Guest');
-                });
-
-                peer.on('error', (error: any) => {
-                  debugLog('peer host error', error);
-                  const errorMsg = error?.message || error?.toString() || '';
-                  const errorType = error?.type || '';
-                  
-                  // Se o erro for "ID taken", tentar novamente
-                  if (errorType === 'peer-unavailable' || 
-                      errorMsg.toLowerCase().includes('taken') || 
-                      errorMsg.toLowerCase().includes('unavailable') ||
-                      errorMsg.toLowerCase().includes('is taken')) {
-                    if (retryCount < maxRetries) {
-                      console.log(`[Store] Peer ID "${stateAfter.roomId}" is taken, retrying in ${(retryCount + 1) * 1000}ms... (attempt ${retryCount + 1}/${maxRetries})`);
-                      destroyPeer();
-                      attemptCreateHostPeer(retryCount + 1);
-                      return;
-                    } else {
-                      console.error(`[Store] Failed to create peer after ${maxRetries} retries. ID "${stateAfter.roomId}" is still taken.`);
-                    }
-                  }
-                  set({ status: 'error', error: errorMsg || 'Failed to create host peer' });
-                });
-              }).catch((error: any) => {
-                console.error('[TURN] Erro ao criar peer:', error);
-                const errorMsg = error?.message || error?.toString() || '';
-                const errorType = error?.type || '';
-                
-                // Se o erro for "ID taken", tentar novamente
-                if (errorType === 'peer-unavailable' || 
-                    errorMsg.toLowerCase().includes('taken') || 
-                    errorMsg.toLowerCase().includes('unavailable') ||
-                    errorMsg.toLowerCase().includes('is taken')) {
-                  if (retryCount < maxRetries) {
-                    console.log(`[Store] Peer ID "${stateAfter.roomId}" is taken, retrying in ${(retryCount + 1) * 1000}ms... (attempt ${retryCount + 1}/${maxRetries})`);
-                    destroyPeer();
-                    attemptCreateHostPeer(retryCount + 1);
-                    return;
-                  } else {
-                    console.error(`[Store] Failed to create peer after ${maxRetries} retries. ID "${stateAfter.roomId}" is still taken.`);
-                  }
-                }
-                set({ status: 'error', error: errorMsg || 'Failed to create host peer' });
-              });
-            }, delay);
-          };
-          
-          attemptCreateHostPeer();
-          return;
-        } else {
-          // Este player não é o novo host, tentar se reconectar ao novo host
-          // O novo host terá o roomId como peerId, então podemos nos conectar usando o roomId
-          debugLog('host disconnected, attempting to reconnect to new host via roomId');
-          
-          // Pequeno delay para dar tempo do novo host criar seu peer
-          setTimeout(() => {
-            const currentState = get();
-            if (!currentState.isHost && currentState.roomId) {
-              // Tentar se conectar ao roomId (que é o peerId do novo host)
-              const currentPeer = currentState.peer;
-              if (currentPeer) {
-                // Reutilizar o peer atual para conectar ao novo host
-                try {
-                  const connection = currentPeer.connect(currentState.roomId, {
-                    metadata: {
-                      password: currentState.roomPassword,
-                      name: currentState.playerName || 'Player',
-                      playerId: currentState.playerId,
-                    },
-                  });
-                  
-                  debugLog('reconnecting to new host', currentState.roomId);
-                  
-                  registerClientConn(connection);
-                  
-                  connection.on('open', () => {
-                    debugLog('reconnected to new host');
-                    set({ status: 'waiting', hostConnection: connection });
-                  });
-                  
-                  connection.on('error', (error) => {
-                    debugLog('failed to reconnect to new host', error);
-                    // Tentar novamente após um delay
-                    setTimeout(() => {
-                      const state = get();
-                      if (!state.isHost && state.roomId) {
-                        try {
-                          const retryConnection = state.peer?.connect(state.roomId, {
-                            metadata: {
-                              password: state.roomPassword,
-                              name: state.playerName || 'Player',
-                              playerId: state.playerId,
-                            },
-                          });
-                          if (retryConnection) {
-                            registerClientConn(retryConnection);
-                            retryConnection.on('open', () => {
-                              set({ status: 'waiting', hostConnection: retryConnection });
-                            });
-                          }
-                        } catch (err) {
-                          debugLog('retry connection failed', err);
-                        }
-                      }
-                    }, 1000);
-                  });
-                } catch (error) {
-                  debugLog('failed to create connection to new host', error);
-                }
-              }
-            }
-          }, 500);
-        }
-      }
-      
-      // Se não conseguiu se tornar host, marcar como erro
-      set((s) => {
-        if (!s) return s;
-        return {
-          ...s,
-          status: s.status === 'idle' ? s.status : 'error',
-          error: s.error ?? 'Lost connection to host',
-          hostConnection: undefined,
-        };
-      });
-    };
-
-    conn.on('close', disconnected);
-    conn.on('error', (error) => {
-      debugLog('client connection error', error);
-      disconnected();
-    });
   };
 
   const destroyPeer = () => {
-    debugLog('destroying peer and connections');
+    debugLog('destroying socket and connections');
     const state = get();
     if (!state) return;
     state.hostConnection?.close();
     Object.values(state.connections).forEach((conn) => conn.close());
-    state.peer?.destroy();
+    state.socket?.close();
+  };
+
+  const handleWsMessage = (socket: WebSocket, raw: MessageEvent) => {
+    let message: WsEnvelope | null = null;
+    try {
+      message = JSON.parse(raw.data as string);
+    } catch (error) {
+      debugLog('failed to parse ws message', error);
+      return;
+    }
+    if (!message || typeof message.type !== 'string') return;
+
+    const state = get();
+    if (!state) return;
+
+    switch (message.type) {
+      case 'room:created': {
+        const players = state.players.length
+          ? state.players
+          : [
+              {
+                id: state.playerId,
+                name: state.playerName || 'Host',
+                life: 20,
+                commanderDamage: {},
+              },
+            ];
+        set({ status: 'connected', players });
+        break;
+      }
+      case 'room:joined':
+        set({ status: 'waiting' });
+        break;
+      case 'room:error': {
+        const errorMessage = (message.payload as any)?.message || 'Room error';
+        set({ status: 'error', error: errorMessage });
+        break;
+      }
+      case 'room:closed':
+        set({ status: 'error', error: 'Room closed by host' });
+        break;
+      case 'room:client_joined': {
+        if (!state.isHost) break;
+        const payload = message.payload as any;
+        if (!payload?.playerId || !payload?.socketId) break;
+        const conn = new PseudoConnection(
+          payload.socketId,
+          (msg) =>
+            sendWs(socket, {
+              type: 'room:host_message',
+              payload: { roomId: state.roomId, targetSocketId: payload.socketId, message: msg },
+            }),
+          { socketId: payload.socketId },
+        );
+        registerHostConn(conn, payload.playerId, payload.playerName || 'Guest');
+        break;
+      }
+      case 'room:client_left': {
+        if (!state.isHost) break;
+        const payload = message.payload as any;
+        const connection = payload?.playerId ? state.connections[payload.playerId] : undefined;
+        connection?.close();
+        break;
+      }
+      case 'room:client_message': {
+        if (!state.isHost) break;
+        const payload = message.payload as any;
+        if (!payload?.playerId) break;
+        const connection = state.connections[payload.playerId];
+        const forwarded = payload?.message ?? payload;
+        connection?.emit('data', forwarded);
+        break;
+      }
+      case 'room:host_message': {
+        if (state.isHost) break;
+        const payload = message.payload as any;
+        const forwarded = payload?.message ?? payload;
+        state.hostConnection?.emit('data', forwarded);
+        break;
+      }
+      default:
+        break;
+    }
+  };
+
+  const attachSocketHandlers = (socket: WebSocket) => {
+    socket.onmessage = (event) => handleWsMessage(socket, event);
+    socket.onerror = () => {
+      set({ status: 'error', error: 'WebSocket error' });
+    };
+    socket.onclose = () => {
+      const current = get();
+      if (!current || current.status === 'idle') return;
+      set({ status: 'error', error: 'WebSocket closed' });
+    };
   };
 
   const requestAction = (action: CardAction, skipEventSave = false) => {
@@ -2747,10 +2082,10 @@ export const useGameStore = create<GameStore>((set, get) => {
     if (state.hostConnection && state.hostConnection.open) {
       try {
         debugLog('request action via host', action.kind, skipEventSave ? '(skipEventSave)' : '');
-        state.hostConnection.send({
-          type: 'REQUEST_ACTION',
-          action,
-          actorId: state.playerId,
+      state.hostConnection.send({
+        type: 'REQUEST_ACTION',
+        action,
+        actorId: state.playerId,
           skipEventSave,
         });
         
@@ -2783,7 +2118,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           
           peerEventLogger('SENT', 'TO_HOST', 'REQUEST_ACTION', action.kind, state.hostConnection.peer, details);
         }
-        return;
+      return;
       } catch (error) {
         debugLog('failed to send action', error);
       }
@@ -2806,7 +2141,7 @@ export const useGameStore = create<GameStore>((set, get) => {
 
     set({ error: 'You must join a room before interacting with the board.' });
   };
-  
+
   // Sistema unificado de animação baseado em requestAnimationFrame
   // Funciona tanto para sender (quem arrasta) quanto para receiver (quem recebe BOARD_PATCH)
   type PendingMove = { position: Point; lastPersist: number; lastSent: number };
@@ -2814,10 +2149,7 @@ export const useGameStore = create<GameStore>((set, get) => {
   
   const pendingMoveActions = new Map<string, PendingMove>();
   const pendingBoardPatches = new Map<string, PendingPatch>(); // Para receiver
-  const draggingLibraries = new Set<string>(); // Rastrear libraries sendo arrastadas (playerName)
   let animationFrameHandle: number | null = null;
-  let movePersistHandle: number | null = null;
-  const MOVE_PERSIST_INTERVAL = 1000;
   const ANIMATION_FPS = 30;
   const ANIMATION_INTERVAL = 1000 / ANIMATION_FPS; // ~33ms
   let lastAnimationTime = 0;
@@ -2873,32 +2205,10 @@ export const useGameStore = create<GameStore>((set, get) => {
       }, 16) as unknown as number;
     }
   };
-  const stopMovePersistInterval = () => {
-    if (movePersistHandle !== null) {
-      clearInterval(movePersistHandle);
-      movePersistHandle = null;
-    }
-  };
-  const ensureMovePersistInterval = () => {
-    if (movePersistHandle !== null) return;
-    if (pendingMoveActions.size === 0) return;
-    movePersistHandle = setInterval(() => {
-      const now = Date.now();
-      pendingMoveActions.forEach((entry, cardId) => {
-        if (now - entry.lastPersist >= MOVE_PERSIST_INTERVAL) {
-          entry.lastPersist = now;
-          requestAction({ kind: 'move', id: cardId, position: entry.position });
-        }
-      });
-      if (pendingMoveActions.size === 0) {
-        stopMovePersistInterval();
-      }
-    }, MOVE_PERSIST_INTERVAL);
-  };
   const applyLocalMove = (cardId: string, position: Point) => {
     set((state) => {
       if (!state) return state;
-      return {
+  return {
         ...state,
         board: state.board.map((card) =>
           card.id === cardId ? { ...card, position } : card
@@ -2907,24 +2217,6 @@ export const useGameStore = create<GameStore>((set, get) => {
     });
   };
 
-  const queueMoveAction = (cardId: string, position: Point) => {
-    // Atualizar visual localmente imediatamente (feedback visual)
-    applyLocalMove(cardId, position);
-    
-    // Guardar apenas a última posição (colapsar N eventos em 1 estado final)
-    const existing = pendingMoveActions.get(cardId);
-    if (existing) {
-      // Atualizar apenas a posição, mantendo lastPersist e lastSent
-      existing.position = position;
-    } else {
-      pendingMoveActions.set(cardId, { position, lastPersist: 0, lastSent: 0 });
-      ensureMovePersistInterval();
-    }
-    
-    // Agendar processamento (será throttled para 30fps via requestAnimationFrame)
-    scheduleAnimationFrame();
-  };
-  
   // Função para receiver: enfileirar patches recebidos para processamento via requestAnimationFrame
   const queueBoardPatch = (cards: Array<{ id: string; position: Point }>) => {
     const state = get();
@@ -3007,19 +2299,8 @@ export const useGameStore = create<GameStore>((set, get) => {
   const commitMoveAction = (cardId: string | null, position?: Point) => {
     const state = get();
     if (!state) return;
-    if (cardId === null) {
-      pendingMoveActions.clear();
-      stopMovePersistInterval();
-      return;
-    }
-    const entry = pendingMoveActions.get(cardId);
-    const finalPosition = position ?? entry?.position;
-    pendingMoveActions.delete(cardId);
-    if (pendingMoveActions.size === 0) {
-      stopMovePersistInterval();
-    }
-    if (!finalPosition) return;
-    requestAction({ kind: 'move', id: cardId, position: finalPosition });
+    if (!cardId || !position) return;
+    requestAction({ kind: 'move', id: cardId, position });
   };
 
   // Estado inicial - não carregar mais de session
@@ -3035,7 +2316,6 @@ export const useGameStore = create<GameStore>((set, get) => {
     },
     ...baseState(),
     savedDecks: loadLocalDecks(),
-    turnConfig: loadTurnConfig(),
     user: null,
     publicDecks: [],
     setUser: (user: User | null) => {
@@ -3175,274 +2455,103 @@ export const useGameStore = create<GameStore>((set, get) => {
         console.error('Failed to load public decks:', error);
       }
     },
-    setTurnMode: (mode: TurnConfig['mode']) => {
-      set((state) => {
-        const next = { ...state.turnConfig, mode };
-        persistTurnConfig(next);
-        return { turnConfig: next };
-      });
-    },
-    updateTurnCredentials: (credentials: Partial<Omit<TurnConfig, 'mode'>>) => {
-      set((state) => {
-        const next = { ...state.turnConfig, ...credentials };
-        persistTurnConfig(next);
-        return { turnConfig: next };
-      });
-    },
-    resetTurnConfig: () => {
-      const config = defaultTurnConfig();
-      persistTurnConfig(config);
-      set({ turnConfig: config });
-    },
     createRoom: async (roomId: string, password: string) => {
       destroyPeer();
       const trimmedId = roomId?.trim() || `room-${randomId()}`;
-      
-      // Carregar estado do banco de dados
-      const savedState = await loadRoomState(trimmedId);
-      
-      createPeerInstance(trimmedId).then((peer) => {
-        debugLog('creating room', trimmedId);
-
       const currentState = get();
-      const newState = {
+      const savedState = await loadRoomState(trimmedId);
+      const socket = createSocket();
+
+      set({
         ...baseState(),
-        peer,
+        socket,
         isHost: true,
         status: 'initializing' as RoomStatus,
         roomId: trimmedId,
         roomPassword: password,
         playerId: currentState.playerId,
         playerName: currentState.playerName || '',
+        board: savedState?.board || [],
+        counters: savedState?.counters || [],
         players: savedState?.players || [],
+        simulatedPlayers: savedState?.simulatedPlayers || [],
+        cemeteryPositions: savedState?.cemeteryPositions || {},
+        libraryPositions: savedState?.libraryPositions || {},
+        exilePositions: savedState?.exilePositions || {},
+      });
+
+      savePersistedState(trimmedId, password, currentState.playerName || '', true);
+      attachSocketHandlers(socket);
+      socket.onopen = () => {
+        sendWs(socket, {
+          type: 'room:create',
+          payload: {
+            roomId: trimmedId,
+            password,
+            playerId: currentState.playerId,
+            playerName: currentState.playerName || 'Host',
+          },
+        });
+      };
+    },
+    joinRoom: async (roomId: string, password: string) => {
+      destroyPeer();
+      const trimmedId = roomId?.trim();
+      const currentState = get();
+      const savedState = await loadRoomState(trimmedId);
+      const socket = createSocket();
+
+      set({
+        ...baseState(),
+        socket,
+        status: 'initializing' as RoomStatus,
+        roomId: trimmedId,
+        roomPassword: password,
+        isHost: false,
+        playerId: currentState.playerId,
+        playerName: currentState.playerName || '',
         board: savedState?.board || [],
         counters: savedState?.counters || [],
         cemeteryPositions: savedState?.cemeteryPositions || {},
         libraryPositions: savedState?.libraryPositions || {},
+        exilePositions: savedState?.exilePositions || {},
+      });
+
+      savePersistedState(trimmedId, password, currentState.playerName || '', false);
+
+      const hostConnection = new PseudoConnection('host', (message) => {
+        sendWs(socket, {
+          type: 'room:client_message',
+          payload: { roomId: trimmedId, message },
+        });
+      });
+      registerClientConn(hostConnection);
+      set({ hostConnection });
+
+      attachSocketHandlers(socket);
+      socket.onopen = () => {
+        sendWs(socket, {
+          type: 'room:join',
+          payload: {
+            roomId: trimmedId,
+            password,
+            playerId: currentState.playerId,
+            playerName: currentState.playerName || 'Player',
+          },
+        });
       };
-      set(newState);
-      savePersistedState(trimmedId, password, currentState.playerName || '', true);
-
-      peer.on('open', () => {
-        set((state) => {
-          if (!state) return state;
-          const newState = {
-            status: 'connected' as RoomStatus,
-            players: state.players.length > 0 
-              ? state.players 
-              : [{ id: state.playerId, name: state.playerName || state.playerId, life: 40 }],
-          };
-          // Salvar estado quando conectar
-          savePersistedState(state.roomId, state.roomPassword, state.playerName || '', state.isHost);
-          return newState;
-        });
-      });
-
-      peer.on('connection', (conn) => {
-        const metadata = conn.metadata as { password?: string; name?: string; playerId?: string } | undefined;
-        debugLog('incoming connection', metadata);
-        if (!metadata || metadata.password !== get().roomPassword) {
-          conn.send({ type: 'ERROR', message: 'Incorrect password' });
-          conn.close();
-          return;
-        }
-        const remoteId = metadata.playerId || randomId();
-        registerHostConn(conn, remoteId, metadata.name || 'Guest');
-      });
-
-        peer.on('error', (error) => {
-          debugLog('peer host error', error);
-          set({ status: 'error', error: error.message });
-        });
-      }).catch((error) => {
-        console.error('[TURN] Erro ao criar peer:', error);
-        set({ status: 'error', error: error.message });
-      });
-    },
-    joinRoom: async (roomId: string, password: string) => {
-      destroyPeer();
-      
-      // Carregar estado do banco de dados
-      const savedState = await loadRoomState(roomId);
-      
-      createPeerInstance().then((peer) => {
-        debugLog('joining room', roomId);
-
-        const currentState = get();
-        const newState = {
-          ...baseState(),
-          peer,
-          status: 'initializing' as RoomStatus,
-          roomId,
-          roomPassword: password,
-          isHost: false,
-          playerId: currentState.playerId,
-          playerName: currentState.playerName || '',
-          board: savedState?.board || [],
-          counters: savedState?.counters || [],
-          cemeteryPositions: savedState?.cemeteryPositions || {},
-          libraryPositions: savedState?.libraryPositions || {},
-        };
-        set(newState);
-        savePersistedState(roomId, password, currentState.playerName || '', false);
-
-        peer.on('open', () => {
-          const connection = peer.connect(roomId, {
-            metadata: {
-              password,
-              name: get().playerName || 'Player',
-              playerId: get().playerId,
-            },
-          });
-          debugLog('client dialing host', roomId);
-
-          // Registrar handlers antes de definir hostConnection
-          registerClientConn(connection);
-
-          connection.on('open', () => {
-            debugLog('client connected to host');
-            const currentState = get();
-            set({ status: 'waiting', hostConnection: connection });
-            // Salvar estado quando conectar
-            if (currentState) {
-              savePersistedState(currentState.roomId, currentState.roomPassword, currentState.playerName || '', false);
-            }
-          });
-        });
-
-        peer.on('error', (error) => {
-          debugLog('peer client error', error);
-          set({ status: 'error', error: error.message });
-        });
-      }).catch((error) => {
-        console.error('[TURN] Erro ao criar peer:', error);
-        set({ status: 'error', error: error.message });
-      });
     },
     leaveRoom: () => {
-      const state = get();
-      
-      // Se for host e houver outros jogadores, transferir host antes de sair
-      if (state.isHost && state.players.length > 1) {
-        // Encontrar o primeiro jogador que não é o host atual
-        const newHost = state.players.find((p) => p.id !== state.playerId);
-        if (newHost) {
-          debugLog('transferring host to', newHost.id);
-          // Enviar mensagem de transferência para todos os clientes
-          Object.values(state.connections).forEach((conn) => {
-            if (conn && conn.open) {
-              try {
-                conn.send({
-                  type: 'HOST_TRANSFER',
-                  newHostId: newHost.id,
-                  board: state.board,
-                  counters: state.counters,
-                  players: state.players.filter((p) => p.id !== state.playerId),
-                });
-              } catch (error) {
-                debugLog('failed to send host transfer', error);
-              }
-            }
-          });
-          // Pequeno delay para garantir que as mensagens foram enviadas
-          setTimeout(() => {
-            destroyPeer();
-            set((s) => {
-              if (!s) return s;
-              const newState = {
-                ...baseState(),
-                playerId: s.playerId,
-                playerName: s.playerName,
-                savedDecks: s.savedDecks,
-              };
-              // Limpar estado persistido ao sair da sala
-              clearPersistedState();
-              // Sync contínuo já foi parado acima
-              return newState;
-            });
-          }, 100);
-          return;
-        }
-      }
-      
-      // Se for cliente e o host desconectar, verificar se deve se tornar host
-      if (!state.isHost && state.hostConnection) {
-        // A desconexão será detectada pelo registerClientConn
-        // Se o primeiro jogador na lista for este jogador, ele se tornará host
-        const firstPlayer = state.players[0];
-        if (firstPlayer && firstPlayer.id === state.playerId && state.players.length > 1) {
-          debugLog('host disconnected, becoming new host');
-          destroyPeer();
-          
-          // Criar novo peer como host
-          createPeerInstance(state.roomId).then((peer) => {
-            const newState = {
-              ...baseState(),
-              peer,
-              isHost: true,
-              status: 'initializing' as RoomStatus,
-              roomId: state.roomId,
-              roomPassword: state.roomPassword,
-              board: state.board,
-              players: state.players,
-              playerId: state.playerId,
-              playerName: state.playerName,
-            };
-            set(newState);
-
-            peer.on('open', () => {
-              set((s) => {
-                if (!s) return s;
-                const updatedState = {
-                  status: 'connected' as RoomStatus,
-                  players: s.players,
-                };
-                // Salvar estado quando conectar
-                savePersistedState(s.roomId, s.roomPassword, s.playerName || '', s.isHost);
-                return updatedState;
-              });
-            });
-
-            peer.on('connection', (conn) => {
-              const metadata = conn.metadata as { password?: string; name?: string; playerId?: string } | undefined;
-              debugLog('incoming connection', metadata);
-              if (!metadata || metadata.password !== get().roomPassword) {
-                conn.send({ type: 'ERROR', message: 'Incorrect password' });
-                conn.close();
-                return;
-              }
-              const remoteId = metadata.playerId || randomId();
-              const remoteName = metadata.name || 'Guest';
-              registerHostConn(conn, remoteId, remoteName);
-            });
-
-            peer.on('error', (error) => {
-              debugLog('peer host error', error);
-              set({ status: 'error', error: error.message });
-            });
-          }).catch((error) => {
-            console.error('[TURN] Erro ao criar peer:', error);
-            set({ status: 'error', error: error.message });
-          });
-          return;
-        }
-      }
-      
       destroyPeer();
       set((s) => {
         if (!s) return s;
         const newState = {
-          ...baseState(),
+        ...baseState(),
           playerId: s.playerId,
           playerName: s.playerName,
           savedDecks: s.savedDecks,
         };
-        // Limpar estado persistido ao sair da sala
         clearPersistedState();
-        // Limpar sessão ao sair da sala
-        if (typeof window !== 'undefined') {
-          // Sync contínuo já foi parado acima
-        }
         return newState;
       });
     },
@@ -3520,61 +2629,17 @@ export const useGameStore = create<GameStore>((set, get) => {
         commitMoveAction(cardId, position);
         return;
       }
-      queueMoveAction(cardId, position);
-      if (state.isHost) {
-        requestAction({ kind: 'move', id: cardId, position }, true);
-      }
+      applyLocalMove(cardId, position);
+      requestAction({ kind: 'move', id: cardId, position }, true);
     },
     moveLibrary: (playerName: string, _relativePosition: Point, absolutePosition: Point, skipEventSave = false) => {
       const state = get();
       if (!state) return;
       
-      // Se for host, aplicar ação diretamente (sem requestAction)
-      // O handleHostAction já atualiza o estado e faz broadcast para os peers
       if (state.isHost) {
-        // Marcar como arrastando se skipEventSave (durante drag)
-        if (skipEventSave) {
-          draggingLibraries.add(playerName);
-        } else {
-          draggingLibraries.delete(playerName);
-        }
         handleHostAction({ kind: 'moveLibrary', playerName, position: absolutePosition }, skipEventSave);
       } else {
-        // Se for cliente, atualizar localmente primeiro para feedback imediato
-        // Marcar como arrastando se skipEventSave (durante drag)
-        if (skipEventSave) {
-          draggingLibraries.add(playerName);
-        } else {
-          draggingLibraries.delete(playerName);
-        }
-        
-        // Evitar atualizar o store durante o drag no cliente para reduzir re-renders
-        // A UI local já é atualizada via estado do Board
-        if (!skipEventSave) {
-          set((s) => {
-            if (!s) return s;
-            return {
-              ...s,
-              libraryPositions: {
-                ...s.libraryPositions,
-                [playerName]: absolutePosition,
-              },
-            };
-          });
-        }
-        
-        // Sempre enviar para o host, mesmo durante drag
-        // O host fará broadcast para os outros players, mas não salvará no banco se skipEventSave = true
         requestAction({ kind: 'moveLibrary', playerName, position: absolutePosition }, skipEventSave);
-      }
-      
-      // Enviar update local ultra-rápido para peers no mesmo browser/origin
-      if (libraryPositionChannel) {
-        libraryPositionChannel.postMessage({
-          playerName,
-          position: absolutePosition,
-          senderId: state.playerId,
-        });
       }
     },
     moveCemetery: (playerName: string, position: Point, skipEventSave = false) => {
@@ -3745,9 +2810,3 @@ export const useGameStore = create<GameStore>((set, get) => {
   
   return initialState;
 });
-
-// Subscribe para salvar sessão automaticamente quando o estado mudar
-// Usar setTimeout para garantir que o store está totalmente inicializado
-// Usar debounce para evitar loops infinitos
-	if (typeof window !== 'undefined') {
-	}

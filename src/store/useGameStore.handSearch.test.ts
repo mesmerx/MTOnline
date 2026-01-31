@@ -1,67 +1,32 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const peerControl = vi.hoisted(() => ({
-  peers: [] as any[],
-  lastConnection: null as null | { targetId: string; options: any; connection: any },
-}));
-
-vi.mock('peerjs', () => {
-  class TinyEmitter {
-    private listeners = new Map<string, ((...args: any[]) => void)[]>();
-
-    on(event: string, handler: (...args: any[]) => void) {
-      const handlers = this.listeners.get(event) ?? [];
-      handlers.push(handler);
-      this.listeners.set(event, handlers);
-      return this;
-    }
-
-    emit(event: string, ...args: any[]) {
-      this.listeners.get(event)?.forEach((handler) => handler(...args));
-    }
-  }
-
-  class MockDataConnection extends TinyEmitter {
-    public open = true;
-    public metadata: any;
-
-    constructor(public peer: string, public options?: any) {
-      super();
-      this.metadata = options?.metadata;
-    }
-
-    send = vi.fn();
-
-    close = vi.fn(() => {
-      this.open = false;
-      this.emit('close');
-    });
-  }
-
-  class MockPeer extends TinyEmitter {
-    public id?: string;
-
-    constructor(idOrOptions?: any, _options?: any) {
-      super();
-      if (typeof idOrOptions === 'string') {
-        this.id = idOrOptions;
-      }
-      peerControl.peers.push(this);
-    }
-
-    connect(targetId: string, options?: any) {
-      const connection = new MockDataConnection(targetId, options);
-      peerControl.lastConnection = { targetId, options, connection };
-      return connection;
-    }
-
-    destroy() {
-      this.emit('close');
-    }
-  }
-
-  return { default: MockPeer };
-});
+const wsControl = (globalThis as any).__WS_CONTROL__;
+const openRoomAsHost = async (store: { roomId: string; playerId: string; playerName: string }, roomId: string) => {
+  wsControl.openLast();
+  wsControl.receiveLast({
+    type: 'room:created',
+    payload: {
+      roomId,
+      playerId: store.playerId,
+      playerName: store.playerName || 'Host',
+      socketId: 'socket-host',
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
+const openRoomAsClient = async (store: { roomId: string; playerId: string; playerName: string }, roomId: string) => {
+  wsControl.openLast();
+  wsControl.receiveLast({
+    type: 'room:joined',
+    payload: {
+      roomId,
+      playerId: store.playerId,
+      playerName: store.playerName || 'Player',
+      socketId: 'socket-client',
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
 // Mock fetch para evitar chamadas reais à API
 global.fetch = vi.fn();
@@ -70,9 +35,8 @@ import { useGameStore } from './useGameStore';
 
 describe('Hand search functionality', () => {
   beforeEach(() => {
-    peerControl.peers.length = 0;
-    peerControl.lastConnection = null;
-    vi.clearAllMocks();
+    wsControl.reset();
+            vi.clearAllMocks();
     useGameStore.getState().leaveRoom();
     useGameStore.getState().setPlayerName('');
     (global.fetch as any).mockResolvedValue({
@@ -89,9 +53,8 @@ describe('Hand search functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -138,9 +101,8 @@ describe('Hand search functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -207,9 +169,8 @@ describe('Hand search functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -264,9 +225,8 @@ describe('Hand search functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -333,9 +293,8 @@ describe('Hand search functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 
@@ -385,9 +344,8 @@ describe('Hand search functionality', () => {
 
       await new Promise((resolve) => setTimeout(resolve, 50));
 
-      expect(peerControl.peers.length).toBeGreaterThan(0);
-      const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-      hostPeer.emit('open');
+      expect(wsControl.sockets.length).toBeGreaterThan(0);
+      await openRoomAsHost(store, store.roomId);
 
       await new Promise((resolve) => setTimeout(resolve, 10));
 

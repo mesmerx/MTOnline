@@ -7,6 +7,7 @@ const RoomPanel = () => {
   const playerName = useGameStore((state) => state.playerName);
   const setPlayerName = useGameStore((state) => state.setPlayerName);
   const status = useGameStore((state) => state.status);
+  const selfId = useGameStore((state) => state.playerId);
   const roomId = useGameStore((state) => state.roomId);
   const isHost = useGameStore((state) => state.isHost);
   const players = useGameStore((state) => state.players);
@@ -15,8 +16,6 @@ const RoomPanel = () => {
   const leaveRoom = useGameStore((state) => state.leaveRoom);
   const [localRoomId, setLocalRoomId] = useState(roomId);
   const [password, setPassword] = useState('');
-  const [copied, setCopied] = useState(false);
-  const roomPassword = useGameStore((state) => state.roomPassword);
 
   const inRoom = status !== 'idle';
   const canSubmit = Boolean(playerName && localRoomId);
@@ -33,13 +32,13 @@ const RoomPanel = () => {
 
   const onCreate = (event: FormEvent) => {
     event.preventDefault();
-    if (!playerName || !playerName.trim()) return;
+    if (!playerName) return;
     createRoom(localRoomId, password);
   };
 
   const onJoin = (event: FormEvent) => {
     event.preventDefault();
-    if (!playerName || !playerName.trim() || !localRoomId) return;
+    if (!playerName || !localRoomId) return;
     joinRoom(localRoomId, password);
   };
 
@@ -48,24 +47,6 @@ const RoomPanel = () => {
       setLocalRoomId(roomId);
     }
   }, [roomId]);
-
-  const copyRoomLink = () => {
-    if (!roomId || !playerName) return;
-    
-    const url = new URL(window.location.origin + window.location.pathname);
-    url.searchParams.set('roomId', roomId);
-    if (roomPassword) {
-      url.searchParams.set('password', roomPassword);
-    }
-    url.searchParams.set('playerName', playerName);
-    
-    navigator.clipboard.writeText(url.toString()).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    }).catch((err) => {
-      console.error('Erro ao copiar link:', err);
-    });
-  };
 
   return (
     <div className="panel">
@@ -83,14 +64,7 @@ const RoomPanel = () => {
           placeholder="Chandra"
           value={playerName}
           onChange={(event) => setPlayerName(event.target.value)}
-          disabled={inRoom}
-          data-testid="room-player-name-input"
         />
-        {inRoom && (
-          <div style={{ fontSize: '11px', color: '#666', marginTop: '4px' }}>
-            Name cannot be changed while in a room
-          </div>
-        )}
       </label>
 
       <form className="room-form">
@@ -101,7 +75,6 @@ const RoomPanel = () => {
             placeholder="alpha-betagamma"
             value={localRoomId}
             onChange={(event) => setLocalRoomId(event.target.value)}
-            data-testid="room-id-input"
           />
         </label>
 
@@ -116,10 +89,10 @@ const RoomPanel = () => {
         </label>
 
         <div className="button-row">
-          <button className="primary" onClick={onCreate} disabled={!playerName || !playerName.trim()} data-testid="room-create-button">
+          <button className="primary" onClick={onCreate} disabled={!playerName}>
             Create
           </button>
-          <button onClick={onJoin} disabled={!canSubmit} data-testid="room-join-button">
+          <button onClick={onJoin} disabled={!canSubmit}>
             Join
           </button>
           <button type="button" className="ghost" onClick={leaveRoom} disabled={!inRoom}>
@@ -130,17 +103,7 @@ const RoomPanel = () => {
 
       {roomId && (
         <div className="hint">
-          <div style={{ marginBottom: '8px' }}>
-            Share your room id <code>{roomId}</code> with friends. Everyone must use the same password.
-          </div>
-          <button
-            type="button"
-            className="primary"
-            onClick={copyRoomLink}
-            style={{ width: '100%', marginTop: '8px' }}
-          >
-            {copied ? '✓ Link copiado!' : '📋 Copiar link da sala'}
-          </button>
+          Share your room id <code>{roomId}</code> with friends. Everyone must use the same password.
         </div>
       )}
 
@@ -148,8 +111,8 @@ const RoomPanel = () => {
         <h3>Players ({players.length})</h3>
         {players.length === 0 && <p className="muted">No one is connected yet.</p>}
         {players.map((player) => {
-          const isSelf = player.name === playerName;
-          const isRoomHost = player.name === players[0]?.name;
+          const isSelf = player.id === selfId;
+          const isRoomHost = player.id === players[0]?.id;
           return (
             <div key={player.id} className="player-pill">
               <span>{player.name}</span>
@@ -159,6 +122,7 @@ const RoomPanel = () => {
           );
         })}
       </div>
+
     </div>
   );
 };

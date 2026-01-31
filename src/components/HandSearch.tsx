@@ -28,8 +28,8 @@ const HandSearch = ({
       onClose={onClose}
       onMoveCard={onMoveCard}
       ownerName={ownerName}
-      title="🔍 Buscar Carta na Mão"
-      placeholder="Digite o nome da carta..."
+      title="🔍 Search Card in Hand"
+      placeholder="Enter the card name..."
       showAllWhenEmpty={true}
       sortCards={(cards) => {
         return [...cards].sort((a, b) => {

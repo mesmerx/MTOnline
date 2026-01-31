@@ -133,7 +133,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         startCemeteryDrag={startCemeteryDrag}
         draggingCemetery={draggingCemetery}
         handleCardZoom={handleCardZoom}
-          zoomedCard={props.zoomedCard}
+        zoomedCard={props.zoomedCard}
         changeCardZone={changeCardZone}
         getLibraryPosition={getLibraryPosition}
         board={board}
@@ -157,7 +157,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         startExileDrag={startExileDrag}
         draggingExile={draggingExile}
         handleCardZoom={handleCardZoom}
-          zoomedCard={props.zoomedCard}
+        zoomedCard={props.zoomedCard}
         changeCardZone={changeCardZone}
         getLibraryPosition={getLibraryPosition}
         getCemeteryPosition={getCemeteryPosition}
@@ -302,4 +302,3 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     </>
   );
 };
-

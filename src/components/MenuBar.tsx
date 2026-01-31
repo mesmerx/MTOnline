@@ -1,229 +1,155 @@
-import { useState, useRef, useEffect } from 'react';
+import { useEffect, useMemo, useState } from 'react';
+import MenuModal from './MenuModal';
 import RoomPanel from './RoomPanel';
-import ConnectionSettings from './ConnectionSettings';
 import DeckManager from './DeckManager';
 import CardSearch from './CardSearch';
 import Login from './Login';
-import MenuModal from './MenuModal';
 import { useGameStore } from '../store/useGameStore';
 
-const MenuBar = () => {
-  const [openMenu, setOpenMenu] = useState<string | null>(null);
-  const [isMinimized, setIsMinimized] = useState(false);
-  const [position, setPosition] = useState({ x: 16, y: 80 });
-  const [isDragging, setIsDragging] = useState(false);
-  const [dragOffset, setDragOffset] = useState({ x: 0, y: 0 });
-  const [dragStartPos, setDragStartPos] = useState({ x: 0, y: 0 });
-  const menuRef = useRef<HTMLDivElement>(null);
-  const minimizedRef = useRef<HTMLDivElement>(null);
-  const resetBoard = useGameStore((state) => state.resetBoard);
+type ModalKey = 'room' | 'decks' | 'search' | 'account';
 
-  const toggleMenu = (menu: string) => {
-    setOpenMenu(openMenu === menu ? null : menu);
-    if (isMinimized) {
-      setIsMinimized(false);
+const POSITION_KEY = 'mtonline.menuBarPosition';
+const MINIMIZED_KEY = 'mtonline.menuBarMinimized';
+
+const clamp = (value: number, min: number, max: number) => Math.min(Math.max(value, min), max);
+
+const loadPosition = () => {
+  if (typeof window === 'undefined') {
+    return { x: 24, y: 24 };
+  }
+  try {
+    const raw = window.localStorage.getItem(POSITION_KEY);
+    if (!raw) return { x: 24, y: 24 };
+    const parsed = JSON.parse(raw) as { x: number; y: number };
+    if (typeof parsed?.x === 'number' && typeof parsed?.y === 'number') {
+      return parsed;
     }
-  };
+  } catch {
+    // ignore
+  }
+  return { x: 24, y: 24 };
+};
 
-  const handleMouseDown = (e: React.MouseEvent) => {
-    if ((e.target as HTMLElement).closest('button')) return;
-    const ref = isMinimized ? minimizedRef.current : menuRef.current;
-    if (!ref) return;
-    
-    const rect = ref.getBoundingClientRect();
-    setDragOffset({
-      x: e.clientX - rect.left,
-      y: e.clientY - rect.top,
-    });
-    setDragStartPos({ x: e.clientX, y: e.clientY });
-    setIsDragging(true);
-  };
+const loadMinimized = () => {
+  if (typeof window === 'undefined') return false;
+  return window.localStorage.getItem(MINIMIZED_KEY) === 'true';
+};
+
+const MenuBar = () => {
+  const resetBoard = useGameStore((state) => state.resetBoard);
+  const status = useGameStore((state) => state.status);
+  const [activeModal, setActiveModal] = useState<ModalKey | null>(null);
+  const [position, setPosition] = useState(loadPosition);
+  const [minimized, setMinimized] = useState(loadMinimized);
+  const [dragging, setDragging] = useState<{ offsetX: number; offsetY: number } | null>(null);
+
+  const modals = useMemo(
+    () => ({
+      room: { title: 'Room', icon: '🧩', content: <RoomPanel /> },
+      decks: { title: 'Decks', icon: '📚', content: <DeckManager /> },
+      search: { title: 'Card search', icon: '🔍', content: <CardSearch /> },
+      account: { title: 'Account', icon: '👤', content: <Login /> },
+    }),
+    []
+  );
 
   useEffect(() => {
-    if (!isDragging) return;
+    if (!dragging) return;
 
-    const handleMouseMove = (e: MouseEvent) => {
-      const deltaX = Math.abs(e.clientX - dragStartPos.x);
-      const deltaY = Math.abs(e.clientY - dragStartPos.y);
-      
-      // Só considera drag se moveu mais de 5px
-      if (deltaX > 5 || deltaY > 5) {
-        setPosition({
-          x: e.clientX - dragOffset.x,
-          y: e.clientY - dragOffset.y,
-        });
+    const handleMove = (event: PointerEvent) => {
+      const maxX = window.innerWidth - 64;
+      const maxY = window.innerHeight - 64;
+      const nextX = clamp(event.clientX - dragging.offsetX, 8, maxX);
+      const nextY = clamp(event.clientY - dragging.offsetY, 8, maxY);
+      setPosition({ x: nextX, y: nextY });
+    };
+
+    const handleUp = () => {
+      setDragging(null);
+      if (typeof window !== 'undefined') {
+        window.localStorage.setItem(POSITION_KEY, JSON.stringify(position));
       }
     };
 
-    const handleMouseUp = (e: MouseEvent) => {
-      const deltaX = Math.abs(e.clientX - dragStartPos.x);
-      const deltaY = Math.abs(e.clientY - dragStartPos.y);
-      
-      // Se não moveu muito, considera como clique
-      if (deltaX < 5 && deltaY < 5 && isMinimized) {
-        setIsMinimized(false);
-      }
-      
-      setIsDragging(false);
-    };
-
-    window.addEventListener('mousemove', handleMouseMove);
-    window.addEventListener('mouseup', handleMouseUp);
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
 
     return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
     };
-  }, [isDragging, dragOffset, dragStartPos, isMinimized]);
+  }, [dragging, position]);
+
+  useEffect(() => {
+    if (typeof window === 'undefined') return;
+    window.localStorage.setItem(MINIMIZED_KEY, minimized ? 'true' : 'false');
+  }, [minimized]);
+
+  const startDrag = (event: React.PointerEvent) => {
+    event.preventDefault();
+    setDragging({ offsetX: event.clientX - position.x, offsetY: event.clientY - position.y });
+  };
+
+  const closeModal = () => setActiveModal(null);
+
+  if (minimized) {
+    return (
+      <div
+        className="menu-bar-minimized"
+        style={{ top: position.y, left: position.x }}
+        onClick={() => setMinimized(false)}
+        title="Open menu"
+      >
+        <span className="menu-icon">☰</span>
+      </div>
+    );
+  }
 
   return (
     <>
-      {isMinimized ? (
-        <div
-          ref={minimizedRef}
-          className="menu-bar-minimized"
-          style={{
-            left: `${position.x}px`,
-            top: `${position.y}px`,
-            cursor: isDragging ? 'grabbing' : 'grab',
-          }}
-          onMouseDown={handleMouseDown}
-          title="Click to expand, drag to move"
-        >
-          <span className="menu-icon">☰</span>
+      <div className="menu-bar" style={{ top: position.y, left: position.x }}>
+        <div className="menu-bar-header" onPointerDown={startDrag}>
+          <span className="menu-drag-handle">⋮⋮</span>
+          <button type="button" className="menu-minimize" onClick={() => setMinimized(true)}>
+            –
+          </button>
         </div>
-      ) : (
-        <div
-          ref={menuRef}
-          className="menu-bar"
-          style={{
-            left: `${position.x}px`,
-            top: `${position.y}px`,
-            cursor: isDragging ? 'grabbing' : 'grab',
-          }}
-          onMouseDown={handleMouseDown}
-        >
-          <div className="menu-bar-header">
-            <span className="menu-drag-handle">☰</span>
+        <div className="menu-buttons">
+          {(Object.keys(modals) as ModalKey[]).map((key) => (
             <button
+              key={key}
               type="button"
-              className="menu-minimize"
-              onClick={(e) => {
-                e.stopPropagation();
-                setIsMinimized(true);
-                setOpenMenu(null);
-              }}
-              title="Minimize"
+              className={`menu-button ${activeModal === key ? 'active' : ''}`}
+              onClick={() => setActiveModal(activeModal === key ? null : key)}
+              title={modals[key].title}
             >
-              −
+              <span className="menu-icon">{modals[key].icon}</span>
             </button>
-          </div>
-          <div className="menu-buttons">
-            <button
-              type="button"
-              className={openMenu === 'room' ? 'menu-button active' : 'menu-button'}
-              onClick={() => toggleMenu('room')}
-              title="Room Settings"
-              data-testid="menu-room-button"
-            >
-              <span className="menu-icon">🏠</span>
-            </button>
-            <button
-              type="button"
-              className={openMenu === 'connection' ? 'menu-button active' : 'menu-button'}
-              onClick={() => toggleMenu('connection')}
-              title="Connection Settings"
-            >
-              <span className="menu-icon">🔌</span>
-            </button>
-            <button
-              type="button"
-              className={openMenu === 'deck' ? 'menu-button active' : 'menu-button'}
-              onClick={() => toggleMenu('deck')}
-              title="Deck Manager"
-            >
-              <span className="menu-icon">📚</span>
-            </button>
-            <button
-              type="button"
-              className={openMenu === 'search' ? 'menu-button active' : 'menu-button'}
-              onClick={() => toggleMenu('search')}
-              title="Card Search"
-            >
-              <span className="menu-icon">🔍</span>
-            </button>
-            <button
-              type="button"
-              className={openMenu === 'login' ? 'menu-button active' : 'menu-button'}
-              onClick={() => toggleMenu('login')}
-              title="Login / Account"
-            >
-              <span className="menu-icon">👤</span>
-            </button>
-            <button
-              type="button"
-              className="menu-button"
-              onClick={(e) => {
-                e.stopPropagation();
-                if (window.confirm('Tem certeza que deseja resetar o board? Todas as cartas serão removidas.')) {
-                  resetBoard();
-                }
-              }}
-              title="Reset Board"
-            >
-              <span className="menu-icon">🗑️</span>
-            </button>
-          </div>
+          ))}
+          <button
+            type="button"
+            className="menu-button"
+            onClick={() => resetBoard()}
+            disabled={status === 'idle'}
+            title="Reset Board"
+          >
+            <span className="menu-icon">🔁</span>
+          </button>
         </div>
+      </div>
+
+      {activeModal && (
+        <MenuModal
+          isOpen={!!activeModal}
+          onClose={closeModal}
+          title={modals[activeModal].title}
+          icon={modals[activeModal].icon}
+        >
+          {modals[activeModal].content}
+        </MenuModal>
       )}
-
-      <MenuModal
-        isOpen={openMenu === 'room'}
-        onClose={() => setOpenMenu(null)}
-        title="Room"
-        icon="🏠"
-      >
-        <RoomPanel />
-      </MenuModal>
-
-      <MenuModal
-        isOpen={openMenu === 'connection'}
-        onClose={() => setOpenMenu(null)}
-        title="Connection"
-        icon="🔌"
-      >
-        <ConnectionSettings />
-      </MenuModal>
-
-      <MenuModal
-        isOpen={openMenu === 'deck'}
-        onClose={() => setOpenMenu(null)}
-        title="Deck Manager"
-        icon="📚"
-      >
-        <DeckManager onClose={() => setOpenMenu(null)} />
-      </MenuModal>
-
-      <MenuModal
-        isOpen={openMenu === 'search'}
-        onClose={() => setOpenMenu(null)}
-        title="Card Search"
-        icon="🔍"
-      >
-        <CardSearch />
-      </MenuModal>
-
-      <MenuModal
-        isOpen={openMenu === 'login'}
-        onClose={() => setOpenMenu(null)}
-        title="Account"
-        icon="👤"
-      >
-        <Login />
-      </MenuModal>
     </>
   );
 };
 
 export default MenuBar;
-

@@ -78,11 +78,11 @@ export const BoardSeparated = (props: BoardViewProps) => {
 
         // Manter proporção 16:9 sempre usando 100% da largura disponível
         const aspectRatio = 16 / 9;
-        
+
         // Sempre usar 100% da largura disponível e calcular altura para manter 16:9
         const playerAreaWidth = availableWidth;
         const playerAreaHeight = availableWidth / aspectRatio;
-        
+
         // Centralizar verticalmente
         const offsetX = 0;
         const offsetY = (availableHeight - playerAreaHeight) / 2;
@@ -419,8 +419,8 @@ export const BoardSeparated = (props: BoardViewProps) => {
 
                   {showHand && player.id === playerId && (
                     <Hand
-                        boardRef={boardRef}
-                        playerName={playerName}
+                      boardRef={boardRef}
+                      playerName={playerName}
                       board={board}
                       players={[player]}
                       getPlayerArea={(ownerId) => {
@@ -473,4 +473,3 @@ export const BoardSeparated = (props: BoardViewProps) => {
     </>
   );
 };
-

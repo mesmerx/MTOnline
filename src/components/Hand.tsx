@@ -45,7 +45,7 @@ interface HandProps {
   }>;
   addEventLog: (type: string, message: string, cardId?: string, cardName?: string, details?: Record<string, unknown>) => void;
   showDebugMode?: boolean;
-  viewMode?: 'unified' | 'individual' | 'separated';
+  viewMode?: 'individual' | 'separated';
   convertMouseToSeparatedCoordinates?: (mouseX: number, mouseY: number, playerId: string, rect: DOMRect) => { x: number; y: number } | null;
   convertMouseToUnifiedCoordinates?: (mouseX: number, mouseY: number, rect: DOMRect) => { x: number; y: number };
   counters?: Counter[];
@@ -86,7 +86,7 @@ const Hand = ({
   handDragStateRef,
   addEventLog,
   showDebugMode = false,
-  viewMode = 'unified',
+  viewMode = 'individual',
   convertMouseToSeparatedCoordinates,
   convertMouseToUnifiedCoordinates,
   getCemeteryPosition,
@@ -429,7 +429,7 @@ const Hand = ({
     const stopDrag = (event?: PointerEvent) => {
       // Evitar múltiplas execuções
       if (stopDragExecutedRef.current) {
-        console.log('[Hand] stopDrag: Já executado, ignorando');
+        console.log('[Hand] stopDrag: Already executed, ignoring');
         return;
       }
       
@@ -440,7 +440,7 @@ const Hand = ({
       // Se não corresponder E o activeDragCardIdRef não for null, significa que um novo drag foi iniciado
       // Se activeDragCardIdRef for null, pode ser que ainda não foi setado ou foi limpo, então continuar
       if (activeDragCardIdRef.current !== null && draggedCardId !== activeDragCardIdRef.current) {
-        console.log('[Hand] stopDrag: CardId não corresponde ao drag ativo, cancelando:', {
+        console.log('[Hand] stopDrag: CardId does not match active drag, canceling:', {
           capturedId: draggedCardId,
           activeId: activeDragCardIdRef.current,
           currentDraggingHandCard: draggingHandCard,
@@ -573,7 +573,7 @@ const Hand = ({
       
       // Se a carta não existe, não está na hand, ou não é do jogador, limpar estados imediatamente
       if (!draggedCard || draggedCard.zone !== 'hand' || draggedCard.ownerId !== playerName) {
-        console.log('[Hand] stopDrag: Carta não é válida para drag da hand, limpando estados');
+        console.log('[Hand] stopDrag: Card is not valid for hand drag, clearing state');
         // Limpar imediatamente para evitar múltiplas chamadas
         if (draggingHandCard === draggedCardId) {
           setDraggingHandCard(null);
@@ -610,7 +610,7 @@ const Hand = ({
         
         // Se não moveu o suficiente, foi apenas um clique - não fazer nada
         if (deltaX <= 5 && deltaY <= 5) {
-          console.log('[Hand] stopDrag: Foi apenas um clique, não moveu o suficiente');
+          console.log('[Hand] stopDrag: It was just a click, did not move enough');
           setDraggingHandCard(null);
           setPreviewHandOrder(null);
           setDragPosition(null);
@@ -640,7 +640,7 @@ const Hand = ({
       
       // Se não moveu, não fazer nada (já foi tratado acima)
       if (!handCardMoved) {
-        console.log('[Hand] stopDrag: Não moveu, cancelando');
+        console.log('[Hand] stopDrag: Did not move, canceling');
         // Resetar flag de execução ANTES de limpar estados
         stopDragExecutedRef.current = false;
         
@@ -694,7 +694,7 @@ const Hand = ({
             dropCursorX = relativeX;
             dropCursorY = relativeY;
           }
-        } else if ((viewMode === 'individual' || viewMode === 'unified') && convertMouseToUnifiedCoordinates) {
+        } else if (viewMode === 'individual' && convertMouseToUnifiedCoordinates) {
           const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
           dropCursorX = coords.x;
           dropCursorY = coords.y;
@@ -722,7 +722,7 @@ const Hand = ({
       
       // Se arrastou da hand e moveu, verificar se soltou dentro ou fora da área da hand
       if (draggedCard.zone === 'hand' && draggedCard.ownerId === playerName) {
-        console.log('[Hand] stopDrag: Verificando condições para mudar zona:', {
+        console.log('[Hand] stopDrag: Checking conditions to change zone:', {
           startedFromHand,
           handCardMoved,
           dropPosition,
@@ -779,7 +779,7 @@ const Hand = ({
           } else {
             // Se não conseguiu calcular a área da hand, assumir que está dentro
             droppedOutsideHand = false;
-            console.log('[Hand] stopDrag: Não conseguiu calcular handArea, assumindo dentro da hand');
+            console.log('[Hand] stopDrag: Could not calculate handArea, assuming inside hand');
           }
         }
         
@@ -807,7 +807,7 @@ const Hand = ({
               baseX = dropCursorX || 0;
               baseY = dropCursorY || 0;
             }
-          } else if ((viewMode === 'individual' || viewMode === 'unified') && convertMouseToUnifiedCoordinates) {
+          } else if (viewMode === 'individual' && convertMouseToUnifiedCoordinates) {
             const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
             baseX = coords.x;
             baseY = coords.y;
@@ -828,8 +828,8 @@ const Hand = ({
             let finalPosition = dropPosition;
             
             if (targetZone === 'battlefield') {
-              // dropPosition está baseado em dropCursorX/Y que já foi convertido para espaço base
-              // se estiver em modo separated/unified, ou está em coordenadas relativas se não
+            // dropPosition está baseado em dropCursorX/Y que já foi convertido para espaço base
+            // se estiver em modo separated, ou está em coordenadas relativas se não
               // Usar baseX/baseY que já foram calculados acima e estão no espaço base
               finalPosition = {
                 x: Math.max(0, Math.min(BASE_BOARD_WIDTH - CARD_WIDTH, baseX - CARD_WIDTH / 2)),
@@ -929,8 +929,8 @@ const Hand = ({
             const rect = boardRef.current.getBoundingClientRect();
             let cursorXRelative = dropCursorX;
             
-            // Se dropCursorX está no espaço base (modo separated/unified), converter para relativo
-            if (viewMode === 'separated' || viewMode === 'unified') {
+            // Se dropCursorX está no espaço base (modo separated), converter para relativo
+            if (viewMode === 'separated') {
               // dropCursorX já está no espaço base, mas handArea.x está em coordenadas relativas
               // Precisamos converter handArea.x para o espaço base ou dropCursorX para relativo
               // Vamos usar coordenadas relativas para ambos
@@ -980,7 +980,7 @@ const Hand = ({
         const hadReordering = currentPreviewHandOrder !== null;
         const actuallyReordered = hadReordering && originalIndex !== undefined && originalIndex >= 0 && originalIndex !== currentPreviewHandOrder;
         
-        console.log('[Hand] stopDrag: Verificando reordenação:', {
+        console.log('[Hand] stopDrag: Checking reordering:', {
           currentPreviewHandOrder,
           originalIndex,
           hadReordering,
@@ -1234,9 +1234,11 @@ const Hand = ({
         const isCurrentPlayer = player.name === playerName;
         const isSimulated = player.id.startsWith('simulated-');
         const canInteract = isCurrentPlayer || isSimulated;
+        const shouldRender = viewMode === 'separated' ? true : canInteract;
+        const isReadOnlyHand = viewMode === 'separated' && !isCurrentPlayer;
         const playerHandCardsForRender = handCardsByOwner.get(player.name) ?? [];
         
-        if (!canInteract) return null;
+        if (!shouldRender) return null;
         
         const boardRect = boardRef.current!.getBoundingClientRect();
         
@@ -1456,6 +1458,11 @@ const Hand = ({
                             }
                           }}
                           onPointerDown={(event) => {
+                            if (isReadOnlyHand) {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              return;
+                            }
                             setLastTouchedCard(card);
                             if (event.button === 1) {
                               event.preventDefault();
@@ -1474,6 +1481,11 @@ const Hand = ({
                             }
                           }}
                           onClick={(event) => {
+                            if (isReadOnlyHand) {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              return;
+                            }
                             // Impedir clique se moveu recentemente ou está arrastando
                             if (handCardMoved || draggingHandCard === card.id) {
                               event.preventDefault();
@@ -1489,7 +1501,14 @@ const Hand = ({
                               handleCardClick(card, event);
                             }
                           }}
-                          onContextMenu={(event) => handleCardContextMenu(card, event)}
+                          onContextMenu={(event) => {
+                            if (isReadOnlyHand) {
+                              event.preventDefault();
+                              event.stopPropagation();
+                              return;
+                            }
+                            handleCardContextMenu(card, event);
+                          }}
                         >
                           <CardToken
                             card={card}
@@ -1499,10 +1518,10 @@ const Hand = ({
                             ownerName={ownerName(card)}
                             width={HAND_CARD_WIDTH}
                             height={HAND_CARD_HEIGHT}
-                            showBack={false}
+                            showBack={isReadOnlyHand}
                           />
                           {/* Botão de flip embaixo da carta (apenas se tiver backImageUrl) */}
-                          {card.backImageUrl && (
+                          {card.backImageUrl && !isReadOnlyHand && (
                             <button
                               onClick={(e) => {
                                 e.stopPropagation();
@@ -1609,7 +1628,7 @@ const Hand = ({
                           setTimeout(() => setIsSliding(false), 300);
                         }
                       }}
-                      aria-label="Cartas anteriores"
+                      aria-label="Previous cards"
                     >
                       ←
                     </button>
@@ -1653,7 +1672,7 @@ const Hand = ({
                             setTimeout(() => setIsSliding(false), 300);
                           }
                         }}
-                        aria-label="Próximas cartas"
+                      aria-label="Next cards"
                       >
                         →
                       </button>
@@ -1686,9 +1705,9 @@ const Hand = ({
                         zIndex: 1000,
                         pointerEvents: 'auto',
                       }}
-                      title="Buscar carta na mão e mover para uma zona"
+                      title="Search hand card and move to a zone"
                     >
-                      🔍 Buscar
+                      🔍 Search
                     </button>
                   )}
                 </>

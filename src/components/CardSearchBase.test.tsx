@@ -119,14 +119,14 @@ describe('CardSearchBase', () => {
       });
     });
 
-    it('should show "Nenhuma carta encontrada" when search has no results', async () => {
+    it('should show "No cards found" when search has no results', async () => {
       render(<CardSearchBase {...defaultProps} />);
       const input = screen.getByPlaceholderText('Search...');
       
       fireEvent.change(input, { target: { value: 'NonExistentCard' } });
       
       await waitFor(() => {
-        expect(screen.getByText('Nenhuma carta encontrada')).toBeInTheDocument();
+        expect(screen.getByText('No cards found')).toBeInTheDocument();
       });
     });
 
@@ -210,10 +210,10 @@ describe('CardSearchBase', () => {
       fireEvent.click(card);
       
       await waitFor(() => {
-        expect(screen.getByText('Cancelar')).toBeInTheDocument();
+        expect(screen.getByText('Cancel')).toBeInTheDocument();
       });
       
-      const cancelButton = screen.getByText('Cancelar');
+      const cancelButton = screen.getByText('Cancel');
       fireEvent.click(cancelButton);
       
       await waitFor(() => {

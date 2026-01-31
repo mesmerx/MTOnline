@@ -2,7 +2,7 @@ import 'dotenv/config';
 import express from 'express';
 import cors from 'cors';
 import cookieParser from 'cookie-parser';
-import { randomBytes, createHash, createHmac } from 'crypto';
+import { randomBytes, createHash } from 'crypto';
 import db from './db.mjs';
 
 const app = express();
@@ -464,39 +464,6 @@ app.post('/cards/batch', (req, res) => {
   });
 
   res.json(results);
-});
-
-// Endpoint para gerar credenciais TURN
-app.get('/api/turn-credentials', (req, res) => {
-  const TURN_SECRET = process.env.TURN_SECRET;
-  
-  if (!TURN_SECRET) {
-    console.error('[TURN] TURN_SECRET não configurado no .env');
-    return res.status(500).json({ error: 'TURN_SECRET not configured' });
-  }
-  
-  const ttl = 60 * 60; // 1 hora
-  const username = Math.floor(Date.now() / 1000) + ttl;
-
-  const password = createHmac('sha1', TURN_SECRET)
-    .update(username.toString())
-    .digest('base64');
-
-  const response = {
-    urls: [
-      'turn:turn.mesmer.tv:3478',
-      'turns:turn.mesmer.tv:5349'
-    ],
-    username: username.toString(),
-    credential: password
-  };
-
-  console.log('[TURN API] Retornando credenciais:', {
-    username: response.username,
-    urls: response.urls
-  });
-
-  res.json(response);
 });
 
 // Salvar estado do board por roomId

@@ -52,7 +52,7 @@ export interface BoardViewProps {
     dragOffset: Point | null;
   }>;
   addEventLog: (type: string, message: string, cardId?: string, cardName?: string, details?: Record<string, unknown>) => void;
-  viewMode: 'unified' | 'individual' | 'separated';
+  viewMode: 'individual' | 'separated';
   convertMouseToSeparatedCoordinates?: (mouseX: number, mouseY: number, playerId: string, rect: DOMRect) => { x: number; y: number } | null;
   convertMouseToUnifiedCoordinates?: (mouseX: number, mouseY: number, rect: DOMRect) => { x: number; y: number };
   counters: Counter[];
@@ -68,4 +68,3 @@ export const BASE_BOARD_WIDTH = 1920;
 export const BASE_BOARD_HEIGHT = 1080;
 export const CARD_WIDTH = 150;
 export const CARD_HEIGHT = 210;
-

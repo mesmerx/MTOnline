@@ -1,90 +1,50 @@
 import { beforeEach, describe, expect, it, vi } from 'vitest';
 
-const peerControl = vi.hoisted(() => ({
-  peers: [] as any[],
-  lastConnection: null as null | { targetId: string; options: any; connection: any },
-}));
-
-vi.mock('peerjs', () => {
-  class TinyEmitter {
-    private listeners = new Map<string, ((...args: any[]) => void)[]>();
-
-    on(event: string, handler: (...args: any[]) => void) {
-      const handlers = this.listeners.get(event) ?? [];
-      handlers.push(handler);
-      this.listeners.set(event, handlers);
-      return this;
-    }
-
-    emit(event: string, ...args: any[]) {
-      this.listeners.get(event)?.forEach((handler) => handler(...args));
-    }
-  }
-
-  class MockDataConnection extends TinyEmitter {
-    public open = true;
-    public metadata: any;
-
-    constructor(public peer: string, public options?: any) {
-      super();
-      this.metadata = options?.metadata;
-    }
-
-    send = vi.fn();
-
-    close = vi.fn(() => {
-      this.open = false;
-      this.emit('close');
-    });
-  }
-
-  class MockPeer extends TinyEmitter {
-    public id?: string;
-
-    constructor(idOrOptions?: any, _options?: any) {
-      super();
-      if (typeof idOrOptions === 'string') {
-        this.id = idOrOptions;
-      }
-      peerControl.peers.push(this);
-    }
-
-    connect(targetId: string, options?: any) {
-      const connection = new MockDataConnection(targetId, options);
-      peerControl.lastConnection = { targetId, options, connection };
-      return connection;
-    }
-
-    destroy() {
-      this.emit('close');
-    }
-  }
-
-  return { default: MockPeer };
-});
+const wsControl = (globalThis as any).__WS_CONTROL__;
+const openRoomAsHost = async (store: { roomId: string; playerId: string; playerName: string }, roomId: string) => {
+  wsControl.openLast();
+  wsControl.receiveLast({
+    type: 'room:created',
+    payload: {
+      roomId,
+      playerId: store.playerId,
+      playerName: store.playerName || 'Host',
+      socketId: 'socket-host',
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
+const openRoomAsClient = async (store: { roomId: string; playerId: string; playerName: string }, roomId: string) => {
+  wsControl.openLast();
+  wsControl.receiveLast({
+    type: 'room:joined',
+    payload: {
+      roomId,
+      playerId: store.playerId,
+      playerName: store.playerName || 'Player',
+      socketId: 'socket-client',
+    },
+  });
+  await new Promise((resolve) => setTimeout(resolve, 0));
+};
 
 import { useGameStore } from './useGameStore';
 
 describe('useGameStore room connections', () => {
   beforeEach(() => {
-    peerControl.peers.length = 0;
-    peerControl.lastConnection = null;
+    wsControl.reset();
     useGameStore.getState().leaveRoom();
     useGameStore.getState().setPlayerName('');
   });
 
-  it('creates a host room and marks the local player as connected once PeerJS opens', async () => {
+  it('creates a host room and marks the local player as connected once WS opens', async () => {
     const store = useGameStore.getState();
     store.setPlayerName('Host Mage');
     const createPromise = store.createRoom(' test-room ', 'secret');
-    
-    // Aguardar um pouco mais para o peer ser criado (createPeerInstance é assíncrono)
-    await new Promise((resolve) => setTimeout(resolve, 50));
-    
-    expect(peerControl.peers.length).toBeGreaterThan(0);
-    const hostPeer = peerControl.peers[peerControl.peers.length - 1];
-
-    hostPeer.emit('open');
+    await createPromise;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    expect(wsControl.sockets.length).toBeGreaterThan(0);
+    await openRoomAsHost(store, 'test-room');
     
     // Aguardar a promise do createRoom completar
     await createPromise;
@@ -101,18 +61,8 @@ describe('useGameStore room connections', () => {
     store.setPlayerName('Visiting Planeswalker');
     await store.joinRoom('alpha-room', 'pw123');
 
-    expect(peerControl.peers.length).toBeGreaterThan(0);
-    const peer = peerControl.peers[peerControl.peers.length - 1];
-    peer.emit('open');
-
-    const attempt = peerControl.lastConnection;
-    expect(attempt?.targetId).toBe('alpha-room');
-    expect(attempt?.options?.metadata).toMatchObject({
-      password: 'pw123',
-      name: 'Visiting Planeswalker',
-    });
-
-    attempt?.connection.emit('open');
+    expect(wsControl.sockets.length).toBeGreaterThan(0);
+    await openRoomAsClient(store, 'alpha-room');
     expect(useGameStore.getState().status).toBe('waiting');
 
     const remoteBoard = [
@@ -129,10 +79,15 @@ describe('useGameStore room connections', () => {
       { id: useGameStore.getState().playerId, name: 'Visiting Planeswalker' },
     ];
 
-    attempt?.connection.emit('data', {
-      type: 'ROOM_STATE',
-      board: remoteBoard,
-      players: remotePlayers,
+    wsControl.receiveLast({
+      type: 'room:host_message',
+      payload: {
+        message: {
+          type: 'ROOM_STATE',
+          board: remoteBoard,
+          players: remotePlayers,
+        },
+      },
     });
 
     const nextState = useGameStore.getState();

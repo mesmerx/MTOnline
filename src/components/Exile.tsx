@@ -46,7 +46,7 @@ const Exile = ({
   board = [],
 }: ExileProps) => {
   const [showExileSearch, setShowExileSearch] = useState(false);
-  
+
   if (!boardRef.current || players.length === 0 || !playerName) return null;
 
   // Agrupar cartas por owner
@@ -88,7 +88,7 @@ const Exile = ({
                 zIndex: 100,
               }}
             >
-              {player.name} - Exílio
+              {player.name} - Exile
             </div>
             {/* Botão Buscar no Exílio */}
             {player.name === playerName && changeCardZone && getCemeteryPosition && getLibraryPosition && (
@@ -118,9 +118,9 @@ const Exile = ({
                   width: `${EXILE_CARD_WIDTH}px`,
                   textAlign: 'center',
                 }}
-                title="Buscar carta no exílio e mover para uma zona"
+                title="Search card in exile and move to a zone"
               >
-                🔍 Buscar
+                🔍 Search
               </button>
             )}
             <div
@@ -134,131 +134,131 @@ const Exile = ({
                 cursor: player.name === playerName ? (draggingExile && draggingExile.playerName === player.name ? 'grabbing' : 'grab') : 'pointer',
                 pointerEvents: 'auto',
               }}
-            onPointerDown={(e) => {
-              console.log('[Exile] onPointerDown', { 
-                exileOwnerName: player.name, 
-                currentPlayerName: playerName, 
-                matches: player.name === playerName,
-                button: e.button,
-                shiftKey: e.shiftKey,
-                cardsLength: cards.length,
-                allPlayers: players.map(p => ({ id: p.id, name: p.name }))
-              });
-              
-              // Verificar se o player dono do exílio é o player atual
-              const isOwner = player.name === playerName;
-              // Permitir que qualquer player possa mexer em players simulados
-              const isSimulated = player.id.startsWith('simulated-');
-              const canInteract = isOwner || isSimulated;
-              
-              if (canInteract) {
-                // Se for botão direito, não fazer nada (abre menu de contexto)
-                if (e.button === 2) return;
-                // Se for botão do meio, não fazer nada
-                if (e.button === 1) return;
-                // Se segurar Shift, arrastar carta individual
-                if (e.shiftKey && cards.length > 0) {
-                  e.stopPropagation();
-                  const topCard = cards[0];
-                  startDrag(topCard, e);
+              onPointerDown={(e) => {
+                console.log('[Exile] onPointerDown', {
+                  exileOwnerName: player.name,
+                  currentPlayerName: playerName,
+                  matches: player.name === playerName,
+                  button: e.button,
+                  shiftKey: e.shiftKey,
+                  cardsLength: cards.length,
+                  allPlayers: players.map(p => ({ id: p.id, name: p.name })),
+                });
+
+                // Verificar se o player dono do exílio é o player atual
+                const isOwner = player.name === playerName;
+                // Permitir que qualquer player possa mexer em players simulados
+                const isSimulated = player.id.startsWith('simulated-');
+                const canInteract = isOwner || isSimulated;
+
+                if (canInteract) {
+                  // Se for botão direito, não fazer nada (abre menu de contexto)
+                  if (e.button === 2) return;
+                  // Se for botão do meio, não fazer nada
+                  if (e.button === 1) return;
+                  // Se segurar Shift, arrastar carta individual
+                  if (e.shiftKey && cards.length > 0) {
+                    e.stopPropagation();
+                    const topCard = cards[0];
+                    startDrag(topCard, e);
+                  } else {
+                    // Caso contrário, arrastar o stack inteiro
+                    console.log('[Exile] Chamando startExileDrag', player.name);
+                    e.preventDefault();
+                    e.stopPropagation();
+                    startExileDrag(player.name, e);
+                  }
                 } else {
-                  // Caso contrário, arrastar o stack inteiro
-                  console.log('[Exile] Chamando startExileDrag', player.name);
+                  console.log('[Exile] Blocked - not the current player', {
+                    exileOwnerId: player.name,
+                    currentPlayerName: playerName,
+                    playersCount: players.length,
+                  });
+                }
+              }}
+              onContextMenu={(e) => {
+                if (cards.length > 0) {
                   e.preventDefault();
                   e.stopPropagation();
-                  startExileDrag(player.name, e);
+                  const topCard = cards[0];
+                  onExileContextMenu(topCard, e);
                 }
-              } else {
-                console.log('[Exile] Bloqueado - não é o player atual', {
-                  exileOwnerId: player.name,
-                  currentPlayerName: playerName,
-                  playersCount: players.length
-                });
-              }
-            }}
-            onContextMenu={(e) => {
-              if (cards.length > 0) {
-                e.preventDefault();
-                e.stopPropagation();
-                const topCard = cards[0];
-                onExileContextMenu(topCard, e);
-              }
-            }}
-          >
-            {cards.length > 0 ? (
-              <>
-                {cards.slice(0, 5).map((card, index) => (
+              }}
+            >
+              {cards.length > 0 ? (
+                <>
+                  {cards.slice(0, 5).map((card, index) => (
+                    <div
+                      key={card.id}
+                      style={{
+                        position: 'absolute',
+                        left: `${index * 3}px`,
+                        top: `${index * 3}px`,
+                        pointerEvents: index === 0 ? 'auto' : 'none',
+                        zIndex: 5 - index,
+                      }}
+                      onPointerDown={(e) => {
+                        // Só processar se for a primeira carta (topo do stack)
+                        if (index === 0 && card.ownerId === playerName) {
+                          // Se for botão do meio, fazer zoom
+                          if (e.button === 1 && handleCardZoom) {
+                            e.stopPropagation();
+                            handleCardZoom(card, e);
+                          }
+                          // Se for botão esquerdo E segurar Shift, arrastar carta individual
+                          else if (e.button === 0 && e.shiftKey) {
+                            e.stopPropagation();
+                            startDrag(card, e);
+                          }
+                          // Caso contrário, deixar o evento propagar para o container (para arrastar o stack)
+                        } else {
+                          // Para outras cartas, sempre bloquear propagação
+                          e.stopPropagation();
+                        }
+                      }}
+                    >
+                      <CardToken
+                        card={card}
+                        onPointerDown={() => {}}
+                        onDoubleClick={() => {}}
+                        ownerName={ownerName(card)}
+                        width={EXILE_CARD_WIDTH}
+                        height={EXILE_CARD_HEIGHT}
+                        showBack={false}
+                      />
+                    </div>
+                  ))}
+                  <div className="exile-count">{cards.length}</div>
+                </>
+              ) : (
+                <>
+                  {/* Mostrar área vazia do exílio */}
                   <div
-                    key={card.id}
                     style={{
                       position: 'absolute',
-                      left: `${index * 3}px`,
-                      top: `${index * 3}px`,
-                      pointerEvents: index === 0 ? 'auto' : 'none',
-                      zIndex: 5 - index,
-                    }}
-                    onPointerDown={(e) => {
-                      // Só processar se for a primeira carta (topo do stack)
-                      if (index === 0 && card.ownerId === playerName) {
-                        // Se for botão do meio, fazer zoom
-                        if (e.button === 1 && handleCardZoom) {
-                          e.stopPropagation();
-                          handleCardZoom(card, e);
-                        } 
-                        // Se for botão esquerdo E segurar Shift, arrastar carta individual
-                        else if (e.button === 0 && e.shiftKey) {
-                          e.stopPropagation();
-                          startDrag(card, e);
-                        }
-                        // Caso contrário, deixar o evento propagar para o container (para arrastar o stack)
-                      } else {
-                        // Para outras cartas, sempre bloquear propagação
-                        e.stopPropagation();
-                      }
+                      width: `${EXILE_CARD_WIDTH}px`,
+                      height: `${EXILE_CARD_HEIGHT}px`,
+                      left: '0px',
+                      top: '0px',
+                      border: '2px dashed rgba(148, 163, 184, 0.5)',
+                      borderRadius: '8px',
+                      backgroundColor: 'rgba(15, 23, 42, 0.3)',
+                      display: 'flex',
+                      alignItems: 'center',
+                      justifyContent: 'center',
+                      pointerEvents: 'none',
                     }}
                   >
-                    <CardToken
-                      card={card}
-                      onPointerDown={() => {}}
-                      onDoubleClick={() => {}}
-                      ownerName={ownerName(card)}
-                      width={EXILE_CARD_WIDTH}
-                      height={EXILE_CARD_HEIGHT}
-                      showBack={false}
-                    />
+                    <span style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: '16px' }}>🚫</span>
                   </div>
-                ))}
-                <div className="exile-count">{cards.length}</div>
-              </>
-            ) : (
-              <>
-                {/* Mostrar área vazia do exílio */}
-                <div
-                  style={{
-                    position: 'absolute',
-                    width: `${EXILE_CARD_WIDTH}px`,
-                    height: `${EXILE_CARD_HEIGHT}px`,
-                    left: '0px',
-                    top: '0px',
-                    border: '2px dashed rgba(148, 163, 184, 0.5)',
-                    borderRadius: '8px',
-                    backgroundColor: 'rgba(15, 23, 42, 0.3)',
-                    display: 'flex',
-                    alignItems: 'center',
-                    justifyContent: 'center',
-                    pointerEvents: 'none',
-                  }}
-                >
-                  <span style={{ color: 'rgba(148, 163, 184, 0.6)', fontSize: '16px' }}>🚫</span>
-                </div>
-                <div className="exile-count" style={{ opacity: 0.5, pointerEvents: 'none' }}>0</div>
-              </>
-            )}
+                  <div className="exile-count" style={{ opacity: 0.5, pointerEvents: 'none' }}>0</div>
+                </>
+              )}
             </div>
           </div>
         );
       })}
-      
+
       {/* Busca de cartas no exílio */}
       {changeCardZone && getCemeteryPosition && getLibraryPosition && (
         <ExileSearch
@@ -269,7 +269,7 @@ const Exile = ({
           onMoveCard={(cardId, zone, libraryPlace) => {
             const card = board.find((c) => c.id === cardId);
             if (!card || !changeCardZone) return;
-            
+
             let position: Point = { x: 0, y: 0 };
             if (zone === 'battlefield') {
               // Posição padrão no battlefield
@@ -287,7 +287,7 @@ const Exile = ({
               const exilePos = getExilePosition(playerName);
               position = exilePos || { x: 0, y: 0 };
             }
-            
+
             changeCardZone(cardId, zone, position, libraryPlace);
           }}
           ownerName={ownerName}
@@ -298,4 +298,3 @@ const Exile = ({
 };
 
 export default Exile;
-

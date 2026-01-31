@@ -26,8 +26,8 @@ const ExileSearch = ({
       onClose={onClose}
       onMoveCard={onMoveCard}
       ownerName={ownerName}
-      title="🔍 Buscar Carta no Exílio"
-      placeholder="Digite o nome da carta..."
+      title="🔍 Search Card in Exile"
+      placeholder="Enter the card name..."
       showAllWhenEmpty={true}
       sortCards={(cards) => {
         return [...cards].sort((a, b) => {

@@ -30,7 +30,7 @@ const CardSearchBase = ({
   onMoveCard,
   ownerName,
   title,
-  placeholder = 'Digite o nome da carta...',
+  placeholder = 'Enter the card name...',
   showAllWhenEmpty = false,
   sortCards,
   onReorder,
@@ -40,6 +40,7 @@ const CardSearchBase = ({
   ignoreMaxCardsLimit = false,
 }: CardSearchBaseProps) => {
   const flipCard = useGameStore((state) => state.flipCard);
+  const setZoomedCardSync = useGameStore((state) => state.setZoomedCard);
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCard, setSelectedCard] = useState<CardOnBoard | null>(null);
   const [showZoneMenu, setShowZoneMenu] = useState(false);
@@ -119,7 +120,7 @@ const CardSearchBase = ({
     });
     setSelectedCard(card);
     setShowZoneMenu(true);
-    console.log('[CardSearchBase] Menu deve estar visível agora');
+    console.log('[CardSearchBase] Menu should be visible now');
   };
 
   const handleMoveToZone = (zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile') => {
@@ -129,7 +130,7 @@ const CardSearchBase = ({
       selectedCardName: selectedCard?.name,
     });
     if (!selectedCard) {
-      console.log('[CardSearchBase] handleMoveToZone: selectedCard é null, retornando');
+      console.log('[CardSearchBase] handleMoveToZone: selectedCard is null, returning');
       return;
     }
     
@@ -157,7 +158,7 @@ const CardSearchBase = ({
       selectedCard: selectedCard?.id,
     });
     if (!selectedCard || !pendingZone) {
-      console.log('[CardSearchBase] handlePlacementChoice: selectedCard ou pendingZone é null');
+      console.log('[CardSearchBase] handlePlacementChoice: selectedCard or pendingZone is null');
       return;
     }
     
@@ -403,7 +404,7 @@ const CardSearchBase = ({
                 color: '#f8fafc',
                 outline: 'none',
               }}
-              title="Quantas cartas mostrar (vazio = todas, 0 = nenhuma, número = esse número)"
+              title="How many cards to show (empty = all, 0 = none, number = that number)"
             />
           )}
         </div>
@@ -493,7 +494,7 @@ const CardSearchBase = ({
                     console.log('[CardSearchBase] Chamando handleCardSelect do div pai');
                     handleCardSelect(card);
                   } else {
-                    console.log('[CardSearchBase] Bloqueado: draggedCardId existe');
+                    console.log('[CardSearchBase] Blocked: draggedCardId exists');
                   }
                 }}
                 style={{
@@ -612,15 +613,15 @@ const CardSearchBase = ({
           </div>
         ) : searchQuery.trim() ? (
           <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
-            Nenhuma carta encontrada
+            No cards found
           </div>
         ) : (
           <div style={{ textAlign: 'center', padding: '40px', color: '#94a3b8' }}>
             {cards.filter((c) => c.ownerId === playerName).length === 0
-              ? 'Nenhuma carta disponível'
+              ? 'No cards available'
               : showAllWhenEmpty
-              ? 'Digite o nome da carta para filtrar'
-              : 'Digite o nome da carta para buscar'}
+              ? 'Type a card name to filter'
+              : 'Type a card name to search'}
           </div>
         )}
 
@@ -634,6 +635,33 @@ const CardSearchBase = ({
               border: '1px solid rgba(148, 163, 184, 0.3)',
             }}
           >
+            <button
+              onClick={() => {
+                setZoomedCardSync(selectedCard.id);
+                setShowZoneMenu(false);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                textAlign: 'left',
+                background: 'transparent',
+                border: 'none',
+                color: '#f8fafc',
+                cursor: 'pointer',
+                borderRadius: '4px',
+                fontSize: '14px',
+                marginBottom: '8px',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              👁️ Show to other players
+            </button>
+
             <div style={{ marginBottom: '12px', color: '#f8fafc', fontSize: '14px', fontWeight: '500' }}>
               Mover {selectedCard.name} para:
             </div>
@@ -754,7 +782,7 @@ const CardSearchBase = ({
                   e.currentTarget.style.backgroundColor = '#64748b';
                 }}
               >
-                Cancelar
+                Cancel
               </button>
             </div>
           </div>
@@ -770,8 +798,35 @@ const CardSearchBase = ({
               border: '1px solid rgba(148, 163, 184, 0.3)',
             }}
           >
+            <button
+              onClick={() => {
+                setZoomedCardSync(selectedCard.id);
+                setShowPlacementMenu(false);
+              }}
+              style={{
+                width: '100%',
+                padding: '8px 12px',
+                textAlign: 'left',
+                background: 'transparent',
+                border: 'none',
+                color: '#f8fafc',
+                cursor: 'pointer',
+                borderRadius: '4px',
+                fontSize: '14px',
+                marginBottom: '8px',
+              }}
+              onMouseEnter={(e) => {
+                e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+              }}
+              onMouseLeave={(e) => {
+                e.currentTarget.style.backgroundColor = 'transparent';
+              }}
+            >
+              👁️ Show to other players
+            </button>
+
             <div style={{ marginBottom: '12px', color: '#f8fafc', fontSize: '14px', fontWeight: '500' }}>
-              Como colocar {selectedCard.name} no {pendingZone === 'library' ? 'Deck' : pendingZone === 'cemetery' ? 'Cemitério' : 'Exílio'}?
+              How to place {selectedCard.name} into the {pendingZone === 'library' ? 'Deck' : pendingZone === 'cemetery' ? 'Cemetery' : 'Exile'}?
             </div>
             <div style={{ display: 'flex', gap: '12px', flexWrap: 'wrap' }}>
               <button
