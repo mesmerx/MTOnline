@@ -7,6 +7,9 @@ export default defineConfig(({ mode }) => {
 	const parsedPort = Number(env.VITE_CLIENT_PORT);
 	const port = Number.isFinite(parsedPort) ? parsedPort : 5173;
 	const internalIp = env.INTERNAL_IP;
+	const hmrHost = env.VITE_HMR_HOST || 'mto.mesmer.tv';
+	const hmrClientPort = Number(env.VITE_HMR_CLIENT_PORT) || 443;
+	const hmrProtocol = env.VITE_HMR_PROTOCOL || 'wss';
 
 	const allowedHosts = [
 		'mto.mesmer.tv',
@@ -27,6 +30,12 @@ export default defineConfig(({ mode }) => {
 			host,
 			port,
 			allowedHosts,
+			hmr: {
+				protocol: hmrProtocol,
+				host: hmrHost,
+				clientPort: hmrClientPort,
+				port,
+			},
 		},
 		preview: {
 			host,

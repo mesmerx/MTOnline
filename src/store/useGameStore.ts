@@ -65,6 +65,14 @@ const resolveWsUrl = (): string => {
   return 'ws://localhost:3000';
 };
 
+const resolveWsPath = (): string => {
+  const env = import.meta.env;
+  const raw = typeof env.VITE_WS_PATH === 'string' && env.VITE_WS_PATH.trim().length > 0
+    ? env.VITE_WS_PATH.trim()
+    : '/ws';
+  return raw.startsWith('/') ? raw : `/${raw}`;
+};
+
 export interface PlayerSummary {
   id: string;
   name: string;
@@ -1226,7 +1234,7 @@ export const useGameStore = create<GameStore>((set, get) => {
   });
 
   const createSocket = () => {
-    const url = new URL('/ws', resolveWsUrl()).toString();
+    const url = new URL(resolveWsPath(), resolveWsUrl()).toString();
     debugLog('connecting ws', url);
     return new WebSocket(url);
   };
