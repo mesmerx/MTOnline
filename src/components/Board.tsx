@@ -18,9 +18,8 @@ const LIBRARY_CARD_WIDTH = 100;
 const LIBRARY_CARD_HEIGHT = 140;
 const THROTTLE_MS = 0; // Sem throttling durante drag para evitar stutters - atualizações imediatas
 const LIBRARY_SYNC_THROTTLE_MS = 0; // Enviar updates o mais rápido possível
-const LIBRARY_MAX_STEP_PX = 5; // Limitar salto por frame para suavidade
-const LIBRARY_EVENT_MAX_DELTA = 30; // Limitar salto por evento de mouse
-const LIBRARY_PEER_SMOOTH_STEP_PX = 1000; // Aplicar updates remotos imediatamente
+const LIBRARY_MAX_STEP_PX = 20; // Reduzir atraso no acompanhamento do mouse
+const LIBRARY_EVENT_MAX_DELTA = 60; // Permitir deltas maiores por evento
 const LIBRARY_MIN_STEP_PX = 1; // Garantir movimento perceptível por frame
 const DRAG_THRESHOLD = 5; // Pixels para distinguir clique de drag
 const CLICK_BLOCK_DELAY = 300; // ms para bloquear cliques após drag
@@ -476,8 +475,6 @@ const Board = () => {
   const libraryMovedRef = useRef<boolean>(false);
   const libraryClickExecutedRef = useRef<boolean>(false);
   const librarySyncRafRef = useRef<number | null>(null);
-  const librarySyncTargetsRef = useRef<Record<string, Point>>({});
-  const librarySyncRenderedRef = useRef<Record<string, Point>>({});
   
   // Estados para cemetery (sincronizar com store)
   const [cemeteryPositions, setCemeteryPositions] = useState<Record<string, Point>>({});
@@ -501,25 +498,11 @@ const Board = () => {
     if (draggingLibrary) {
       return;
     }
-    librarySyncTargetsRef.current = storeLibraryPositions;
+    setLibraryPositions(storeLibraryPositions);
     if (librarySyncRafRef.current !== null) {
       cancelAnimationFrame(librarySyncRafRef.current);
       librarySyncRafRef.current = null;
     }
-    Object.entries(storeLibraryPositions).forEach(([player, target]) => {
-      const area = getPlayerArea(player);
-      if (!area) return;
-      const relativeTarget = {
-        x: target.x - area.x,
-        y: target.y - area.y,
-      };
-      librarySyncRenderedRef.current[player] = relativeTarget;
-      const container = libraryContainerRefs.current[player];
-      if (container) {
-        container.style.left = `${target.x}px`;
-        container.style.top = `${target.y - 20}px`;
-      }
-    });
   }, [storeLibraryPositions, draggingLibrary]);
   const [cemeteryMoved, setCemeteryMoved] = useState(false);
   const cemeteryMovedRef = useRef<boolean>(false);
