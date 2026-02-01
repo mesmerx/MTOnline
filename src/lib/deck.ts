@@ -28,6 +28,40 @@ export const classifyDeckEntry = (entry: DeckEntry, cardTypeLine?: string): Deck
   return 'library';
 };
 
+export const formatDecklist = (entries: DeckEntry[]): string => {
+  const sections: Array<{ title: string; key: DeckEntry['section'] }> = [
+    { title: 'Commander', key: 'commander' },
+    { title: 'Mainboard', key: 'mainboard' },
+    { title: 'Maybeboard', key: 'maybeboard' },
+    { title: 'Tokens', key: 'tokens' },
+  ];
+
+  const grouped = sections.map((section) => ({
+    title: section.title,
+    entries: entries.filter((entry) => (entry.section ?? 'mainboard') === section.key),
+  }));
+
+  const lines: string[] = [];
+  grouped.forEach((group) => {
+    if (group.entries.length === 0) return;
+    lines.push(group.title);
+    group.entries.forEach((entry) => {
+      const parts: string[] = [];
+      parts.push(`${entry.quantity}x ${entry.name}`);
+      if (entry.printTag) {
+        parts.push(`(${entry.printTag})`);
+      } else if (entry.setCode) {
+        const tag = `${entry.setCode.toUpperCase()}${entry.collectorNumber ?? ''}`;
+        parts.push(`(${tag})`);
+      }
+      lines.push(parts.join(' '));
+    });
+    lines.push('');
+  });
+
+  return lines.join('\n').trim();
+};
+
 export interface SavedDeck {
   id: string;
   name: string;

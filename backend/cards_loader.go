@@ -29,6 +29,7 @@ type scryfallCard struct {
 	ManaCost        string            `json:"mana_cost"`
 	OracleText      string            `json:"oracle_text"`
 	Layout          string            `json:"layout"`
+	PrintsSearchURI string            `json:"prints_search_uri"`
 	ImageUris       map[string]string `json:"image_uris"`
 	CardFaces       []scryfallFace    `json:"card_faces"`
 }
@@ -107,8 +108,8 @@ func loadCardsFromJSON(db *sql.DB, path string) error {
 	stmt, err := tx.Prepare(`
 		INSERT INTO cards (
 			id, name, name_normalized, set_code, collector_number, type_line,
-			mana_cost, oracle_text, image_url, back_image_url, set_name, layout
-		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+			mana_cost, oracle_text, image_url, back_image_url, set_name, layout, prints_search_uri
+		) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
 		ON CONFLICT(id) DO UPDATE SET
 			name = excluded.name,
 			name_normalized = excluded.name_normalized,
@@ -120,7 +121,8 @@ func loadCardsFromJSON(db *sql.DB, path string) error {
 			image_url = excluded.image_url,
 			back_image_url = excluded.back_image_url,
 			set_name = excluded.set_name,
-			layout = excluded.layout
+			layout = excluded.layout,
+			prints_search_uri = excluded.prints_search_uri
 	`)
 	if err != nil {
 		return err
@@ -164,6 +166,7 @@ func loadCardsFromJSON(db *sql.DB, path string) error {
 			nullIfEmptyString(backImageURL),
 			nullIfEmptyString(strings.TrimSpace(card.SetName)),
 			nullIfEmptyString(strings.TrimSpace(card.Layout)),
+			nullIfEmptyString(strings.TrimSpace(card.PrintsSearchURI)),
 		); err != nil {
 			return err
 		}

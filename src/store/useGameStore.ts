@@ -132,6 +132,7 @@ export interface NewCardPayload {
 
 type CardAction =
   | { kind: 'add'; card: CardOnBoard }
+  | { kind: 'updateCard'; id: string; updates: Partial<Pick<CardOnBoard, 'name' | 'oracleText' | 'manaCost' | 'typeLine' | 'setName' | 'imageUrl' | 'backImageUrl'>> }
   | { kind: 'move'; id: string; position: Point }
   | { kind: 'moveLibrary'; playerName: string; position: Point }
   | { kind: 'moveCemetery'; playerName: string; position: Point }
@@ -256,6 +257,8 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
       switch (action.kind) {
         case 'add':
           return [...currentBoard, action.card];
+        case 'updateCard':
+          return currentBoard.map((c) => (c.id === action.id ? { ...c, ...action.updates } : c));
         case 'move':
           return currentBoard.map((c) => (c.id === action.id ? { ...c, position: action.position } : c));
         case 'toggleTap':
@@ -573,6 +576,7 @@ interface GameStore {
   addCardToLibrary: (card: NewCardPayload) => void;
   addCardToCommander: (card: NewCardPayload) => void;
   addCardToTokens: (card: NewCardPayload) => void;
+  updateCard: (cardId: string, updates: Partial<Pick<CardOnBoard, 'name' | 'oracleText' | 'manaCost' | 'typeLine' | 'setName' | 'imageUrl' | 'backImageUrl'>>) => void;
   replaceLibrary: (cards: NewCardPayload[]) => void;
   drawFromLibrary: () => void;
   moveCard: (cardId: string, position: Point, options?: { persist?: boolean }) => void;
@@ -643,6 +647,8 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
         newBoard = recalculateHandPositions(newBoard, action.card.ownerId);
       }
       return newBoard;
+    case 'updateCard':
+      return board.map((card) => (card.id === action.id ? { ...card, ...action.updates } : card));
     case 'move': {
       newBoard = board.map((card) => (card.id === action.id ? { ...card, position: action.position } : card));
       
@@ -2860,6 +2866,9 @@ export const useGameStore = create<GameStore>((set, get) => {
         stackIndex: maxStackIndex + 1,
       };
       requestAction({ kind: 'add', card });
+    },
+    updateCard: (cardId: string, updates: Partial<Pick<CardOnBoard, 'name' | 'oracleText' | 'manaCost' | 'typeLine' | 'setName' | 'imageUrl' | 'backImageUrl'>>) => {
+      requestAction({ kind: 'updateCard', id: cardId, updates });
     },
     replaceLibrary: (cards: NewCardPayload[]) => {
       const playerName = get().playerName;

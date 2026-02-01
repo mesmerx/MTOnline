@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { parseDecklist, classifyDeckEntry } from '../lib/deck';
+import { parseDecklist, classifyDeckEntry, formatDecklist } from '../lib/deck';
 import type { DeckEntry } from '../lib/deck';
 import { fetchCardByCollector, fetchCardByName, fetchCardsBatch } from '../lib/scryfall';
 import type { BatchCardRequest } from '../lib/scryfall';
@@ -42,6 +42,24 @@ const DeckManager = () => {
     const name = deckName.trim() || 'Untitled deck';
     saveDeckDefinition(name, entries, deckText);
     setDeckName('');
+  };
+
+  const exportDeck = () => {
+    if (entries.length === 0) {
+      setError('Parse a deck list before exporting.');
+      return;
+    }
+    const deckName = deckName.trim() || 'decklist';
+    const content = formatDecklist(entries);
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${deckName}.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
   };
 
   const loadDeck = (deckId: string) => {
@@ -188,6 +206,9 @@ const DeckManager = () => {
           <button type="button" className="primary" onClick={saveDeck} disabled={entries.length === 0}>
             Save deck
           </button>
+          <button type="button" onClick={exportDeck} disabled={entries.length === 0}>
+            Export deck
+          </button>
           <button type="button" onClick={() => loadEntriesToLibrary(entries)} disabled={entries.length === 0 || busyLibrary}>
             {busyLibrary ? 'Loading…' : 'Load to library'}
           </button>
@@ -200,19 +221,57 @@ const DeckManager = () => {
         <div className="deck-entries">
           <h3>Parsed cards</h3>
           <ul>
-            {entries.map((entry) => (
-              <li key={`${entry.name}-${entry.printTag ?? ''}`}>
+            {entries.map((entry, index) => (
+              <li key={`${entry.name}-${entry.printTag ?? ''}-${index}`}>
                 <span>
                   {entry.quantity}x {entry.name}{' '}
                   {entry.printTag && <small className="muted">({entry.printTag})</small>}
                 </span>
-                <button
-                  type="button"
-                  onClick={() => addEntryToBoard(entry)}
-                  disabled={busyCard === entry.name}
-                >
-                  {busyCard === entry.name ? 'Adding…' : 'Add'}
-                </button>
+                <div className="button-row">
+                  <button
+                    type="button"
+                    onClick={() => addEntryToBoard(entry)}
+                    disabled={busyCard === entry.name}
+                  >
+                    {busyCard === entry.name ? 'Adding…' : 'Add'}
+                  </button>
+                  <button
+                    type="button"
+                    className="ghost"
+                    onClick={() => {
+                      const setCode = window.prompt('Set code (leave empty for any print):', entry.setCode ?? '');
+                      if (setCode === null) return;
+                      const trimmedSet = setCode.trim();
+                      if (!trimmedSet) {
+                        setEntries((current) =>
+                          current.map((item, idx) =>
+                            idx === index
+                              ? { ...item, setCode: undefined, collectorNumber: undefined, printTag: undefined }
+                              : item
+                          )
+                        );
+                        return;
+                      }
+                      const collector = window.prompt('Collector number (optional):', entry.collectorNumber ?? '');
+                      if (collector === null) return;
+                      const trimmedCollector = collector.trim();
+                      setEntries((current) =>
+                        current.map((item, idx) =>
+                          idx === index
+                            ? {
+                                ...item,
+                                setCode: trimmedSet.toLowerCase(),
+                                collectorNumber: trimmedCollector || undefined,
+                                printTag: `${trimmedSet.toUpperCase()}${trimmedCollector ? trimmedCollector : ''}`,
+                              }
+                            : item
+                        )
+                      );
+                    }}
+                  >
+                    Change print
+                  </button>
+                </div>
               </li>
             ))}
           </ul>

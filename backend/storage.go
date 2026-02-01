@@ -78,7 +78,8 @@ func ensureSchema(db *sql.DB) error {
 		image_url TEXT,
 		back_image_url TEXT,
 		set_name TEXT,
-		layout TEXT
+		layout TEXT,
+		prints_search_uri TEXT
 	);
 
 	CREATE INDEX IF NOT EXISTS idx_cards_name_normalized ON cards(name_normalized);
@@ -88,6 +89,9 @@ func ensureSchema(db *sql.DB) error {
 		return err
 	}
 	if _, err := db.Exec(`ALTER TABLE decks ADD COLUMN is_public INTEGER DEFAULT 0`); err != nil {
+		// Column already exists, ignore.
+	}
+	if _, err := db.Exec(`ALTER TABLE cards ADD COLUMN prints_search_uri TEXT`); err != nil {
 		// Column already exists, ignore.
 	}
 	return nil

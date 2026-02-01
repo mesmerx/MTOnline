@@ -523,6 +523,7 @@ func (a *App) registerRoutes() {
 	r.Delete("/decks/{id}", a.requireAuth(a.handleDeleteDeck))
 
 	r.Get("/cards/search", a.handleCardSearch)
+	r.Get("/cards/prints", a.handleCardPrints)
 	r.Get("/cards/{setCode}/{collectorNumber}", a.handleCardCollector)
 	r.Post("/cards/batch", a.handleCardsBatch)
 
@@ -850,6 +851,7 @@ type cardRow struct {
 	SetName         sql.NullString
 	SetCode         sql.NullString
 	CollectorNumber sql.NullString
+	PrintsSearchURI sql.NullString
 }
 
 type cardResponse struct {
@@ -860,6 +862,25 @@ type cardResponse struct {
 	ImageURL     *string `json:"imageUrl,omitempty"`
 	BackImageURL *string `json:"backImageUrl,omitempty"`
 	SetName      *string `json:"setName,omitempty"`
+	PrintsSearchURI *string `json:"printsSearchUri,omitempty"`
+}
+
+type cardPrintRow struct {
+	Name            string
+	SetCode         sql.NullString
+	CollectorNumber sql.NullString
+	SetName         sql.NullString
+	ImageURL        sql.NullString
+	BackImageURL    sql.NullString
+}
+
+type cardPrintResponse struct {
+	Name            string  `json:"name"`
+	SetCode         *string `json:"setCode,omitempty"`
+	CollectorNumber *string `json:"collectorNumber,omitempty"`
+	SetName         *string `json:"setName,omitempty"`
+	ImageURL        *string `json:"imageUrl,omitempty"`
+	BackImageURL    *string `json:"backImageUrl,omitempty"`
 }
 
 func (a *App) handleCardSearch(w http.ResponseWriter, r *http.Request) {
@@ -884,6 +905,53 @@ func (a *App) handleCardSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	writeJSON(w, http.StatusOK, cardRowToResponse(card))
+}
+
+func (a *App) handleCardPrints(w http.ResponseWriter, r *http.Request) {
+	if !a.ensureCardsAvailable() {
+		writeJSON(w, http.StatusServiceUnavailable, map[string]string{"error": "Cards data not loaded. Ensure cards.json is available and restart the Go backend."})
+		return
+	}
+	name := strings.TrimSpace(r.URL.Query().Get("name"))
+	if name == "" {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "name parameter is required"})
+		return
+	}
+	queryLower := strings.ToLower(name)
+	best, err := a.findCardByName(queryLower, "")
+	if err != nil || best == nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Card not found"})
+		return
+	}
+	rows, err := a.db.Query(`
+		SELECT name, set_code, collector_number, set_name, image_url, back_image_url
+		FROM cards
+		WHERE name_normalized = ?
+		ORDER BY set_code, collector_number
+		LIMIT 500
+	`, best.NameNormalized)
+	if err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to fetch prints"})
+		return
+	}
+	defer rows.Close()
+
+	results := make([]cardPrintResponse, 0, 64)
+	for rows.Next() {
+		var row cardPrintRow
+		if err := rows.Scan(&row.Name, &row.SetCode, &row.CollectorNumber, &row.SetName, &row.ImageURL, &row.BackImageURL); err != nil {
+			continue
+		}
+		results = append(results, cardPrintResponse{
+			Name:            row.Name,
+			SetCode:         nullStringToPtr(row.SetCode),
+			CollectorNumber: nullStringToPtr(row.CollectorNumber),
+			SetName:         nullStringToPtr(row.SetName),
+			ImageURL:        nullStringToPtr(row.ImageURL),
+			BackImageURL:    nullStringToPtr(row.BackImageURL),
+		})
+	}
+	writeJSON(w, http.StatusOK, results)
 }
 
 func (a *App) handleCardCollector(w http.ResponseWriter, r *http.Request) {
@@ -1150,7 +1218,7 @@ func (a *App) findCardByName(queryLower string, setLower string) (*cardRow, erro
 
 func (a *App) selectExactName(queryLower string) ([]*cardRow, error) {
 	rows, err := a.db.Query(`
-		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number
+		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number, prints_search_uri
 		FROM cards
 		WHERE name_normalized = ?
 		ORDER BY set_code, collector_number
@@ -1165,7 +1233,7 @@ func (a *App) selectExactName(queryLower string) ([]*cardRow, error) {
 
 func (a *App) selectExactNameAndSet(queryLower string, setLower string) ([]*cardRow, error) {
 	rows, err := a.db.Query(`
-		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number
+		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number, prints_search_uri
 		FROM cards
 		WHERE name_normalized = ?
 		  AND set_code = ?
@@ -1181,7 +1249,7 @@ func (a *App) selectExactNameAndSet(queryLower string, setLower string) ([]*card
 
 func (a *App) selectLikeName(pattern string, queryLower string) ([]*cardRow, error) {
 	rows, err := a.db.Query(`
-		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number
+		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number, prints_search_uri
 		FROM cards
 		WHERE name_normalized LIKE ? ESCAPE '\'
 		ORDER BY INSTR(name_normalized, ?) ASC, name ASC
@@ -1196,7 +1264,7 @@ func (a *App) selectLikeName(pattern string, queryLower string) ([]*cardRow, err
 
 func (a *App) selectLikeNameAndSet(pattern string, setLower string, queryLower string) ([]*cardRow, error) {
 	rows, err := a.db.Query(`
-		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number
+		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number, prints_search_uri
 		FROM cards
 		WHERE name_normalized LIKE ? ESCAPE '\'
 		  AND set_code = ?
@@ -1212,13 +1280,13 @@ func (a *App) selectLikeNameAndSet(pattern string, setLower string, queryLower s
 
 func (a *App) selectBySetCollector(setCode string, collectorNumber string) (*cardRow, error) {
 	row := a.db.QueryRow(`
-		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number
+		SELECT id, name, name_normalized, type_line, mana_cost, oracle_text, image_url, back_image_url, set_name, set_code, collector_number, prints_search_uri
 		FROM cards
 		WHERE set_code = ? AND collector_number = ?
 		LIMIT 1
 	`, setCode, collectorNumber)
 	var card cardRow
-	if err := row.Scan(&card.ID, &card.Name, &card.NameNormalized, &card.TypeLine, &card.ManaCost, &card.OracleText, &card.ImageURL, &card.BackImageURL, &card.SetName, &card.SetCode, &card.CollectorNumber); err != nil {
+	if err := row.Scan(&card.ID, &card.Name, &card.NameNormalized, &card.TypeLine, &card.ManaCost, &card.OracleText, &card.ImageURL, &card.BackImageURL, &card.SetName, &card.SetCode, &card.CollectorNumber, &card.PrintsSearchURI); err != nil {
 		return nil, err
 	}
 	return &card, nil
@@ -1228,7 +1296,7 @@ func scanCardRows(rows *sql.Rows) []*cardRow {
 	var results []*cardRow
 	for rows.Next() {
 		var card cardRow
-		if err := rows.Scan(&card.ID, &card.Name, &card.NameNormalized, &card.TypeLine, &card.ManaCost, &card.OracleText, &card.ImageURL, &card.BackImageURL, &card.SetName, &card.SetCode, &card.CollectorNumber); err != nil {
+		if err := rows.Scan(&card.ID, &card.Name, &card.NameNormalized, &card.TypeLine, &card.ManaCost, &card.OracleText, &card.ImageURL, &card.BackImageURL, &card.SetName, &card.SetCode, &card.CollectorNumber, &card.PrintsSearchURI); err != nil {
 			continue
 		}
 		results = append(results, &card)
@@ -1253,6 +1321,9 @@ func cardRowToResponse(card *cardRow) cardResponse {
 		response.SetName = &card.SetName.String
 	} else if card.SetCode.Valid {
 		response.SetName = &card.SetCode.String
+	}
+	if card.PrintsSearchURI.Valid {
+		response.PrintsSearchURI = &card.PrintsSearchURI.String
 	}
 	return response
 }

@@ -6,6 +6,16 @@ export interface CardLookupResult {
   imageUrl?: string;
   backImageUrl?: string; // Imagem do verso da carta (para cartas com duas faces)
   setName?: string;
+  printsSearchUri?: string;
+}
+
+export interface CardPrintOption {
+  name: string;
+  setCode?: string;
+  collectorNumber?: string;
+  setName?: string;
+  imageUrl?: string;
+  backImageUrl?: string;
 }
 
 const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
@@ -49,6 +59,13 @@ export const fetchCardsBatch = async (requests: BatchCardRequest[]): Promise<(Ca
     },
     body: JSON.stringify({ cards: requests }),
   });
+  await ensureOk(response);
+  return await response.json();
+};
+
+export const fetchCardPrints = async (name: string): Promise<CardPrintOption[]> => {
+  const params = new URLSearchParams({ name });
+  const response = await fetch(`${API_URL}/cards/prints?${params.toString()}`);
   await ensureOk(response);
   return await response.json();
 };

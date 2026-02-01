@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, useCallback, useMemo } from 'react';
 import { shallow } from 'zustand/shallow';
 import type { PointerEvent as ReactPointerEvent } from 'react';
 import { useGameStore } from '../store/useGameStore';
+import { fetchCardPrints } from '../lib/scryfall';
 import type { CardOnBoard, PlayerSummary } from '../store/useGameStore';
 import CardToken from './CardToken';
 import { BoardSeparated } from './BoardSeparated';
@@ -70,6 +71,7 @@ const selectBoardState = createShallowCachedSelector((state: ReturnType<typeof u
   changeCardZone: state.changeCardZone,
   setCommander: state.setCommander,
   addCardToBoard: state.addCardToBoard,
+  updateCard: state.updateCard,
   drawFromLibrary: state.drawFromLibrary,
   reorderHandCard: state.reorderHandCard,
   reorderLibraryCard: state.reorderLibraryCard,
@@ -430,6 +432,7 @@ const Board = () => {
     removeCard,
     changeCardZone,
     addCardToBoard,
+    updateCard,
     setCommander,
     drawFromLibrary,
     reorderHandCard,
@@ -557,6 +560,26 @@ const Board = () => {
     y: number;
     card: CardOnBoard;
   } | null>(null);
+  const [showPrintsMenu, setShowPrintsMenu] = useState(false);
+  const [printsLoading, setPrintsLoading] = useState(false);
+  const [printsError, setPrintsError] = useState<string | null>(null);
+  const [printsOptions, setPrintsOptions] = useState<Array<{ id: string; label: string; imageUrl?: string; backImageUrl?: string; setName?: string }>>([]);
+  const [printsSelection, setPrintsSelection] = useState<string | null>(null);
+  const [printsCardId, setPrintsCardId] = useState<string | null>(null);
+
+  const applyPrintSelection = useCallback(
+    (selectionId?: string | null) => {
+      if (!selectionId || !printsCardId) return;
+      const selected = printsOptions.find((option) => option.id === selectionId);
+      if (!selected) return;
+      updateCard(printsCardId, {
+        imageUrl: selected.imageUrl,
+        backImageUrl: selected.backImageUrl,
+        setName: selected.setName,
+      });
+    },
+    [printsCardId, printsOptions, updateCard]
+  );
   const [boardContextMenu, setBoardContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
   const [boardContextMenuPosition, setBoardContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -2160,6 +2183,12 @@ const Board = () => {
     if (isDragging) {
       return;
     }
+
+    setShowPrintsMenu(false);
+    setPrintsSelection(null);
+    setPrintsOptions([]);
+    setPrintsCardId(null);
+    setPrintsError(null);
     
     // Mostrar menu de contexto (a posição será ajustada no useEffect)
     setContextMenu({
@@ -2210,6 +2239,8 @@ const Board = () => {
     const cascadeValueStr = window.prompt('Enter the max CMC value:');
     if (!cascadeValueStr) {
       setContextMenu(null);
+      setShowPrintsMenu(false);
+      setShowPrintsMenu(false);
       return;
     }
     
@@ -2217,10 +2248,13 @@ const Board = () => {
     if (isNaN(cascadeValue) || cascadeValue < 0) {
       alert('Invalid value. Enter a number greater than or equal to 0.');
       setContextMenu(null);
+      setShowPrintsMenu(false);
       return;
     }
     
     setContextMenu(null);
+    setShowPrintsMenu(false);
+    setShowPrintsMenu(false);
     
     // Obter cards do library do jogador, ordenadas por stackIndex (descendente - topo primeiro)
     const currentBoard = useGameStore.getState().board;
@@ -2309,10 +2343,12 @@ const Board = () => {
     if (!contextMenu) return;
     setZoomedCardSync(contextMenu.card.id);
     setContextMenu(null);
+    setShowPrintsMenu(false);
+    setShowPrintsMenu(false);
   };
 
-  const handleContextMenuAction = (
-    action: 'cemetery' | 'remove' | 'shuffle' | 'tap' | 'draw' | 'moveZone' | 'libraryPlace' | 'flip' | 'createCounter' | 'cascade' | 'setCommander' | 'sendCommander' | 'createCopy',
+  const handleContextMenuAction = async (
+    action: 'cemetery' | 'remove' | 'shuffle' | 'tap' | 'draw' | 'moveZone' | 'libraryPlace' | 'flip' | 'createCounter' | 'cascade' | 'setCommander' | 'sendCommander' | 'createCopy' | 'changePrint',
     targetZone?: 'hand' | 'battlefield' | 'library' | 'cemetery' | 'exile' | 'commander' | 'tokens',
     libraryPlace?: 'top' | 'bottom' | 'random',
     counterType?: 'numeral' | 'plus'
@@ -2456,6 +2492,35 @@ const Board = () => {
           position: { x: card.position.x, y: card.position.y },
         });
       }
+    } else if (action === 'changePrint') {
+      if (!canInteractWithCard(card.ownerId)) return;
+      setPrintsLoading(true);
+      setPrintsError(null);
+      setShowPrintsMenu(true);
+      setPrintsCardId(card.id);
+      try {
+        const prints = await fetchCardPrints(card.name);
+        const mapped = prints.map((print) => {
+          const setCode = print.setCode?.toUpperCase() ?? '??';
+          const collector = print.collectorNumber ?? '';
+          const label = `${print.setName ?? setCode} ${collector ? `#${collector}` : ''}`.trim();
+          const id = `${print.setCode ?? ''}:${print.collectorNumber ?? ''}:${print.setName ?? ''}:${print.imageUrl ?? ''}`;
+          return {
+            id,
+            label,
+            imageUrl: print.imageUrl,
+            backImageUrl: print.backImageUrl,
+            setName: print.setName,
+          };
+        });
+        setPrintsOptions(mapped);
+        setPrintsSelection(mapped[0]?.id ?? null);
+      } catch (err) {
+        setPrintsError(err instanceof Error ? err.message : 'Failed to load prints');
+      } finally {
+        setPrintsLoading(false);
+      }
+      return;
     } else if (action === 'flip') {
       // Transform card
       if (canInteractWithCard(card.ownerId)) {
@@ -2499,6 +2564,7 @@ const Board = () => {
     }
     
     setContextMenu(null);
+    setShowPrintsMenu(false);
     setContextSubmenu(null);
     setContextMenuPosition(null);
   };
@@ -2533,6 +2599,7 @@ const Board = () => {
       // Se clicou fora, fechar tudo
       if (contextMenu) {
         setContextMenu(null);
+        setShowPrintsMenu(false);
         setContextSubmenu(null);
         setContextSubmenuLibrary(false);
         setContextMenuPosition(null);
@@ -4487,6 +4554,161 @@ const Board = () => {
                   >
                     📄 Create Copy
                   </button>
+                  <button
+                    onClick={() => handleContextMenuAction('changePrint')}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#f8fafc',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    🎨 Change print
+                  </button>
+                  {showPrintsMenu && (
+                    <div style={{ padding: '8px 12px' }}>
+                      <div style={{ fontSize: '12px', color: '#94a3b8', marginBottom: '6px' }}>
+                        Change print
+                      </div>
+                      {printsLoading ? (
+                        <div style={{ color: '#f8fafc', fontSize: '13px' }}>Loading prints…</div>
+                      ) : printsError ? (
+                        <div style={{ color: '#f87171', fontSize: '13px' }}>{printsError}</div>
+                      ) : printsOptions.length === 0 ? (
+                        <div style={{ color: '#f8fafc', fontSize: '13px' }}>No prints found.</div>
+                      ) : (
+                        <>
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleContextMenuAction('changePrint');
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '6px 8px',
+                              marginBottom: '8px',
+                              textAlign: 'left',
+                              background: 'transparent',
+                              border: '1px solid rgba(148, 163, 184, 0.3)',
+                              color: '#f8fafc',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              fontSize: '13px',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                          >
+                            🔄 Reload prints
+                          </button>
+                          <div
+                            style={{
+                              border: '1px solid rgba(148, 163, 184, 0.3)',
+                              borderRadius: '6px',
+                              maxHeight: '140px',
+                              overflowY: 'auto',
+                              marginBottom: '8px',
+                            }}
+                          >
+                            {printsOptions.map((option) => {
+                              const isSelected = printsSelection === option.id;
+                              return (
+                                <button
+                                  key={option.id}
+                                  onMouseEnter={() => setPrintsSelection(option.id)}
+                                  onClick={(e) => {
+                                    e.stopPropagation();
+                                    setPrintsSelection(option.id);
+                                    applyPrintSelection(option.id);
+                                  }}
+                                  style={{
+                                    width: '100%',
+                                    padding: '6px 8px',
+                                    textAlign: 'left',
+                                    background: isSelected ? 'rgba(148, 163, 184, 0.2)' : 'transparent',
+                                    border: 'none',
+                                    color: '#f8fafc',
+                                    cursor: 'pointer',
+                                    fontSize: '13px',
+                                  }}
+                                >
+                                  {option.label}
+                                </button>
+                              );
+                            })}
+                          </div>
+                          {printsSelection && (
+                            <div style={{ display: 'flex', justifyContent: 'center', gap: '8px', marginBottom: '8px' }}>
+                              {(() => {
+                                const selected = printsOptions.find((option) => option.id === printsSelection);
+                                if (!selected?.imageUrl) return null;
+                                return (
+                                  <>
+                                    <img
+                                      src={selected.imageUrl}
+                                      alt={selected.label}
+                                      style={{
+                                        width: '120px',
+                                        borderRadius: '6px',
+                                        border: '1px solid rgba(148, 163, 184, 0.3)',
+                                      }}
+                                    />
+                                    {selected.backImageUrl && (
+                                      <img
+                                        src={selected.backImageUrl}
+                                        alt={`${selected.label} (back)`}
+                                        style={{
+                                          width: '120px',
+                                          borderRadius: '6px',
+                                          border: '1px solid rgba(148, 163, 184, 0.3)',
+                                        }}
+                                      />
+                                    )}
+                                  </>
+                                );
+                              })()}
+                            </div>
+                          )}
+                          <button
+                            onClick={() => {
+                              setShowPrintsMenu(false);
+                              setPrintsSelection(null);
+                              setPrintsOptions([]);
+                              setPrintsCardId(null);
+                              setPrintsError(null);
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '6px 8px',
+                              backgroundColor: 'transparent',
+                              color: '#f8fafc',
+                              border: '1px solid rgba(148, 163, 184, 0.3)',
+                              borderRadius: '6px',
+                              cursor: 'pointer',
+                              fontSize: '13px',
+                            }}
+                          >
+                            Close
+                          </button>
+                        </>
+                      )}
+                      <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', marginTop: '8px' }} />
+                    </div>
+                  )}
                   <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
                   {/* Tap/Untap - apenas para battlefield */}
                   {contextMenu.card.zone === 'battlefield' && (
@@ -4711,6 +4933,7 @@ const Board = () => {
                             mulligan(playerName);
                           }
                           setContextMenu(null);
+                          setShowPrintsMenu(false);
                         }}
                         disabled={playerHandCards.length === 0}
                         style={{
