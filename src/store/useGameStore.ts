@@ -95,6 +95,12 @@ export interface CardOnBoard {
   manaCost?: string;
   typeLine?: string;
   setName?: string;
+  setCode?: string;
+  collectorNumber?: string;
+  deckSection?: 'commander' | 'mainboard' | 'maybeboard' | 'tokens';
+  deckTag?: string;
+  deckFlags?: string[];
+  finishTags?: string[];
   position: Point;
   tapped: boolean;
   zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile' | 'commander' | 'tokens';
@@ -127,12 +133,18 @@ export interface NewCardPayload {
   manaCost?: string;
   typeLine?: string;
   setName?: string;
+  setCode?: string;
+  collectorNumber?: string;
+  deckSection?: 'commander' | 'mainboard' | 'maybeboard' | 'tokens';
+  deckTag?: string;
+  deckFlags?: string[];
+  finishTags?: string[];
   position?: Point;
 }
 
 type CardAction =
   | { kind: 'add'; card: CardOnBoard }
-  | { kind: 'updateCard'; id: string; updates: Partial<Pick<CardOnBoard, 'name' | 'oracleText' | 'manaCost' | 'typeLine' | 'setName' | 'imageUrl' | 'backImageUrl'>> }
+  | { kind: 'updateCard'; id: string; updates: Partial<Pick<CardOnBoard, 'name' | 'oracleText' | 'manaCost' | 'typeLine' | 'setName' | 'setCode' | 'collectorNumber' | 'imageUrl' | 'backImageUrl'>> }
   | { kind: 'move'; id: string; position: Point }
   | { kind: 'moveLibrary'; playerName: string; position: Point }
   | { kind: 'moveCemetery'; playerName: string; position: Point }
@@ -576,7 +588,7 @@ interface GameStore {
   addCardToLibrary: (card: NewCardPayload) => void;
   addCardToCommander: (card: NewCardPayload) => void;
   addCardToTokens: (card: NewCardPayload) => void;
-  updateCard: (cardId: string, updates: Partial<Pick<CardOnBoard, 'name' | 'oracleText' | 'manaCost' | 'typeLine' | 'setName' | 'imageUrl' | 'backImageUrl'>>) => void;
+  updateCard: (cardId: string, updates: Partial<Pick<CardOnBoard, 'name' | 'oracleText' | 'manaCost' | 'typeLine' | 'setName' | 'setCode' | 'collectorNumber' | 'imageUrl' | 'backImageUrl'>>) => void;
   replaceLibrary: (cards: NewCardPayload[]) => void;
   drawFromLibrary: () => void;
   moveCard: (cardId: string, position: Point, options?: { persist?: boolean }) => void;
@@ -2784,6 +2796,12 @@ export const useGameStore = create<GameStore>((set, get) => {
         manaCost: payload.manaCost,
         typeLine: payload.typeLine,
         setName: payload.setName,
+        setCode: payload.setCode,
+        collectorNumber: payload.collectorNumber,
+        deckSection: payload.deckSection,
+        deckTag: payload.deckTag,
+        deckFlags: payload.deckFlags,
+        finishTags: payload.finishTags,
         imageUrl: payload.imageUrl,
         backImageUrl: payload.backImageUrl,
         ownerId: get().playerName,
@@ -2804,6 +2822,12 @@ export const useGameStore = create<GameStore>((set, get) => {
         manaCost: payload.manaCost,
         typeLine: payload.typeLine,
         setName: payload.setName,
+        setCode: payload.setCode,
+        collectorNumber: payload.collectorNumber,
+        deckSection: payload.deckSection,
+        deckTag: payload.deckTag,
+        deckFlags: payload.deckFlags,
+        finishTags: payload.finishTags,
         imageUrl: payload.imageUrl,
         backImageUrl: payload.backImageUrl,
         ownerId: get().playerName,
@@ -2829,6 +2853,12 @@ export const useGameStore = create<GameStore>((set, get) => {
         manaCost: payload.manaCost,
         typeLine: payload.typeLine,
         setName: payload.setName,
+        setCode: payload.setCode,
+        collectorNumber: payload.collectorNumber,
+        deckSection: payload.deckSection,
+        deckTag: payload.deckTag,
+        deckFlags: payload.deckFlags,
+        finishTags: payload.finishTags,
         imageUrl: payload.imageUrl,
         backImageUrl: payload.backImageUrl,
         ownerId: playerName,
@@ -2855,6 +2885,12 @@ export const useGameStore = create<GameStore>((set, get) => {
         manaCost: payload.manaCost,
         typeLine: payload.typeLine,
         setName: payload.setName,
+        setCode: payload.setCode,
+        collectorNumber: payload.collectorNumber,
+        deckSection: payload.deckSection,
+        deckTag: payload.deckTag,
+        deckFlags: payload.deckFlags,
+        finishTags: payload.finishTags,
         imageUrl: payload.imageUrl,
         backImageUrl: payload.backImageUrl,
         ownerId: playerName,
@@ -2867,7 +2903,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       };
       requestAction({ kind: 'add', card });
     },
-    updateCard: (cardId: string, updates: Partial<Pick<CardOnBoard, 'name' | 'oracleText' | 'manaCost' | 'typeLine' | 'setName' | 'imageUrl' | 'backImageUrl'>>) => {
+    updateCard: (cardId: string, updates: Partial<Pick<CardOnBoard, 'name' | 'oracleText' | 'manaCost' | 'typeLine' | 'setName' | 'setCode' | 'collectorNumber' | 'imageUrl' | 'backImageUrl'>>) => {
       requestAction({ kind: 'updateCard', id: cardId, updates });
     },
     replaceLibrary: (cards: NewCardPayload[]) => {

@@ -5,6 +5,7 @@ import DeckManager from './DeckManager';
 import CardSearch from './CardSearch';
 import Login from './Login';
 import { useGameStore } from '../store/useGameStore';
+import { formatBoardDecklist } from '../lib/deck';
 
 type ModalKey = 'room' | 'decks' | 'search' | 'account';
 
@@ -38,6 +39,8 @@ const loadMinimized = () => {
 const MenuBar = () => {
   const resetBoard = useGameStore((state) => state.resetBoard);
   const status = useGameStore((state) => state.status);
+  const board = useGameStore((state) => state.board);
+  const playerName = useGameStore((state) => state.playerName);
   const [activeModal, setActiveModal] = useState<ModalKey | null>(null);
   const [position, setPosition] = useState(loadPosition);
   const [minimized, setMinimized] = useState(loadMinimized);
@@ -92,6 +95,22 @@ const MenuBar = () => {
 
   const closeModal = () => setActiveModal(null);
 
+  const exportBoard = () => {
+    if (board.length === 0) return;
+    const content = formatBoardDecklist(board);
+    if (!content) return;
+    const safeName = (playerName || 'board').trim() || 'board';
+    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = `${safeName}-board.txt`;
+    document.body.appendChild(link);
+    link.click();
+    link.remove();
+    URL.revokeObjectURL(url);
+  };
+
   if (minimized) {
     return (
       <div
@@ -134,6 +153,15 @@ const MenuBar = () => {
             title="Reset Board"
           >
             <span className="menu-icon">🔁</span>
+          </button>
+          <button
+            type="button"
+            className="menu-button"
+            onClick={exportBoard}
+            disabled={board.length === 0}
+            title="Export board"
+          >
+            <span className="menu-icon">⬇️</span>
           </button>
         </div>
       </div>

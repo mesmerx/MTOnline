@@ -36,6 +36,8 @@ const CardSearch = () => {
       manaCost: result.manaCost,
       typeLine: result.typeLine,
       setName: result.setName,
+      setCode: result.setCode,
+      collectorNumber: result.collectorNumber,
       imageUrl: result.imageUrl,
       backImageUrl: result.backImageUrl,
     });

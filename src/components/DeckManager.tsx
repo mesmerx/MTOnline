@@ -1,9 +1,9 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { parseDecklist, classifyDeckEntry, formatDecklist } from '../lib/deck';
+import { parseDecklist, classifyDeckEntry } from '../lib/deck';
 import type { DeckEntry } from '../lib/deck';
-import { fetchCardByCollector, fetchCardByName, fetchCardsBatch } from '../lib/scryfall';
-import type { BatchCardRequest } from '../lib/scryfall';
+import { fetchCardByCollector, fetchCardByName, fetchCardsBatch, fetchCardPrints } from '../lib/scryfall';
+import type { BatchCardRequest, CardLookupResult } from '../lib/scryfall';
 import { useGameStore } from '../store/useGameStore';
 
 const DeckManager = () => {
@@ -44,23 +44,6 @@ const DeckManager = () => {
     setDeckName('');
   };
 
-  const exportDeck = () => {
-    if (entries.length === 0) {
-      setError('Parse a deck list before exporting.');
-      return;
-    }
-    const deckName = deckName.trim() || 'decklist';
-    const content = formatDecklist(entries);
-    const blob = new Blob([content], { type: 'text/plain;charset=utf-8' });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement('a');
-    link.href = url;
-    link.download = `${deckName}.txt`;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  };
 
   const loadDeck = (deckId: string) => {
     const target = savedDecks.find((deck) => deck.id === deckId);
@@ -95,6 +78,12 @@ const DeckManager = () => {
         manaCost?: string;
         typeLine?: string;
         setName?: string;
+        setCode?: string;
+        collectorNumber?: string;
+        deckSection?: DeckEntry['section'];
+        deckTag?: string;
+        deckFlags?: string[];
+        finishTags?: string[];
         imageUrl?: string;
         backImageUrl?: string;
       };
@@ -102,25 +91,68 @@ const DeckManager = () => {
       const commanderCards: CardPayload[] = [];
       const tokenCards: CardPayload[] = [];
 
-      results.forEach((result, index) => {
+      const normalizeSetLabel = (value?: string) => value?.trim().toLowerCase();
+      const resolvePrintBySetName = async (entry: DeckEntry, base: CardPayload) => {
+        if (!entry.printTag || entry.setCode) return base;
+        const requested = normalizeSetLabel(entry.printTag);
+        if (!requested) return base;
+        if (normalizeSetLabel(base.setName) === requested) return base;
+        try {
+          const prints = await fetchCardPrints(base.name);
+          const match = prints.find(
+            (print) =>
+              normalizeSetLabel(print.setName) === requested ||
+              normalizeSetLabel(print.setCode) === requested
+          );
+          if (!match) return base;
+          return {
+            ...base,
+            setName: match.setName ?? base.setName,
+            setCode: match.setCode ?? base.setCode,
+            collectorNumber: match.collectorNumber ?? base.collectorNumber,
+            imageUrl: match.imageUrl ?? base.imageUrl,
+            backImageUrl: match.backImageUrl ?? base.backImageUrl,
+          };
+        } catch {
+          return base;
+        }
+      };
+
+      const resolvedResults = await Promise.all(
+        results.map(async (result, index) => {
+          const entry = expandedEntries[index];
+          if (!entry || 'error' in result) return result;
+          const basePayload: CardPayload = {
+            name: result.name,
+            oracleText: result.oracleText,
+            manaCost: result.manaCost,
+            typeLine: result.typeLine,
+            setName: result.setName,
+            setCode: result.setCode,
+            collectorNumber: result.collectorNumber,
+            deckSection: entry.section,
+            deckTag: entry.tags?.[0],
+            deckFlags: entry.flags,
+            finishTags: entry.finishTags,
+            imageUrl: result.imageUrl,
+            backImageUrl: result.backImageUrl,
+          };
+          return await resolvePrintBySetName(entry, basePayload);
+        })
+      );
+
+      resolvedResults.forEach((resolved, index) => {
         const entry = expandedEntries[index];
-        if ('error' in result) {
-          const request = (result.request as BatchCardRequest | undefined)?.name ?? entry?.name ?? requests[index]?.name ?? 'unknown';
-          errors.push(`${request}: ${result.error}`);
+        if (!entry) return;
+        if ('error' in resolved) {
+          const request = (resolved.request as BatchCardRequest | undefined)?.name ?? entry?.name ?? requests[index]?.name ?? 'unknown';
+          errors.push(`${request}: ${resolved.error}`);
           return;
         }
 
-        const payload = {
-          name: result.name,
-          oracleText: result.oracleText,
-          manaCost: result.manaCost,
-          typeLine: result.typeLine,
-          setName: result.setName,
-          imageUrl: result.imageUrl,
-          backImageUrl: result.backImageUrl,
-        };
+        const payload = resolved as CardPayload;
 
-        const placement = entry ? classifyDeckEntry(entry, result.typeLine) : 'library';
+        const placement = classifyDeckEntry(entry, payload.typeLine);
 
         if (placement === 'commander') {
           commanderCards.push(payload);
@@ -151,17 +183,46 @@ const DeckManager = () => {
   const addEntryToBoard = async (entry: DeckEntry) => {
     setBusyCard(entry.name);
     try {
-      const card =
+      let card: CardLookupResult =
         entry.setCode && entry.collectorNumber
           ? await fetchCardByCollector(entry.setCode, entry.collectorNumber)
           : await fetchCardByName(entry.name, entry.setCode);
+      if (entry.printTag && !entry.setCode && card.setName?.toLowerCase() !== entry.printTag.toLowerCase()) {
+        try {
+          const prints = await fetchCardPrints(card.name);
+          const match = prints.find(
+            (print) =>
+              print.setName?.toLowerCase() === entry.printTag?.toLowerCase() ||
+              print.setCode?.toLowerCase() === entry.printTag?.toLowerCase()
+          );
+          if (match) {
+            card = {
+              ...card,
+              setName: match.setName ?? card.setName,
+              setCode: match.setCode ?? card.setCode,
+              collectorNumber: match.collectorNumber ?? card.collectorNumber,
+              imageUrl: match.imageUrl ?? card.imageUrl,
+              backImageUrl: match.backImageUrl ?? card.backImageUrl,
+            };
+          }
+        } catch {
+          // keep base card
+        }
+      }
       const payload = {
         name: card.name,
         oracleText: card.oracleText,
         manaCost: card.manaCost,
         typeLine: card.typeLine,
         setName: card.setName,
+        setCode: card.setCode,
+        collectorNumber: card.collectorNumber,
+        deckSection: entry.section,
+        deckTag: entry.tags?.[0],
+        deckFlags: entry.flags,
+        finishTags: entry.finishTags,
         imageUrl: card.imageUrl,
+        backImageUrl: card.backImageUrl,
       };
       const placement = classifyDeckEntry(entry, card.typeLine);
       if (placement === 'commander') {
@@ -205,9 +266,6 @@ const DeckManager = () => {
           />
           <button type="button" className="primary" onClick={saveDeck} disabled={entries.length === 0}>
             Save deck
-          </button>
-          <button type="button" onClick={exportDeck} disabled={entries.length === 0}>
-            Export deck
           </button>
           <button type="button" onClick={() => loadEntriesToLibrary(entries)} disabled={entries.length === 0 || busyLibrary}>
             {busyLibrary ? 'Loading…' : 'Load to library'}

@@ -862,6 +862,8 @@ type cardResponse struct {
 	ImageURL     *string `json:"imageUrl,omitempty"`
 	BackImageURL *string `json:"backImageUrl,omitempty"`
 	SetName      *string `json:"setName,omitempty"`
+	SetCode      *string `json:"setCode,omitempty"`
+	CollectorNumber *string `json:"collectorNumber,omitempty"`
 	PrintsSearchURI *string `json:"printsSearchUri,omitempty"`
 }
 
@@ -1321,6 +1323,12 @@ func cardRowToResponse(card *cardRow) cardResponse {
 		response.SetName = &card.SetName.String
 	} else if card.SetCode.Valid {
 		response.SetName = &card.SetCode.String
+	}
+	if card.SetCode.Valid {
+		response.SetCode = &card.SetCode.String
+	}
+	if card.CollectorNumber.Valid {
+		response.CollectorNumber = &card.CollectorNumber.String
 	}
 	if card.PrintsSearchURI.Valid {
 		response.PrintsSearchURI = &card.PrintsSearchURI.String

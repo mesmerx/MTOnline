@@ -566,19 +566,23 @@ const Board = () => {
   const [printsOptions, setPrintsOptions] = useState<Array<{ id: string; label: string; imageUrl?: string; backImageUrl?: string; setName?: string }>>([]);
   const [printsSelection, setPrintsSelection] = useState<string | null>(null);
   const [printsCardId, setPrintsCardId] = useState<string | null>(null);
+  const [printsMetaById, setPrintsMetaById] = useState<Record<string, { setCode?: string; collectorNumber?: string }>>({});
 
   const applyPrintSelection = useCallback(
     (selectionId?: string | null) => {
       if (!selectionId || !printsCardId) return;
       const selected = printsOptions.find((option) => option.id === selectionId);
+      const meta = printsMetaById[selectionId];
       if (!selected) return;
       updateCard(printsCardId, {
         imageUrl: selected.imageUrl,
         backImageUrl: selected.backImageUrl,
         setName: selected.setName,
+        setCode: meta?.setCode,
+        collectorNumber: meta?.collectorNumber,
       });
     },
-    [printsCardId, printsOptions, updateCard]
+    [printsCardId, printsOptions, printsMetaById, updateCard]
   );
   const [boardContextMenu, setBoardContextMenu] = useState<{ x: number; y: number } | null>(null);
   const [contextMenuPosition, setContextMenuPosition] = useState<{ x: number; y: number } | null>(null);
@@ -2487,6 +2491,12 @@ const Board = () => {
           manaCost: card.manaCost,
           typeLine: card.typeLine,
           setName: card.setName,
+          setCode: card.setCode,
+          collectorNumber: card.collectorNumber,
+          deckSection: card.deckSection,
+          deckTag: card.deckTag,
+          deckFlags: card.deckFlags,
+          finishTags: card.finishTags,
           imageUrl: card.imageUrl,
           backImageUrl: card.backImageUrl,
           position: { x: card.position.x, y: card.position.y },
@@ -2500,11 +2510,13 @@ const Board = () => {
       setPrintsCardId(card.id);
       try {
         const prints = await fetchCardPrints(card.name);
+        const metaById: Record<string, { setCode?: string; collectorNumber?: string }> = {};
         const mapped = prints.map((print) => {
           const setCode = print.setCode?.toUpperCase() ?? '??';
           const collector = print.collectorNumber ?? '';
           const label = `${print.setName ?? setCode} ${collector ? `#${collector}` : ''}`.trim();
           const id = `${print.setCode ?? ''}:${print.collectorNumber ?? ''}:${print.setName ?? ''}:${print.imageUrl ?? ''}`;
+          metaById[id] = { setCode: print.setCode, collectorNumber: print.collectorNumber };
           return {
             id,
             label,
@@ -2514,6 +2526,7 @@ const Board = () => {
           };
         });
         setPrintsOptions(mapped);
+        setPrintsMetaById(metaById);
         setPrintsSelection(mapped[0]?.id ?? null);
       } catch (err) {
         setPrintsError(err instanceof Error ? err.message : 'Failed to load prints');

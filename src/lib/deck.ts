@@ -1,4 +1,5 @@
 import { randomId } from './id';
+import type { CardOnBoard } from '../store/useGameStore';
 
 export interface DeckEntry {
   quantity: number;
@@ -6,6 +7,7 @@ export interface DeckEntry {
   setCode?: string;
   collectorNumber?: string;
   printTag?: string;
+  finishTags?: string[];
   section?: 'commander' | 'mainboard' | 'maybeboard' | 'tokens';
   tags?: string[];
   flags?: string[];
@@ -55,6 +57,71 @@ export const formatDecklist = (entries: DeckEntry[]): string => {
         parts.push(`(${tag})`);
       }
       lines.push(parts.join(' '));
+    });
+    lines.push('');
+  });
+
+  return lines.join('\n').trim();
+};
+
+type DeckSection = {
+  title: string;
+  key: 'commander' | 'mainboard' | 'maybeboard' | 'tokens';
+};
+
+const deckSections: DeckSection[] = [
+  { title: 'Commander', key: 'commander' },
+  { title: 'Mainboard', key: 'mainboard' },
+  { title: 'Maybeboard', key: 'maybeboard' },
+  { title: 'Tokens', key: 'tokens' },
+];
+
+const resolveBoardSection = (card: CardOnBoard): DeckSection['key'] => {
+  if (card.deckSection) return card.deckSection;
+  if (card.zone === 'commander' || card.isCommander) return 'commander';
+  if (card.zone === 'tokens') return 'tokens';
+  return 'mainboard';
+};
+
+const formatCardLine = (count: number, card: CardOnBoard) => {
+  const parts: string[] = [];
+  parts.push(`${count}x ${card.name}`);
+  if (card.setCode) {
+    parts.push(`(${card.setCode})`);
+  } else if (card.setName) {
+    parts.push(`(${card.setName})`);
+  }
+  if (card.collectorNumber) {
+    parts.push(card.collectorNumber);
+  }
+  if (card.finishTags?.length) {
+    parts.push(card.finishTags.join(' '));
+  }
+  const flagSuffix = card.deckFlags?.length ? `{${card.deckFlags.join(' ')}}` : '';
+  if (card.deckTag || flagSuffix) {
+    parts.push(`[${card.deckTag ?? ''}${flagSuffix}]`);
+  }
+  return parts.join(' ');
+};
+
+export const formatBoardDecklist = (cards: CardOnBoard[]): string => {
+  const lines: string[] = [];
+  deckSections.forEach((section) => {
+    const sectionCards = cards.filter((card) => resolveBoardSection(card) === section.key);
+    if (sectionCards.length === 0) return;
+    const counts = new Map<string, { card: CardOnBoard; count: number }>();
+    sectionCards.forEach((card) => {
+      const key = `${card.name}::${card.setCode ?? ''}::${card.collectorNumber ?? ''}::${card.deckTag ?? ''}::${card.deckFlags?.join(' ') ?? ''}::${card.finishTags?.join(',') ?? ''}`;
+      const current = counts.get(key);
+      if (current) {
+        current.count += 1;
+      } else {
+        counts.set(key, { card, count: 1 });
+      }
+    });
+    lines.push(section.title);
+    Array.from(counts.values()).forEach(({ card, count }) => {
+      lines.push(formatCardLine(count, card));
     });
     lines.push('');
   });
@@ -125,10 +192,14 @@ export const parseDecklist = (rawList: string): DeckEntry[] => {
         }
       }
       
+      const finishMatches = [...normalized.matchAll(/\*[^*]+\*/g)]
+        .map((match) => match[0]?.trim())
+        .filter((match) => match && match.length > 0);
+
       // Remove foil/finish markers like *F* or *Foil*
       normalized = normalized.replace(/\s*\*[^*]+\*\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
 
-      const match = normalized.match(/^(\d+)\s*x?\s+([^(]+?)(?:\s+\(([^)]+)\))?(?:\s+(\d+))?$/i);
+      const match = normalized.match(/^(\d+)\s*x?\s+([^(]+?)(?:\s+\(([^)]+)\))?(?:\s+([A-Za-z0-9-]+))?$/i);
       if (!match) {
         return;
       }
@@ -138,6 +209,9 @@ export const parseDecklist = (rawList: string): DeckEntry[] => {
         quantity: Number(qty),
         name: name.trim(),
       };
+      if (finishMatches.length > 0) {
+        entry.finishTags = finishMatches;
+      }
 
       const tag = printTag?.trim();
       if (tag) {

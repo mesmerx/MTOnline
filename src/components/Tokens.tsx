@@ -229,6 +229,9 @@ const Tokens = ({
               manaCost: card.manaCost,
               typeLine: card.typeLine,
               setName: card.setName,
+              setCode: card.setCode,
+              collectorNumber: card.collectorNumber,
+              deckSection: 'tokens',
               imageUrl: card.imageUrl,
               backImageUrl: card.backImageUrl,
             });

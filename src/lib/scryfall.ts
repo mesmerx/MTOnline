@@ -6,6 +6,8 @@ export interface CardLookupResult {
   imageUrl?: string;
   backImageUrl?: string; // Imagem do verso da carta (para cartas com duas faces)
   setName?: string;
+  setCode?: string;
+  collectorNumber?: string;
   printsSearchUri?: string;
 }
 
