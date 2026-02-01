@@ -135,16 +135,6 @@ const Exile = ({
                 pointerEvents: 'auto',
               }}
               onPointerDown={(e) => {
-                console.log('[Exile] onPointerDown', {
-                  exileOwnerName: player.name,
-                  currentPlayerName: playerName,
-                  matches: player.name === playerName,
-                  button: e.button,
-                  shiftKey: e.shiftKey,
-                  cardsLength: cards.length,
-                  allPlayers: players.map(p => ({ id: p.id, name: p.name })),
-                });
-
                 // Verificar se o player dono do exílio é o player atual
                 const isOwner = player.name === playerName;
                 // Permitir que qualquer player possa mexer em players simulados
@@ -163,17 +153,11 @@ const Exile = ({
                     startDrag(topCard, e);
                   } else {
                     // Caso contrário, arrastar o stack inteiro
-                    console.log('[Exile] Chamando startExileDrag', player.name);
                     e.preventDefault();
                     e.stopPropagation();
                     startExileDrag(player.name, e);
                   }
                 } else {
-                  console.log('[Exile] Blocked - not the current player', {
-                    exileOwnerId: player.name,
-                    currentPlayerName: playerName,
-                    playersCount: players.length,
-                  });
                 }
               }}
               onContextMenu={(e) => {

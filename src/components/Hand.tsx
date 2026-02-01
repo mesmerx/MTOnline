@@ -429,7 +429,6 @@ const Hand = ({
     const stopDrag = (event?: PointerEvent) => {
       // Evitar múltiplas execuções
       if (stopDragExecutedRef.current) {
-        console.log('[Hand] stopDrag: Already executed, ignoring');
         return;
       }
       
@@ -440,21 +439,12 @@ const Hand = ({
       // Se não corresponder E o activeDragCardIdRef não for null, significa que um novo drag foi iniciado
       // Se activeDragCardIdRef for null, pode ser que ainda não foi setado ou foi limpo, então continuar
       if (activeDragCardIdRef.current !== null && draggedCardId !== activeDragCardIdRef.current) {
-        console.log('[Hand] stopDrag: CardId does not match active drag, canceling:', {
-          capturedId: draggedCardId,
-          activeId: activeDragCardIdRef.current,
-          currentDraggingHandCard: draggingHandCard,
-        });
         return;
       }
       
       // Verificar se o cardId ainda corresponde ao draggingHandCard atual
       // Se não corresponder, significa que um novo drag foi iniciado e devemos cancelar
       if (draggedCardId !== draggingHandCard) {
-        console.log('[Hand] stopDrag: CardId mudou durante o drag, cancelando:', {
-          capturedId: draggedCardId,
-          currentId: draggingHandCard,
-        });
         return;
       }
       
@@ -467,15 +457,7 @@ const Hand = ({
       // Se previewHandOrder não foi calculado durante o drag, calcular agora
       // IMPORTANTE: Calcular ANTES de verificar droppedOutsideHand
       if (currentPreviewHandOrder === null && handCardMoved && event && boardRef.current && startedFromHand) {
-        console.log('[Hand] stopDrag: Tentando calcular previewHandOrder', {
-          currentPreviewHandOrder,
-          handCardMoved,
-          hasEvent: !!event,
-          hasBoardRef: !!boardRef.current,
-          startedFromHand,
-        });
         const handArea = getHandArea(playerName);
-        console.log('[Hand] stopDrag: handArea:', handArea);
         if (handArea) {
           const rect = boardRef.current.getBoundingClientRect();
           // handArea está em coordenadas relativas ao board, usar coordenadas relativas também
@@ -510,33 +492,13 @@ const Hand = ({
             currentPreviewHandOrder = renderStartIndex;
           }
           
-          console.log('[Hand] stopDrag: Calculado previewHandOrder:', {
-            relativeX,
-            handAreaLeft,
-            relativeXToHand,
-            adjustedX,
-            currentPreviewHandOrder,
-          });
         }
       }
-      
-      console.log('[Hand] stopDrag chamado:', {
-        draggedCardId,
-        handCardMoved,
-        dragStartPosition,
-        currentPreviewHandOrder,
-        previewHandOrder,
-        startedFromHand,
-        hasEvent: !!event,
-        hasBoardRef: !!boardRef.current,
-        event: event ? { clientX: event.clientX, clientY: event.clientY } : null,
-      });
       
       // Marcar como executado imediatamente
       stopDragExecutedRef.current = true;
       
       if (!draggedCardId) {
-        console.log('[Hand] stopDrag: Sem draggedCardId, limpando estados');
         setDraggingHandCard(null);
         setPreviewHandOrder(null);
         setDragPosition(null);
@@ -564,16 +526,8 @@ const Hand = ({
       const currentBoard = useGameStore.getState().board;
       const draggedCard = currentBoard.find((c) => c.id === draggedCardId);
       
-      console.log('[Hand] stopDrag: Verificando carta:', {
-        draggedCard: draggedCard ? { id: draggedCard.id, name: draggedCard.name, zone: draggedCard.zone, ownerId: draggedCard.ownerId } : null,
-        playerName,
-        isHand: draggedCard?.zone === 'hand',
-        isOwner: draggedCard?.ownerId === playerName,
-      });
-      
       // Se a carta não existe, não está na hand, ou não é do jogador, limpar estados imediatamente
       if (!draggedCard || draggedCard.zone !== 'hand' || draggedCard.ownerId !== playerName) {
-        console.log('[Hand] stopDrag: Card is not valid for hand drag, clearing state');
         // Limpar imediatamente para evitar múltiplas chamadas
         if (draggingHandCard === draggedCardId) {
           setDraggingHandCard(null);
@@ -610,7 +564,6 @@ const Hand = ({
         
         // Se não moveu o suficiente, foi apenas um clique - não fazer nada
         if (deltaX <= 5 && deltaY <= 5) {
-          console.log('[Hand] stopDrag: It was just a click, did not move enough');
           setDraggingHandCard(null);
           setPreviewHandOrder(null);
           setDragPosition(null);
@@ -640,7 +593,6 @@ const Hand = ({
       
       // Se não moveu, não fazer nada (já foi tratado acima)
       if (!handCardMoved) {
-        console.log('[Hand] stopDrag: Did not move, canceling');
         // Resetar flag de execução ANTES de limpar estados
         stopDragExecutedRef.current = false;
         
@@ -722,18 +674,6 @@ const Hand = ({
       
       // Se arrastou da hand e moveu, verificar se soltou dentro ou fora da área da hand
       if (draggedCard.zone === 'hand' && draggedCard.ownerId === playerName) {
-        console.log('[Hand] stopDrag: Checking conditions to change zone:', {
-          startedFromHand,
-          handCardMoved,
-          dropPosition,
-          dropCursorX,
-          dropCursorY,
-          draggedCardId: draggedCard.id,
-          draggedCardName: draggedCard.name,
-          hasEvent: !!event,
-          previewHandOrder,
-        });
-        
         // PRIMEIRO: Verificar se houve preview de reordenação
         // Se há previewHandOrder, significa que durante o drag estava dentro da hand
         // Mas ainda precisamos verificar se soltou fora da hand
@@ -764,22 +704,9 @@ const Hand = ({
               relativeY <= (handArea.y + handArea.height + margin);
             
             droppedOutsideHand = !isInsideHand;
-            
-            console.log('[Hand] stopDrag: Verificando se soltou fora da hand:', {
-              dropCursorX,
-              dropCursorY,
-              relativeX,
-              relativeY,
-              handArea: { x: handArea.x, y: handArea.y, width: handArea.width, height: handArea.height },
-              isInsideHand,
-              droppedOutsideHand,
-              margin,
-              hadPreviewOrder,
-            });
           } else {
             // Se não conseguiu calcular a área da hand, assumir que está dentro
             droppedOutsideHand = false;
-            console.log('[Hand] stopDrag: Could not calculate handArea, assuming inside hand');
           }
         }
         
@@ -842,14 +769,6 @@ const Hand = ({
               // Posição será calculada pelo store baseado no library
               finalPosition = { x: 0, y: 0 };
             }
-            
-            console.log('[Hand] stopDrag: Mudando zona de hand para', targetZone, ':', {
-              cardId: draggedCard.id,
-              cardName: draggedCard.name,
-              from: 'hand',
-              to: targetZone,
-              finalPosition,
-            });
             
             // Limpar o estado ANTES de mudar a zona para evitar múltiplas chamadas
             setDraggingHandCard(null);
@@ -966,27 +885,11 @@ const Hand = ({
             } else {
               currentPreviewHandOrder = renderStartIndex;
             }
-            
-            console.log('[Hand] stopDrag: Calculado previewHandOrder (fallback):', {
-              dropCursorX,
-              handAreaLeft,
-              relativeXToHand,
-              adjustedX,
-              currentPreviewHandOrder,
-            });
           }
         }
         
         const hadReordering = currentPreviewHandOrder !== null;
         const actuallyReordered = hadReordering && originalIndex !== undefined && originalIndex >= 0 && originalIndex !== currentPreviewHandOrder;
-        
-        console.log('[Hand] stopDrag: Checking reordering:', {
-          currentPreviewHandOrder,
-          originalIndex,
-          hadReordering,
-          actuallyReordered,
-          droppedOutsideHand,
-        });
         
         // Log evento de drag end ANTES de reordenar, se realmente moveu
         // IMPORTANTE: Sempre logar quando houver movimento, independente de reordenação
@@ -1040,16 +943,6 @@ const Hand = ({
               finalNewIndex = Math.max(0, Math.min(totalCards - 1, newIndex));
             }
           }
-          
-          console.log('[Hand] stopDrag: Reordenando carta na hand:', {
-            cardId: draggedCard.id,
-            cardName: draggedCard.name,
-            originalIndex,
-            previewIndex: currentPreviewHandOrder,
-            finalNewIndex,
-            dropCursorX,
-            dropCursorY,
-          });
           
           addEventLog('REORDER_HAND', `Reordenando hand: ${draggedCard.name} (${originalIndex} → ${finalNewIndex})`, draggedCard.id, draggedCard.name, {
             fromIndex: originalIndex,
@@ -1175,10 +1068,6 @@ const Hand = ({
         Object.keys(currentOrder).some(id => currentOrder[id] !== originalHandOrder[id]);
       
       if (orderChanged) {
-        console.log('[Hand] Atualizando originalHandOrder:', {
-          oldOrder: originalHandOrder,
-          newOrder: currentOrder,
-        });
         setOriginalHandOrder(currentOrder);
       }
     }

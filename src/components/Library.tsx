@@ -51,7 +51,9 @@ const Library = ({
 }: LibraryProps) => {
   const [showLibrarySearch, setShowLibrarySearch] = useState(false);
 
-  if (!boardRef.current || players.length === 0 || !playerName) return null;
+  if (!boardRef.current || players.length === 0 || !playerName) {
+    return null;
+  }
 
   return (
     <>
@@ -65,7 +67,9 @@ const Library = ({
         const playerLibraryCards = libraryCards.filter((c) => c.ownerId === player.name);
         const sortedLibraryCards = [...playerLibraryCards].sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
 
-        if (!libraryPos || sortedLibraryCards.length === 0) return null;
+        if (!libraryPos || sortedLibraryCards.length === 0) {
+          return null;
+        }
 
         return (
           <div
@@ -108,16 +112,6 @@ const Library = ({
                 pointerEvents: 'auto',
               }}
               onPointerDown={(e) => {
-                console.log('[Library] onPointerDown container', {
-                  libraryOwnerName: player.name,
-                  currentPlayerName: playerName,
-                  matches: player.name === playerName,
-                  button: e.button,
-                  shiftKey: e.shiftKey,
-                  cardsLength: sortedLibraryCards.length,
-                  target: (e.target as HTMLElement).tagName,
-                });
-
                 if (canInteract) {
                   // Se for botão direito, não fazer nada (abre menu de contexto)
                   if (e.button === 2) return;
@@ -128,12 +122,10 @@ const Library = ({
                     e.stopPropagation();
                     e.preventDefault();
                     const topCard = sortedLibraryCards[0];
-                    console.log('[Library] Shift+arrastar carta individual do container:', topCard.name);
                     startDrag(topCard, e);
                     return; // IMPORTANTE: retornar para não executar o código abaixo
                   }
                   // Caso contrário, arrastar o stack inteiro
-                  console.log('[Library] Arrastando stack inteiro');
                   e.preventDefault();
                   e.stopPropagation();
                   startLibraryDrag(player.name, e);
@@ -162,11 +154,6 @@ const Library = ({
                   onPointerDown={(e) => {
                     // Só processar se for a primeira carta (topo do stack)
                     if (index === 0 && isCurrentPlayer) {
-                      console.log('[Library] onPointerDown carta', {
-                        cardName: card.name,
-                        button: e.button,
-                        shiftKey: e.shiftKey,
-                      });
                       // Se for botão do meio, fazer zoom
                       if (e.button === 1 && handleCardZoom) {
                         e.stopPropagation();
@@ -178,7 +165,6 @@ const Library = ({
                       if (e.button === 0 && e.shiftKey) {
                         e.stopPropagation();
                         e.preventDefault();
-                        console.log('[Library] Shift+arrastar carta individual do stack:', card.name);
                         startDrag(card, e);
                         return; // IMPORTANTE: retornar para não propagar
                       }

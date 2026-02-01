@@ -58,7 +58,6 @@ const Login = () => {
       });
       setUser(null);
     } catch (err) {
-      console.error('Logout error:', err);
     }
   };
 

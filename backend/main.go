@@ -82,6 +82,14 @@ type RoomHostMessagePayload struct {
 	Message        interface{} `json:"message"`
 }
 
+type RoomEventPayload struct {
+	RoomID     string          `json:"roomId"`
+	EventType  string          `json:"eventType"`
+	EventData  json.RawMessage `json:"eventData"`
+	PlayerID   string          `json:"playerId"`
+	PlayerName string          `json:"playerName"`
+}
+
 type RoomClientJoinedPayload struct {
 	RoomID     string `json:"roomId"`
 	PlayerID   string `json:"playerId"`
@@ -447,6 +455,20 @@ func (a *App) handleWSMessage(client *WSClient, message WSMessage) {
 			Type:    "room:host_message",
 			Payload: marshalPayload(payload.Message),
 		})
+	case "room:save_event":
+		var payload RoomEventPayload
+		if err := json.Unmarshal(message.Payload, &payload); err != nil {
+			a.send(client.id, WSMessage{Type: "room:error", Payload: marshalPayload(ErrorPayload{Message: "invalid payload"})})
+			return
+		}
+		if payload.RoomID == "" || strings.TrimSpace(payload.EventType) == "" || payload.EventData == nil {
+			a.send(client.id, WSMessage{Type: "room:error", Payload: marshalPayload(ErrorPayload{Message: "roomId, eventType, and eventData are required"})})
+			return
+		}
+		if err := a.storeRoomEvent(payload); err != nil {
+			a.send(client.id, WSMessage{Type: "room:error", Payload: marshalPayload(ErrorPayload{Message: "failed to save event"})})
+			return
+		}
 	default:
 		a.send(client.id, WSMessage{Type: "room:error", Payload: marshalPayload(ErrorPayload{Message: "unknown message"})})
 	}
@@ -988,29 +1010,34 @@ func (a *App) handleSaveRoomEvent(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "roomId is required"})
 		return
 	}
-	var payload roomEventPayload
+	var payload RoomEventPayload
 	if err := decodeJSON(r, &payload); err != nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "Invalid request"})
 		return
 	}
+	payload.RoomID = roomID
 	if strings.TrimSpace(payload.EventType) == "" || payload.EventData == nil {
 		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "roomId, eventType, and eventData are required"})
 		return
 	}
-	_, _ = a.db.Exec(`
-		INSERT INTO rooms (room_id, board_state, updated_at)
-		VALUES (?, ?, CURRENT_TIMESTAMP)
-		ON CONFLICT(room_id) DO NOTHING
-	`, roomID, "{}")
-	_, err := a.db.Exec(`
-		INSERT INTO room_events (room_id, event_type, event_data, player_id, player_name)
-		VALUES (?, ?, ?, ?, ?)
-	`, roomID, payload.EventType, string(payload.EventData), nullIfEmpty(payload.PlayerID), nullIfEmpty(payload.PlayerName))
-	if err != nil {
+	if err := a.storeRoomEvent(payload); err != nil {
 		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "Failed to save event"})
 		return
 	}
 	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
+}
+
+func (a *App) storeRoomEvent(payload RoomEventPayload) error {
+	_, _ = a.db.Exec(`
+		INSERT INTO rooms (room_id, board_state, updated_at)
+		VALUES (?, ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(room_id) DO NOTHING
+	`, payload.RoomID, "{}")
+	_, err := a.db.Exec(`
+		INSERT INTO room_events (room_id, event_type, event_data, player_id, player_name)
+		VALUES (?, ?, ?, ?, ?)
+	`, payload.RoomID, payload.EventType, string(payload.EventData), nullIfEmpty(payload.PlayerID), nullIfEmpty(payload.PlayerName))
+	return err
 }
 
 func (a *App) handleLoadRoomEvents(w http.ResponseWriter, r *http.Request) {

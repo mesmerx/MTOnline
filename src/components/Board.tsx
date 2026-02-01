@@ -529,7 +529,7 @@ const Board = () => {
   
   // Combinar players reais com simulados
   const allPlayers = useMemo(() => {
-    return simulatedPlayers.length > 0 
+    return simulatedPlayers.length > 0
       ? [...players, ...simulatedPlayers]
       : players;
   }, [players, simulatedPlayers]);
@@ -733,7 +733,6 @@ const Board = () => {
         
         if (recentDuplicate) {
           // Se encontrou um evento idêntico muito recente, não adicionar (evitar duplicata)
-          console.log(`[EventLog] Ignorando ${type} duplicado para ${cardId} (dentro de 500ms)`);
           return prev;
         }
       }
@@ -794,7 +793,6 @@ const Board = () => {
           }, 2000);
         }
       } catch (err) {
-        console.error('Erro ao copiar eventos gravados:', err);
         // Fallback
         const textArea = document.createElement('textarea');
         textArea.value = fullText;
@@ -805,7 +803,6 @@ const Board = () => {
         try {
           document.execCommand('copy');
         } catch (fallbackErr) {
-          console.error('Error in copy fallback:', fallbackErr);
         }
         document.body.removeChild(textArea);
       }
@@ -861,7 +858,6 @@ const Board = () => {
         }, 2000);
       }
     } catch (err) {
-      console.error('Erro ao copiar logs:', err);
       // Fallback para navegadores mais antigos
       const textArea = document.createElement('textarea');
       textArea.value = logText;
@@ -884,7 +880,6 @@ const Board = () => {
           }, 2000);
         }
       } catch (fallbackErr) {
-        console.error('Error in copy fallback:', fallbackErr);
       }
       document.body.removeChild(textArea);
     }
@@ -896,6 +891,7 @@ const Board = () => {
   const handCards = useMemo(() => board.filter((c) => c.zone === 'hand'), [board]);
   const cemeteryCards = useMemo(() => board.filter((c) => c.zone === 'cemetery'), [board]);
   const exileCards = useMemo(() => board.filter((c) => c.zone === 'exile'), [board]);
+
   
   // Memoizar handCards do player atual para evitar recálculos
   const playerHandCards = useMemo(() => 
@@ -1088,9 +1084,11 @@ const Board = () => {
   };
 
   const getPlayerArea = useCallback((ownerName: string) => {
-    if (!boardRef.current || allPlayers.length === 0) return null;
+    if (!boardRef.current) return null;
     const playerIndex = allPlayers.findIndex((p) => p.name === ownerName);
-    if (playerIndex === -1) return null;
+    if (playerIndex === -1) {
+      return null;
+    }
 
     // No modo separated, retornar tamanho base (1920x1080) já que o scale é aplicado no container
     if (viewMode === 'separated') {
@@ -1275,6 +1273,14 @@ const Board = () => {
     if (!area) return null;
     const EXILE_CARD_HEIGHT = 140;
     
+    // Prefer local position while dragging/latency.
+    if (exilePositions[ownerName]) {
+      return {
+        x: exilePositions[ownerName].x,
+        y: exilePositions[ownerName].y,
+      };
+    }
+
     // Primeiro, verificar se há posição no store (sincronizada entre peers)
     if (storeExilePositions[ownerName]) {
       return storeExilePositions[ownerName];
@@ -1457,18 +1463,10 @@ const Board = () => {
 
       // Ignorar se foi botão direito ou botão do meio
       if (event.button === 1 || event.button === 2) {
-      console.log('[Board] handleUp: Ignoring because it was right/middle click');
         dragStateRef.current = null;
         setIsDragging(false);
         return;
       }
-
-      console.log('[Board] handleUp chamado:', {
-        cardId: dragState.cardId,
-        hasMoved: dragState.hasMoved,
-        isDragging,
-        button: event.button,
-      });
 
       // Detectar zona ao soltar e mudar se necessário
       if (dragState.hasMoved && boardRef.current) {
@@ -1507,13 +1505,6 @@ const Board = () => {
           
           // Se detectou uma zona diferente da atual, mudar
           if (detectedZone.zone && detectedZone.zone !== card.zone) {
-            console.log('[Board] handleUp: Mudando zona da carta:', {
-                cardId: card.id,
-                cardName: card.name,
-              from: card.zone,
-              to: detectedZone.zone,
-            });
-            
             let position: Point = { x: 0, y: 0 };
             
             if (detectedZone.zone === 'battlefield') {
@@ -1636,35 +1627,15 @@ const Board = () => {
         const currentBoard = useGameStore.getState().board;
         const card = currentBoard.find((c) => c.id === cardId);
         
-        console.log('[Board] handleUp: Didn\'t move, checking whether to tap:', {
-          cardId,
-          card: card ? { id: card.id, name: card.name, zone: card.zone, ownerId: card.ownerId, tapped: card.tapped } : null,
-          playerId,
-        });
-        
         if (card && card.zone === 'battlefield' && card.ownerId === playerName) {
-          console.log('[Board] handleUp: Fazendo tap na carta:', {
-            cardId: card.id,
-            cardName: card.name,
-            currentTapped: card.tapped,
-          });
           toggleTap(cardId);
         } else {
-          console.log('[Board] handleUp: Didn\'t tap because:', {
-            cardExists: !!card,
-            zone: card?.zone,
-            ownerId: card?.ownerId,
-            playerId,
-            isBattlefield: card?.zone === 'battlefield',
-            isOwner: card?.ownerId === playerName,
-          });
         }
         
         if (clickBlockTimeoutRef.current) {
           clearTimeout(clickBlockTimeoutRef.current.timeoutId);
           clickBlockTimeoutRef.current = null;
         }
-        console.log('[Board] handleUp: Didn\'t move, clearing state immediately');
         return;
       }
 
@@ -1676,7 +1647,6 @@ const Board = () => {
         clickBlockTimeoutRef.current = null;
       }, CLICK_BLOCK_DELAY);
       clickBlockTimeoutRef.current = { cardId: dragState.cardId, timeoutId };
-      console.log('[Board] handleUp: Moved, blocking clicks for', CLICK_BLOCK_DELAY, 'ms');
     };
 
     window.addEventListener('pointermove', handleMove);
@@ -1706,7 +1676,6 @@ const Board = () => {
     const currentBoard = useGameStore.getState().board;
     const currentCard = currentBoard.find((c) => c.id === card.id);
     if (!currentCard) {
-      console.log('[Board] startDrag: Card not found on board, canceling drag');
       return;
     }
     
@@ -1825,24 +1794,9 @@ const Board = () => {
       position: card.position,
       tapped: card.tapped,
     });
-    
-    console.log('[Board] handleCardClick chamado:', {
-      cardId: card.id,
-      cardName: card.name,
-      zone: card.zone,
-      ownerId: card.ownerId,
-      playerId,
-      isDragging,
-      clickBlockTimeout: clickBlockTimeoutRef.current,
-      dragStartedFromHand: dragStartedFromHandRef.current,
-      dragStateRef: dragStateRef.current,
-      eventType: event.type,
-      target: (event.target as HTMLElement)?.className,
-    });
 
     // Bloquear clique apenas se há um drag realmente ativo
     if (isDragging) {
-      console.log('[Board] Blocked: isDragging = true');
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1851,7 +1805,6 @@ const Board = () => {
     // Bloquear clique apenas se acabou de fazer drag com movimento na mesma carta
     // (o timeout só é definido se houve movimento real)
     if (clickBlockTimeoutRef.current && clickBlockTimeoutRef.current.cardId === card.id) {
-      console.log('[Board] Blocked: clickBlockTimeout active for this card');
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1859,7 +1812,6 @@ const Board = () => {
 
     // Bloquear se há drag da hand ativo
     if (showHand && dragStartedFromHandRef.current) {
-      console.log('[Board] Blocked: dragStartedFromHand = true');
       event.preventDefault();
       event.stopPropagation();
       dragStartedFromHandRef.current = false;
@@ -1874,10 +1826,6 @@ const Board = () => {
     const currentBoard = useGameStore.getState().board;
     const currentCard = currentBoard.find((c) => c.id === card.id);
     if (currentCard && currentCard.zone !== card.zone) {
-      console.log('[Board] Blocked: card changed zone', {
-        cardZone: card.zone,
-        currentZone: currentCard.zone,
-      });
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1887,7 +1835,6 @@ const Board = () => {
     const target = event.target as HTMLElement;
     const clickedOnHandArea = target.closest('.hand-area, .hand-cards, .hand-card-wrapper');
     if (clickedOnHandArea && card.zone === 'battlefield') {
-      console.log('[Board] Blocked: clicked on hand area');
       event.preventDefault();
       event.stopPropagation();
       return;
@@ -1898,11 +1845,6 @@ const Board = () => {
 
     // Se a carta está no board, fazer tap/untap
     if (card.zone === 'battlefield' && canInteractWithCard(card.ownerId)) {
-      console.log('[Board] Fazendo tap na carta:', {
-        cardId: card.id,
-        cardName: card.name,
-        currentTapped: card.tapped,
-      });
       addEventLog('TOGGLE_TAP', `Toggle tap: ${card.name} (${card.tapped ? 'tapped' : 'untapped'} → ${!card.tapped ? 'tapped' : 'untapped'})`, card.id, card.name, {
         from: card.tapped,
         to: !card.tapped,
@@ -1913,7 +1855,6 @@ const Board = () => {
 
     // Se está na mão, colocar no board
     if (card.zone === 'hand' && canInteractWithCard(card.ownerId) && showHand) {
-      console.log('[Board] Placing card from hand onto board:', card.id);
       const playerArea = getPlayerArea(playerName);
       if (playerArea) {
         const position = {
@@ -1930,7 +1871,6 @@ const Board = () => {
       return;
     }
 
-    console.log('[Board] No action taken for the click');
   };
 
   const handleCardZoom = (card: CardOnBoard, event: React.PointerEvent) => {
@@ -2113,18 +2053,8 @@ const Board = () => {
       ownerId: card.ownerId,
     });
     
-    console.log('[Board] handleCardContextMenu chamado:', {
-      cardId: card.id,
-      cardName: card.name,
-      zone: card.zone,
-      ownerId: card.ownerId,
-      playerId,
-      isDragging,
-    });
-    
     // Não bloquear context menu por drag, apenas se está realmente arrastando
     if (isDragging) {
-      console.log('[Board] handleCardContextMenu: Blocked because isDragging = true');
       return;
     }
     
@@ -2478,7 +2408,6 @@ const Board = () => {
     if (event.button === 2) return;
     // Se Shift estiver pressionado, não iniciar drag do stack (deixar o Library component lidar com carta individual)
     if (event.shiftKey) {
-      console.log('[Board] startLibraryDrag: Shift pressionado, ignorando drag do stack');
       return;
     }
     event.preventDefault();
@@ -2721,21 +2650,17 @@ const Board = () => {
 
   // Sistema de drag para cemitério
   const startCemeteryDrag = (targetPlayerName: string, event: ReactPointerEvent) => {
-    console.log('[Board] startCemeteryDrag chamado', { targetPlayerName, currentPlayerName: playerName, matches: targetPlayerName === playerName });
     
     if ((event.target as HTMLElement).closest('button')) {
-      console.log('[Board] Blocked - button');
       return;
     }
     // Não iniciar drag com botão direito (button 2)
     if (event.button === 2) {
-      console.log('[Board] Blocked - right click');
       return;
     }
     // A verificação de permissão já é feita no componente Cemetery
     event.preventDefault();
     if (!boardRef.current) {
-      console.log('[Board] Blocked - no boardRef');
       return;
     }
 
@@ -2916,19 +2841,15 @@ const Board = () => {
 
   // Sistema de drag para exílio
   const startExileDrag = (targetPlayerName: string, event: ReactPointerEvent) => {
-    console.log('[Board] startExileDrag called', { targetPlayerName, currentPlayerName: playerName, matches: targetPlayerName === playerName });
     
     if ((event.target as HTMLElement).closest('button')) {
-      console.log('[Board] Blocked - button');
       return;
     }
     if (event.button === 2) {
-      console.log('[Board] Blocked - right click');
       return;
     }
     event.preventDefault();
     if (!boardRef.current) {
-      console.log('[Board] Blocked - no boardRef');
       return;
     }
 
@@ -2955,12 +2876,13 @@ const Board = () => {
         targetPlayerName,
         rect
       );
-      if (!coords) {
-        cursorX = exilePos.x;
-        cursorY = exilePos.y;
-      } else {
+      if (coords) {
         cursorX = coords.x;
         cursorY = coords.y;
+      } else {
+        const fallback = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+        cursorX = fallback.x;
+        cursorY = fallback.y;
       }
     } else {
       const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
@@ -2992,9 +2914,14 @@ const Board = () => {
 
       if (viewMode === 'separated') {
         const coords = convertMouseToSeparatedCoordinates(event.clientX, event.clientY, draggingExile.playerName, rect);
-        if (!coords) return;
-        cursorX = coords.x;
-        cursorY = coords.y;
+        if (coords) {
+          cursorX = coords.x;
+          cursorY = coords.y;
+        } else {
+          const fallback = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+          cursorX = fallback.x;
+          cursorY = fallback.y;
+        }
       } else {
         const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
         cursorX = coords.x;
@@ -3436,21 +3363,10 @@ const Board = () => {
           // Verificar se está arrastando
           const isDragging = dragStateRef.current !== null;
           
-          // Debug: log para verificar se o evento está sendo capturado
-          console.log('[Board] onContextMenu', {
-            target: target.tagName,
-            className: target.className,
-            isInteractive: !!isInteractive,
-            isDragging,
-            draggingCemetery: !!draggingCemetery,
-            draggingLibrary: !!draggingLibrary,
-          });
-          
           // Se clicou em lugar vazio, abrir menu do board
           if (!isInteractive && !draggingCemetery && !draggingLibrary && !isDragging) {
             e.preventDefault();
             e.stopPropagation();
-            console.log('[Board] Abrindo menu do board');
             setBoardContextMenu({ x: e.clientX, y: e.clientY });
           }
         }}
@@ -3470,31 +3386,34 @@ const Board = () => {
           }
         }}
       >
-        {/* Container escalado baseado em 1080p */}
-        {boardRef.current && (() => {
-          const rect = boardRef.current!.getBoundingClientRect();
-          const scale = getBoardScale();
-          const scaledWidth = BASE_BOARD_WIDTH * scale;
-          const scaledHeight = BASE_BOARD_HEIGHT * scale;
-          const offsetX = (rect.width - scaledWidth) / 2;
-          const offsetY = (rect.height - scaledHeight) / 2;
-          
-          return (
-              <div
-                style={{
-                position: 'absolute',
-                left: `${offsetX}px`,
-                top: `${offsetY}px`,
-                width: `${BASE_BOARD_WIDTH}px`,
-                height: `${BASE_BOARD_HEIGHT}px`,
-                transform: `scale(${scale})`,
-                transformOrigin: 'top left',
-              }}
-              >
-              {renderBoardContent()}
-              </div>
-          );
-        })()}
+        {/* Container escalado baseado em 1080p (skip for separated view) */}
+        {boardRef.current && (viewMode === 'separated'
+          ? renderBoardContent()
+          : (() => {
+              const rect = boardRef.current!.getBoundingClientRect();
+              const scale = getBoardScale();
+              const scaledWidth = BASE_BOARD_WIDTH * scale;
+              const scaledHeight = BASE_BOARD_HEIGHT * scale;
+              const offsetX = (rect.width - scaledWidth) / 2;
+              const offsetY = (rect.height - scaledHeight) / 2;
+              
+              return (
+                <div
+                  style={{
+                    position: 'absolute',
+                    left: `${offsetX}px`,
+                    top: `${offsetY}px`,
+                    width: `${BASE_BOARD_WIDTH}px`,
+                    height: `${BASE_BOARD_HEIGHT}px`,
+                    transform: `scale(${scale})`,
+                    transformOrigin: 'top left',
+                  }}
+                >
+                  {renderBoardContent()}
+                </div>
+              );
+            })()
+        )}
               
         {/* Painel de Log de Eventos - Só mostra se debug mode estiver ativo */}
         {showDebugMode && (

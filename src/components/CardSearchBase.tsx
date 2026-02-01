@@ -112,25 +112,12 @@ const CardSearchBase = ({
   }, [cards, playerName, searchQuery, showAllWhenEmpty, sortCards, maxCardsToShow, ignoreMaxCardsLimit]);
 
   const handleCardSelect = (card: CardOnBoard) => {
-    console.log('[CardSearchBase] handleCardSelect chamado:', {
-      cardId: card.id,
-      cardName: card.name,
-      draggedCardId,
-      searchQuery,
-    });
     setSelectedCard(card);
     setShowZoneMenu(true);
-    console.log('[CardSearchBase] Menu should be visible now');
   };
 
   const handleMoveToZone = (zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile') => {
-    console.log('[CardSearchBase] handleMoveToZone chamado:', {
-      zone,
-      selectedCard: selectedCard?.id,
-      selectedCardName: selectedCard?.name,
-    });
     if (!selectedCard) {
-      console.log('[CardSearchBase] handleMoveToZone: selectedCard is null, returning');
       return;
     }
     
@@ -143,7 +130,6 @@ const CardSearchBase = ({
     }
     
     // Para outras zonas, mover diretamente
-    console.log('[CardSearchBase] Chamando onMoveCard:', selectedCard.id, zone);
     onMoveCard(selectedCard.id, zone);
     setSelectedCard(null);
     setShowZoneMenu(false);
@@ -152,13 +138,7 @@ const CardSearchBase = ({
   };
 
   const handlePlacementChoice = (placement: 'top' | 'bottom' | 'random') => {
-    console.log('[CardSearchBase] handlePlacementChoice chamado:', {
-      placement,
-      pendingZone,
-      selectedCard: selectedCard?.id,
-    });
     if (!selectedCard || !pendingZone) {
-      console.log('[CardSearchBase] handlePlacementChoice: selectedCard or pendingZone is null');
       return;
     }
     
@@ -167,7 +147,6 @@ const CardSearchBase = ({
     // Para library, 'top' significa topo (última carta), 'bottom' significa fundo (primeira carta)
     const libraryPlace: 'top' | 'bottom' | 'random' = placement;
     
-    console.log('[CardSearchBase] Chamando onMoveCard com placement:', selectedCard.id, pendingZone, libraryPlace);
     onMoveCard(selectedCard.id, pendingZone, libraryPlace);
     setSelectedCard(null);
     setShowZoneMenu(false);
@@ -262,18 +241,9 @@ const CardSearchBase = ({
             // Queremos inserir após ela, então usamos targetIndexInFullList (onde ela estava originalmente)
             newIndex = targetIndexInFullList;
           }
-          console.log('[CardSearchBase] Reorder library:', {
-            draggedCard: draggedCard.name,
-            targetCard: targetCard.name,
-            draggedIndexInFullList,
-            targetIndexInFullList,
-            newIndex,
-            direction: draggedIndexInFullList > targetIndexInFullList ? 'up' : 'down',
-          });
           onReorder(draggedCardId, newIndex);
         } else {
           // Fallback: usar targetIndex se não encontrar na lista completa
-          console.warn('[CardSearchBase] Could not find cards in full list, using targetIndex:', targetIndex);
           onReorder(draggedCardId, targetIndex);
         }
       }
@@ -450,11 +420,6 @@ const CardSearchBase = ({
                 key={card.id}
                 draggable={canReorder}
                 onDragStart={(e) => {
-                  console.log('[CardSearchBase] onDragStart:', {
-                    cardId: card.id,
-                    canReorder,
-                    searchQuery,
-                  });
                   if (canReorder) {
                     handleDragStart(card.id, e as any);
                     e.dataTransfer.effectAllowed = 'move';
@@ -480,21 +445,12 @@ const CardSearchBase = ({
                   setDragOverIndex(null);
                 }}
                 onClick={(e) => {
-                  console.log('[CardSearchBase] onClick no div pai:', {
-                    cardId: card.id,
-                    cardName: card.name,
-                    draggedCardId,
-                    canReorder,
-                    searchQuery,
-                  });
                   // Só abrir menu se não estiver arrastando
                   // Se canReorder é true mas não há draggedCardId, significa que foi apenas um clique
                   if (!draggedCardId) {
                     e.stopPropagation();
-                    console.log('[CardSearchBase] Chamando handleCardSelect do div pai');
                     handleCardSelect(card);
                   } else {
-                    console.log('[CardSearchBase] Blocked: draggedCardId exists');
                   }
                 }}
                 style={{
@@ -545,19 +501,10 @@ const CardSearchBase = ({
                     // O drag só será iniciado quando realmente arrastar, não em um clique simples
                   }}
                   onClick={(e) => {
-                    console.log('[CardSearchBase] onClick no CardToken:', {
-                      cardId: card.id,
-                      cardName: card.name,
-                      searchQuery,
-                      hasSearchQuery: !!searchQuery.trim(),
-                    });
                     // Se houver busca, garantir que o clique funcione
                     if (searchQuery.trim()) {
                       e.stopPropagation();
-                      console.log('[CardSearchBase] Chamando handleCardSelect do CardToken (com busca)');
                       handleCardSelect(card);
-                    } else {
-                      console.log('[CardSearchBase] Deixando evento borbulhar para div pai');
                     }
                     // Caso contrário, deixar o evento borbulhar para o div pai
                   }}

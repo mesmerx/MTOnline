@@ -75,7 +75,6 @@ export const loadDecks = (): SavedDeck[] => {
     const parsed = JSON.parse(raw) as SavedDeck[];
     return Array.isArray(parsed) ? parsed : [];
   } catch (error) {
-    console.warn('Failed to load decks from storage', error);
     return [];
   }
 };

@@ -1,4 +1,4 @@
-import { useState } from 'react';
+import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
 import { parseDecklist } from '../lib/deck';
 import type { DeckEntry } from '../lib/deck';
@@ -16,9 +16,14 @@ const DeckManager = () => {
 
   const saveDeckDefinition = useGameStore((state) => state.saveDeckDefinition);
   const deleteDeckDefinition = useGameStore((state) => state.deleteDeckDefinition);
+  const hydrateDecks = useGameStore((state) => state.hydrateDecks);
   const savedDecks = useGameStore((state) => state.savedDecks);
   const addCard = useGameStore((state) => state.addCardToBoard);
   const replaceLibrary = useGameStore((state) => state.replaceLibrary);
+
+  useEffect(() => {
+    hydrateDecks();
+  }, [hydrateDecks]);
 
   const parse = (event: FormEvent) => {
     event.preventDefault();

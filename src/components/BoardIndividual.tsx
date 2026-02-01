@@ -84,7 +84,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         libraryCards={filteredLibraryCards}
         players={filteredPlayers}
         getPlayerArea={(id) => {
-          if (id === selectedPlayerId) {
+          if (id === selectedPlayerId || id === selectedPlayerName) {
             return {
               x: 0,
               y: 0,

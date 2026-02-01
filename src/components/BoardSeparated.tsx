@@ -76,19 +76,15 @@ export const BoardSeparated = (props: BoardViewProps) => {
         const availableWidth = windowWidth;
         const availableHeight = windowHeight;
 
-        // Manter proporção 16:9 sempre usando 100% da largura disponível
-        const aspectRatio = 16 / 9;
-
-        // Sempre usar 100% da largura disponível e calcular altura para manter 16:9
-        const playerAreaWidth = availableWidth;
-        const playerAreaHeight = availableWidth / aspectRatio;
-
-        // Centralizar verticalmente
-        const offsetX = 0;
+        // Match individual view: scale by the min dimension and center both axes.
+        const scale = Math.min(
+          availableWidth / BASE_BOARD_WIDTH,
+          availableHeight / BASE_BOARD_HEIGHT,
+        );
+        const playerAreaWidth = BASE_BOARD_WIDTH * scale;
+        const playerAreaHeight = BASE_BOARD_HEIGHT * scale;
+        const offsetX = (availableWidth - playerAreaWidth) / 2;
         const offsetY = (availableHeight - playerAreaHeight) / 2;
-
-        // Calcular scale baseado na largura
-        const scale = playerAreaWidth / BASE_BOARD_WIDTH;
 
         const playerBattlefieldCards = battlefieldCards.filter(c => c.ownerId === player.name);
         const playerLibraryCards = libraryCards.filter(c => c.ownerId === player.name);

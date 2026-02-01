@@ -133,16 +133,6 @@ const Cemetery = ({
                 pointerEvents: 'auto',
               }}
               onPointerDown={(e) => {
-                console.log('[Cemetery] onPointerDown', {
-                  cemeteryOwnerName: player.name,
-                  currentPlayerName: playerName,
-                  matches: player.name === playerName,
-                  button: e.button,
-                  shiftKey: e.shiftKey,
-                  cardsLength: cards.length,
-                  allPlayers: players.map(p => ({ id: p.id, name: p.name })),
-                });
-
                 // Verificar se o player dono do cemitério é o player atual
                 // IMPORTANTE: Cada player só pode mover seu próprio cemitério
                 // O playerName passado como prop é o nome do player atual do store
@@ -164,17 +154,11 @@ const Cemetery = ({
                     startDrag(topCard, e);
                   } else {
                     // Caso contrário, arrastar o stack inteiro
-                    console.log('[Cemetery] Chamando startCemeteryDrag', player.name);
                     e.preventDefault();
                     e.stopPropagation();
                     startCemeteryDrag(player.name, e);
                   }
                 } else {
-                  console.log('[Cemetery] Blocked - not the current player', {
-                    cemeteryOwnerId: player.name,
-                    currentPlayerName: playerName,
-                    playersCount: players.length,
-                  });
                 }
               }}
               onContextMenu={(e) => {

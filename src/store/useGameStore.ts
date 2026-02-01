@@ -172,10 +172,23 @@ const API_URL = import.meta.env.VITE_API_URL || 'http://localhost:3000';
 // Funções para event sourcing - salvar e carregar eventos
 
 // Salvar um evento no backend
-const saveEvent = async (roomId: string, eventType: string, eventData: CardAction, playerId?: string, playerName?: string): Promise<void> => {
+const saveEvent = async (roomId: string, eventType: string, eventData: CardAction, playerId?: string, playerName?: string, socket?: WebSocket): Promise<void> => {
   if (!roomId) return;
   
   try {
+    if (socket && socket.readyState === WebSocket.OPEN) {
+      socket.send(JSON.stringify({
+        type: 'room:save_event',
+        payload: {
+          roomId,
+          eventType,
+          eventData,
+          playerId,
+          playerName,
+        },
+      }));
+      return;
+    }
     await fetch(`${API_URL}/api/rooms/${roomId}/events`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
@@ -188,7 +201,6 @@ const saveEvent = async (roomId: string, eventType: string, eventData: CardActio
       }),
     });
   } catch (error) {
-    console.warn('[Store] Erro ao salvar evento:', error);
   }
 };
 
@@ -417,7 +429,6 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
       exilePositions,
     };
   } catch (error) {
-    console.warn('[Store] Erro ao carregar eventos do room:', error);
     return null;
   }
 };
@@ -1175,7 +1186,6 @@ export const useGameStore = create<GameStore>((set, get) => {
         };
       }
     } catch (error) {
-      console.warn('[Store] Erro ao carregar estado persistido:', error);
     }
     
     return {
@@ -1198,7 +1208,6 @@ export const useGameStore = create<GameStore>((set, get) => {
         isHost,
       }));
     } catch (error) {
-      console.warn('[Store] Erro ao salvar estado persistido:', error);
     }
   };
 
@@ -1208,7 +1217,6 @@ export const useGameStore = create<GameStore>((set, get) => {
     try {
       localStorage.removeItem('mtonline-room-state');
     } catch (error) {
-      console.warn('[Store] Erro ao limpar estado persistido:', error);
     }
   };
 
@@ -1446,9 +1454,9 @@ export const useGameStore = create<GameStore>((set, get) => {
           'CARD_ACTION',
           action,
           stateAfter.playerId,
-          stateAfter.playerName
-        ).catch((err) => {
-          console.warn('[Store] Erro ao salvar evento (não crítico):', err);
+          stateAfter.playerName,
+          stateAfter.socket
+        ).catch(() => {
         });
       }
       return;
@@ -1581,9 +1589,10 @@ export const useGameStore = create<GameStore>((set, get) => {
         };
       }
       
-      // Atualizar posições se for moveLibrary ou moveCemetery
+      // Atualizar posições se for moveLibrary, moveCemetery ou moveExile
       let newCemeteryPositions = state.cemeteryPositions;
       let newLibraryPositions = state.libraryPositions;
+      let newExilePositions = state.exilePositions;
       
       if (action.kind === 'moveCemetery' && 'playerName' in action && 'position' in action) {
         newCemeteryPositions = {
@@ -1597,6 +1606,11 @@ export const useGameStore = create<GameStore>((set, get) => {
           ...state.libraryPositions,
           [action.playerName]: action.position,
         };
+      } else if (action.kind === 'moveExile' && 'playerName' in action && 'position' in action) {
+        newExilePositions = {
+          ...state.exilePositions,
+          [action.playerName]: action.position,
+        };
       }
       
       // Aplicar ações de contadores
@@ -1607,6 +1621,7 @@ export const useGameStore = create<GameStore>((set, get) => {
         counters: newCounters,
         cemeteryPositions: newCemeteryPositions,
         libraryPositions: newLibraryPositions,
+        exilePositions: newExilePositions,
       };
     });
     
@@ -1646,6 +1661,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           counters: stateAfter.counters,
           cemeteryPositions: stateAfter.cemeteryPositions,
           libraryPositions: stateAfter.libraryPositions,
+          exilePositions: stateAfter.exilePositions,
         }, shouldExclude ? excludePlayerId : undefined);
       }
     }
@@ -1658,9 +1674,9 @@ export const useGameStore = create<GameStore>((set, get) => {
         'CARD_ACTION',
         action,
         stateAfter.playerId,
-        stateAfter.playerName
-      ).catch((err) => {
-        console.warn('[Store] Erro ao salvar evento (não crítico):', err);
+        stateAfter.playerName,
+        stateAfter.socket
+      ).catch(() => {
       });
     }
   };
@@ -1876,7 +1892,6 @@ export const useGameStore = create<GameStore>((set, get) => {
               .map(([name]) => name);
             
             if (duplicateNames.length > 0) {
-              console.warn('[ROOM_STATE] Nomes duplicados detectados:', duplicateNames);
             }
             
             // Remover duplicatas por ID (manter apenas o primeiro de cada ID)
@@ -2139,8 +2154,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     const hasNoConnection = !state.hostConnection || !state.hostConnection.open;
     
     if (hasNoHost && hasNoConnection) {
-      // Processar localmente apenas ações de player life e commander damage
-      // Outras ações requerem sincronização e não devem ser processadas sem host
+      // Process only life/commander actions locally; others require a room.
       if (action.kind === 'setPlayerLife' || action.kind === 'setCommanderDamage' || action.kind === 'adjustCommanderDamage') {
         handleHostAction(action, skipEventSave);
         return;
@@ -2355,7 +2369,6 @@ export const useGameStore = create<GameStore>((set, get) => {
           // Servidor não disponível, usar modo offline
           set({ user: null, savedDecks: loadLocalDecks() });
         } else {
-          console.error('Auth check failed:', error);
           set({ user: null, savedDecks: loadLocalDecks() });
         }
       }
@@ -2386,7 +2399,6 @@ export const useGameStore = create<GameStore>((set, get) => {
           // Servidor não disponível, usar modo offline
           set({ savedDecks: loadLocalDecks() });
         } else {
-          console.error('Failed to load decks:', error);
         }
       }
     },
@@ -2419,7 +2431,6 @@ export const useGameStore = create<GameStore>((set, get) => {
           savedDecks: [newDeck, ...s.savedDecks],
         }));
       } catch (error) {
-        console.error('Failed to save deck:', error);
         throw error;
       }
     },
@@ -2447,7 +2458,6 @@ export const useGameStore = create<GameStore>((set, get) => {
           savedDecks: s.savedDecks.filter((deck) => deck.id !== deckId),
         }));
       } catch (error) {
-        console.error('Failed to delete deck:', error);
         throw error;
       }
     },
@@ -2460,7 +2470,6 @@ export const useGameStore = create<GameStore>((set, get) => {
           set({ publicDecks: decks });
         }
       } catch (error) {
-        console.error('Failed to load public decks:', error);
       }
     },
     createRoom: async (roomId: string, password: string) => {
@@ -2818,3 +2827,7 @@ export const useGameStore = create<GameStore>((set, get) => {
   
   return initialState;
 });
+
+if (import.meta.env.VITE_TEST_MODE === 'true' || import.meta.env.DEV) {
+  (globalThis as unknown as { __GAME_STORE__?: typeof useGameStore }).__GAME_STORE__ = useGameStore;
+}

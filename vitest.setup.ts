@@ -52,4 +52,15 @@ const wsControl = {
 };
 
 globalThis.__WS_CONTROL__ = wsControl;
-globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+
+// Force WebSocket to be mocked in all test environments (node + browser).
+try {
+  Object.defineProperty(globalThis, 'WebSocket', {
+    value: MockWebSocket as unknown as typeof WebSocket,
+    writable: true,
+    configurable: true,
+  });
+} catch {
+  // Fallback for environments where defineProperty is restricted.
+  globalThis.WebSocket = MockWebSocket as unknown as typeof WebSocket;
+}

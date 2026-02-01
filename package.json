@@ -10,6 +10,8 @@
     "backend:server": "cd backend && go run .",
     "dev:all": "concurrently \"pnpm backend:server\" \"pnpm dev\"",
     "test": "vitest run",
+    "test:browser": "playwright test",
+    "test:browser:ui": "playwright test --ui",
     "test:watch": "vitest"
   },
   "devDependencies": {
@@ -19,6 +21,7 @@
     "@types/cookie-parser": "^1.4.10",
     "@types/cors": "^2.8.19",
     "@types/express": "^5.0.6",
+    "@playwright/test": "^1.58.0",
     "@types/react": "^19.2.8",
     "@types/react-dom": "^19.2.3",
     "@vitejs/plugin-react": "^5.1.2",

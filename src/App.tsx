@@ -50,7 +50,6 @@ const App = () => {
 
       // Pequeno delay para garantir que o playerName foi definido
       setTimeout(() => {
-        console.log('[App] Tentando criar sala primeiro:', trimmedRoomId);
         createRoom(trimmedRoomId, trimmedPassword);
 
         // Timeout para detectar se o create falhou (peer ID já em uso ou outro erro)
@@ -65,13 +64,11 @@ const App = () => {
             currentRoomId === trimmedRoomId &&
             (currentError?.includes('taken') || currentError?.includes('unavailable') || currentError?.includes('ID'))
           ) {
-            console.log('[App] Create falhou (ID já em uso), tentando fazer join');
             // Limpar erro e tentar join
             useGameStore.setState({ error: undefined, status: 'idle' });
             joinRoom(trimmedRoomId, trimmedPassword);
           } else if (currentStatus === 'error' && currentRoomId === trimmedRoomId) {
             // Se houver outro tipo de erro após 3 segundos, também tentar join
-            console.log('[App] Create falhou, tentando fazer join como fallback');
             useGameStore.setState({ error: undefined, status: 'idle' });
             joinRoom(trimmedRoomId, trimmedPassword);
           }
