@@ -1,6 +1,6 @@
 import { useEffect, useState } from 'react';
 import type { FormEvent } from 'react';
-import { parseDecklist } from '../lib/deck';
+import { parseDecklist, classifyDeckEntry } from '../lib/deck';
 import type { DeckEntry } from '../lib/deck';
 import { fetchCardByCollector, fetchCardByName, fetchCardsBatch } from '../lib/scryfall';
 import type { BatchCardRequest } from '../lib/scryfall';
@@ -19,6 +19,8 @@ const DeckManager = () => {
   const hydrateDecks = useGameStore((state) => state.hydrateDecks);
   const savedDecks = useGameStore((state) => state.savedDecks);
   const addCard = useGameStore((state) => state.addCardToBoard);
+  const addCardToCommander = useGameStore((state) => state.addCardToCommander);
+  const addCardToTokens = useGameStore((state) => state.addCardToTokens);
   const replaceLibrary = useGameStore((state) => state.replaceLibrary);
 
   useEffect(() => {
@@ -59,38 +61,67 @@ const DeckManager = () => {
     setBusyLibrary(true);
     setError(undefined);
     try {
-      const requests: BatchCardRequest[] = targetEntries.flatMap((entry) =>
-        Array.from({ length: entry.quantity }).map(() => ({
-          name: entry.name,
-          setCode: entry.setCode,
-          collectorNumber: entry.collectorNumber,
-        })),
+      const expandedEntries = targetEntries.flatMap((entry) =>
+        Array.from({ length: entry.quantity }).map(() => entry),
       );
+      const requests: BatchCardRequest[] = expandedEntries.map((entry) => ({
+        name: entry.name,
+        setCode: entry.setCode,
+        collectorNumber: entry.collectorNumber,
+      }));
       const results = await fetchCardsBatch(requests);
       const errors: string[] = [];
-      const cards = results.flatMap((result, index) => {
+      type CardPayload = {
+        name: string;
+        oracleText?: string;
+        manaCost?: string;
+        typeLine?: string;
+        setName?: string;
+        imageUrl?: string;
+        backImageUrl?: string;
+      };
+      const libraryCards: CardPayload[] = [];
+      const commanderCards: CardPayload[] = [];
+      const tokenCards: CardPayload[] = [];
+
+      results.forEach((result, index) => {
+        const entry = expandedEntries[index];
         if ('error' in result) {
-          const request = (result.request as BatchCardRequest | undefined)?.name ?? requests[index]?.name ?? 'unknown';
+          const request = (result.request as BatchCardRequest | undefined)?.name ?? entry?.name ?? requests[index]?.name ?? 'unknown';
           errors.push(`${request}: ${result.error}`);
-          return [];
+          return;
         }
-        return [
-          {
-            name: result.name,
-            oracleText: result.oracleText,
-            manaCost: result.manaCost,
-            typeLine: result.typeLine,
-            setName: result.setName,
-            imageUrl: result.imageUrl,
-            backImageUrl: result.backImageUrl,
-          },
-        ];
+
+        const payload = {
+          name: result.name,
+          oracleText: result.oracleText,
+          manaCost: result.manaCost,
+          typeLine: result.typeLine,
+          setName: result.setName,
+          imageUrl: result.imageUrl,
+          backImageUrl: result.backImageUrl,
+        };
+
+        const placement = entry ? classifyDeckEntry(entry, result.typeLine) : 'library';
+
+        if (placement === 'commander') {
+          commanderCards.push(payload);
+        } else if (placement === 'tokens') {
+          tokenCards.push(payload);
+        } else {
+          libraryCards.push(payload);
+        }
       });
       if (errors.length > 0) {
         setError(`Some cards failed to load: ${errors.slice(0, 5).join('; ')}${errors.length > 5 ? '...' : ''}`);
       }
-      if (cards.length > 0) {
-        replaceLibrary(cards);
+      if (libraryCards.length > 0) {
+        replaceLibrary(libraryCards);
+      }
+      commanderCards.forEach((card) => addCardToCommander(card));
+      tokenCards.forEach((card) => addCardToTokens(card));
+      if (libraryCards.length === 0 && commanderCards.length === 0 && tokenCards.length === 0) {
+        setError('No valid cards found for library, commander, or tokens.');
       }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load deck into library');
@@ -106,14 +137,22 @@ const DeckManager = () => {
         entry.setCode && entry.collectorNumber
           ? await fetchCardByCollector(entry.setCode, entry.collectorNumber)
           : await fetchCardByName(entry.name, entry.setCode);
-      addCard({
+      const payload = {
         name: card.name,
         oracleText: card.oracleText,
         manaCost: card.manaCost,
         typeLine: card.typeLine,
         setName: card.setName,
         imageUrl: card.imageUrl,
-      });
+      };
+      const placement = classifyDeckEntry(entry, card.typeLine);
+      if (placement === 'commander') {
+        addCardToCommander(payload);
+      } else if (placement === 'tokens') {
+        addCardToTokens(payload);
+      } else {
+        addCard(payload);
+      }
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Unable to load card');
     } finally {

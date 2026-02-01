@@ -12,14 +12,20 @@ export interface BoardViewProps {
   libraryCards: CardOnBoard[];
   cemeteryCards: CardOnBoard[];
   exileCards: CardOnBoard[];
+  commanderCards: CardOnBoard[];
+  tokensCards: CardOnBoard[];
   storeLibraryPositions: Record<string, Point>;
   storeCemeteryPositions: Record<string, Point>;
   storeExilePositions: Record<string, Point>;
+  storeCommanderPositions: Record<string, Point>;
+  storeTokensPositions: Record<string, Point>;
   showHand: boolean;
   dragStateRef: RefObject<{ cardId: string; offsetX: number; offsetY: number; startX: number; startY: number; hasMoved: boolean } | null>;
   draggingLibrary: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   draggingCemetery: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   draggingExile: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
+  draggingCommander: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
+  draggingTokens: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   ownerName: (card: CardOnBoard) => string;
   handleCardClick: (card: CardOnBoard, event: React.MouseEvent) => void;
   handleCardContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
@@ -31,8 +37,10 @@ export interface BoardViewProps {
   startLibraryDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
   startCemeteryDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
   startExileDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
-  changeCardZone: (cardId: string, newZone: 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
-  detectZoneAtPosition: (x: number, y: number) => { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | null; ownerId?: string };
+  startCommanderDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
+  startTokensDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
+  changeCardZone: (cardId: string, newZone: 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | 'commander' | 'tokens', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  detectZoneAtPosition: (x: number, y: number) => { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | 'commander' | 'tokens' | null; ownerId?: string };
   reorderHandCard: (cardId: string, newIndex: number) => void;
   reorderLibraryCard: (cardId: string, newIndex: number) => void;
   dragStartedFromHandRef: RefObject<boolean>;
@@ -43,6 +51,8 @@ export interface BoardViewProps {
   getLibraryPosition: (playerName: string) => Point | null;
   getCemeteryPosition: (playerName: string) => Point | null;
   getExilePosition: (playerName: string) => Point | null;
+  getCommanderPosition: (playerName: string) => Point | null;
+  getTokensPosition: (playerName: string) => Point | null;
   handDragStateRef: MutableRefObject<{
     draggingHandCard: string | null;
     handCardMoved: boolean;

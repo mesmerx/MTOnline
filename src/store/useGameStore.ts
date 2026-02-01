@@ -97,10 +97,12 @@ export interface CardOnBoard {
   setName?: string;
   position: Point;
   tapped: boolean;
-  zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile';
+  zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile' | 'commander' | 'tokens';
   stackIndex?: number; // Para cartas empilhadas no grimório
   handIndex?: number; // Para ordenar cartas na mão
   flipped?: boolean; // Se a carta está virada (mostrando o verso)
+  isCommander?: boolean;
+  commanderDeaths?: number;
 }
 
 export type CounterType = 'numeral' | 'plus';
@@ -134,12 +136,15 @@ type CardAction =
   | { kind: 'moveLibrary'; playerName: string; position: Point }
   | { kind: 'moveCemetery'; playerName: string; position: Point }
   | { kind: 'moveExile'; playerName: string; position: Point }
+  | { kind: 'moveCommander'; playerName: string; position: Point }
   | { kind: 'toggleTap'; id: string }
   | { kind: 'remove'; id: string }
   | { kind: 'addToLibrary'; card: CardOnBoard }
   | { kind: 'replaceLibrary'; cards: CardOnBoard[]; playerName: string }
   | { kind: 'drawFromLibrary'; playerName: string }
-  | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile'; position: Point; libraryPlace?: 'top' | 'bottom' | 'random' }
+  | { kind: 'changeZone'; id: string; zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile' | 'commander' | 'tokens'; position: Point; libraryPlace?: 'top' | 'bottom' | 'random' }
+  | { kind: 'setCommander'; id: string; position: Point }
+  | { kind: 'moveTokens'; playerName: string; position: Point }
   | { kind: 'reorderHand'; cardId: string; newIndex: number; playerName: string }
   | { kind: 'reorderLibrary'; cardId: string; newIndex: number; playerName: string }
   | { kind: 'shuffleLibrary'; playerName: string }
@@ -157,10 +162,10 @@ type CardAction =
 
 type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string; skipEventSave?: boolean }
-  | { type: 'BOARD_STATE'; board: CardOnBoard[]; counters?: Counter[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point> }
-  | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point> }
+  | { type: 'BOARD_STATE'; board: CardOnBoard[]; counters?: Counter[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point>; commanderPositions?: Record<string, Point>; tokensPositions?: Record<string, Point> }
+  | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point>; commanderPositions?: Record<string, Point>; tokensPositions?: Record<string, Point> }
   | { type: 'PLAYER_STATE'; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; zoomedCard?: string | null }
-  | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point> }
+  | { type: 'HOST_TRANSFER'; newHostId: string; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point>; commanderPositions?: Record<string, Point>; tokensPositions?: Record<string, Point> }
   | { type: 'BOARD_PATCH'; cards: Array<{ id: string; position: Point }> }
   | { type: 'LIBRARY_POSITION'; playerName: string; position: Point }
   | { type: 'ERROR'; message: string };
@@ -213,6 +218,8 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
   cemeteryPositions: Record<string, Point>;
   libraryPositions: Record<string, Point>;
   exilePositions: Record<string, Point>;
+  commanderPositions: Record<string, Point>;
+  tokensPositions: Record<string, Point>;
 } | null> => {
   if (!roomId) return null;
   
@@ -241,6 +248,8 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
     let cemeteryPositions: Record<string, Point> = {};
     let libraryPositions: Record<string, Point> = {};
     let exilePositions: Record<string, Point> = {};
+    let commanderPositions: Record<string, Point> = {};
+    let tokensPositions: Record<string, Point> = {};
     
     // Funções auxiliares para aplicar ações (simplificadas para replay)
     const applyCardActionReplay = (currentBoard: CardOnBoard[], action: CardAction): CardOnBoard[] => {
@@ -264,8 +273,81 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
             return currentBoard.map((c) => (c.id === drawnCard.id ? { ...c, zone: 'hand' } : c));
           }
           return currentBoard;
-        case 'changeZone':
-          return currentBoard.map((c) => (c.id === action.id ? { ...c, zone: action.zone, position: action.position } : c));
+        case 'moveCommander':
+          return currentBoard.map((c) => {
+            if (c.zone === 'commander' && c.ownerId === action.playerName) {
+              return { ...c, position: action.position };
+            }
+            return c;
+          });
+        case 'moveTokens':
+          return currentBoard.map((c) => {
+            if (c.zone === 'tokens' && c.ownerId === action.playerName) {
+              return { ...c, position: action.position };
+            }
+            return c;
+          });
+        case 'changeZone': {
+          const changedCard = currentBoard.find((c) => c.id === action.id);
+          if (!changedCard) return currentBoard;
+          let commanderStackIndex: number | undefined;
+          let tokensStackIndex: number | undefined;
+          if (action.zone === 'commander') {
+            const commanderCards = currentBoard.filter(
+              (c) => c.zone === 'commander' && c.ownerId === changedCard.ownerId && c.id !== action.id
+            );
+            const maxStackIndex = commanderCards.length > 0
+              ? Math.max(...commanderCards.map((c) => c.stackIndex ?? 0))
+              : -1;
+            commanderStackIndex = maxStackIndex + 1;
+          }
+          if (action.zone === 'tokens') {
+            const tokenCards = currentBoard.filter(
+              (c) => c.zone === 'tokens' && c.ownerId === changedCard.ownerId && c.id !== action.id
+            );
+            const maxStackIndex = tokenCards.length > 0
+              ? Math.max(...tokenCards.map((c) => c.stackIndex ?? 0))
+              : -1;
+            tokensStackIndex = maxStackIndex + 1;
+          }
+          return currentBoard.map((c) => {
+            if (c.id !== action.id) return c;
+            const shouldIncrementCommanderDeaths =
+              action.zone === 'commander' && c.isCommander && c.zone === 'battlefield';
+            return {
+              ...c,
+              zone: action.zone,
+              position: action.position,
+              stackIndex:
+                action.zone === 'commander'
+                  ? commanderStackIndex
+                  : action.zone === 'tokens'
+                    ? tokensStackIndex
+                    : c.stackIndex,
+              commanderDeaths: shouldIncrementCommanderDeaths
+                ? (c.commanderDeaths ?? 0) + 1
+                : c.commanderDeaths,
+            };
+          });
+        }
+        case 'setCommander':
+          return currentBoard.map((c) => {
+            if (c.id !== action.id) return c;
+            const commanderCards = currentBoard.filter(
+              (card) => card.zone === 'commander' && card.ownerId === c.ownerId && card.id !== c.id
+            );
+            const maxStackIndex = commanderCards.length > 0
+              ? Math.max(...commanderCards.map((card) => card.stackIndex ?? 0))
+              : -1;
+            return {
+              ...c,
+              zone: 'commander',
+              position: action.position,
+              stackIndex: maxStackIndex + 1,
+              isCommander: true,
+              commanderDeaths: c.commanderDeaths ?? 0,
+            };
+          });
         case 'reorderHand': {
           const card = currentBoard.find((c) => c.id === action.cardId);
           if (!card || card.zone !== 'hand' || card.ownerId !== action.playerName) return currentBoard;
@@ -397,6 +479,16 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
           ...exilePositions,
           [action.playerName]: action.position,
         };
+      } else if (action.kind === 'moveCommander' && 'playerName' in action && 'position' in action) {
+        commanderPositions = {
+          ...commanderPositions,
+          [action.playerName]: action.position,
+        };
+      } else if (action.kind === 'moveTokens' && 'playerName' in action && 'position' in action) {
+        tokensPositions = {
+          ...tokensPositions,
+          [action.playerName]: action.position,
+        };
       }
       
       // Atualizar players (setPlayerLife)
@@ -427,6 +519,8 @@ const loadRoomStateFromEvents = async (roomId: string): Promise<{
       cemeteryPositions,
       libraryPositions,
       exilePositions,
+        commanderPositions,
+        tokensPositions,
     };
   } catch (error) {
     return null;
@@ -457,6 +551,8 @@ interface GameStore {
   cemeteryPositions: Record<string, Point>;
   libraryPositions: Record<string, Point>;
   exilePositions: Record<string, Point>;
+  commanderPositions: Record<string, Point>;
+  tokensPositions: Record<string, Point>;
   zoomedCard: string | null;
   savedDecks: SavedDeck[];
   socket?: WebSocket;
@@ -475,15 +571,20 @@ interface GameStore {
   leaveRoom: () => void;
   addCardToBoard: (card: NewCardPayload) => void;
   addCardToLibrary: (card: NewCardPayload) => void;
+  addCardToCommander: (card: NewCardPayload) => void;
+  addCardToTokens: (card: NewCardPayload) => void;
   replaceLibrary: (cards: NewCardPayload[]) => void;
   drawFromLibrary: () => void;
   moveCard: (cardId: string, position: Point, options?: { persist?: boolean }) => void;
   moveLibrary: (playerName: string, relativePosition: Point, absolutePosition: Point, skipEventSave?: boolean) => void;
   moveCemetery: (playerName: string, position: Point, skipEventSave?: boolean) => void;
   moveExile: (playerName: string, position: Point, skipEventSave?: boolean) => void;
+  moveCommander: (playerName: string, position: Point, skipEventSave?: boolean) => void;
+  moveTokens: (playerName: string, position: Point, skipEventSave?: boolean) => void;
   toggleTap: (cardId: string) => void;
   removeCard: (cardId: string) => void;
-  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile' | 'commander' | 'tokens', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  setCommander: (cardId: string, position: Point) => void;
   reorderHandCard: (cardId: string, newIndex: number) => void;
   reorderLibraryCard: (cardId: string, newIndex: number) => void;
   shuffleLibrary: (playerName: string) => void;
@@ -670,6 +771,27 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
     }
     case 'toggleTap':
       return board.map((card) => (card.id === action.id ? { ...card, tapped: !card.tapped } : card));
+    case 'setCommander': {
+      const target = board.find((c) => c.id === action.id);
+      if (!target) return board;
+      const commanderCards = board.filter((c) => c.zone === 'commander' && c.ownerId === target.ownerId && c.id !== target.id);
+      const maxStackIndex = commanderCards.length > 0
+        ? Math.max(...commanderCards.map((c) => c.stackIndex ?? 0))
+        : -1;
+      const stackIndex = maxStackIndex + 1;
+      return board.map((card) => {
+        if (card.id !== action.id) return card;
+        const { handIndex, ...rest } = card as any;
+        return {
+          ...rest,
+          zone: 'commander',
+          position: action.position,
+          stackIndex,
+          isCommander: true,
+          commanderDeaths: card.commanderDeaths ?? 0,
+        };
+      });
+    }
     case 'changeZone': {
       const changedCard = board.find((c) => c.id === action.id);
       if (!changedCard) return board;
@@ -749,10 +871,15 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
       
       let newBoard = board.map((card) => {
         if (card.id === action.id) {
+          const shouldIncrementCommanderDeaths =
+            action.zone === 'commander' && card.isCommander && card.zone === 'battlefield';
           const updatedCard = {
             ...card,
             zone: action.zone,
             position: action.position,
+            commanderDeaths: shouldIncrementCommanderDeaths
+              ? (card.commanderDeaths ?? 0) + 1
+              : card.commanderDeaths,
           };
           
           // Se mudou para battlefield, remover handIndex e stackIndex
@@ -828,6 +955,38 @@ const applyCardAction = (board: CardOnBoard[], action: CardAction) => {
             return {
               ...rest,
               stackIndex,
+            };
+          }
+
+          // Se mudou para tokens, calcular stackIndex (sempre no topo)
+          if (action.zone === 'tokens') {
+            const tokenCards = board.filter((c) => c.zone === 'tokens' && c.ownerId === card.ownerId && c.id !== card.id);
+            const maxStackIndex = tokenCards.length > 0
+              ? Math.max(...tokenCards.map((c) => c.stackIndex ?? 0))
+              : -1;
+            const stackIndex = maxStackIndex + 1;
+
+            const { handIndex, ...rest } = updatedCard as any;
+            return {
+              ...rest,
+              stackIndex,
+            };
+          }
+
+          // Se mudou para commander, calcular stackIndex (sempre no topo)
+          if (action.zone === 'commander') {
+            const commanderCards = board.filter((c) => c.zone === 'commander' && c.ownerId === card.ownerId && c.id !== card.id);
+            const maxStackIndex = commanderCards.length > 0
+              ? Math.max(...commanderCards.map((c) => c.stackIndex ?? 0))
+              : -1;
+            const stackIndex = maxStackIndex + 1;
+
+            const { handIndex, ...rest } = updatedCard as any;
+            return {
+              ...rest,
+              stackIndex,
+              isCommander: updatedCard.isCommander ?? card.isCommander ?? false,
+              commanderDeaths: updatedCard.commanderDeaths ?? card.commanderDeaths ?? 0,
             };
           }
           
@@ -1235,6 +1394,8 @@ export const useGameStore = create<GameStore>((set, get) => {
     cemeteryPositions: {} as Record<string, Point>,
     libraryPositions: {} as Record<string, Point>,
     exilePositions: {} as Record<string, Point>,
+    commanderPositions: {} as Record<string, Point>,
+    tokensPositions: {} as Record<string, Point>,
     zoomedCard: null as string | null,
     socket: undefined as WebSocket | undefined,
     connections: {} as Record<string, PseudoConnection>,
@@ -1589,10 +1750,12 @@ export const useGameStore = create<GameStore>((set, get) => {
         };
       }
       
-      // Atualizar posições se for moveLibrary, moveCemetery ou moveExile
+      // Atualizar posições se for moveLibrary, moveCemetery, moveExile ou moveCommander
       let newCemeteryPositions = state.cemeteryPositions;
       let newLibraryPositions = state.libraryPositions;
       let newExilePositions = state.exilePositions;
+      let newCommanderPositions = state.commanderPositions;
+      let newTokensPositions = state.tokensPositions;
       
       if (action.kind === 'moveCemetery' && 'playerName' in action && 'position' in action) {
         newCemeteryPositions = {
@@ -1611,6 +1774,16 @@ export const useGameStore = create<GameStore>((set, get) => {
           ...state.exilePositions,
           [action.playerName]: action.position,
         };
+      } else if (action.kind === 'moveCommander' && 'playerName' in action && 'position' in action) {
+        newCommanderPositions = {
+          ...state.commanderPositions,
+          [action.playerName]: action.position,
+        };
+      } else if (action.kind === 'moveTokens' && 'playerName' in action && 'position' in action) {
+        newTokensPositions = {
+          ...state.tokensPositions,
+          [action.playerName]: action.position,
+        };
       }
       
       // Aplicar ações de contadores
@@ -1622,6 +1795,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         cemeteryPositions: newCemeteryPositions,
         libraryPositions: newLibraryPositions,
         exilePositions: newExilePositions,
+        commanderPositions: newCommanderPositions,
+        tokensPositions: newTokensPositions,
       };
     });
     
@@ -1654,7 +1829,7 @@ export const useGameStore = create<GameStore>((set, get) => {
         const shouldExclude =
           excludePlayerId &&
           skipEventSave &&
-          (action.kind === 'moveLibrary' || action.kind === 'moveCemetery' || action.kind === 'moveExile');
+          (action.kind === 'moveLibrary' || action.kind === 'moveCemetery' || action.kind === 'moveExile' || action.kind === 'moveCommander' || action.kind === 'moveTokens');
         broadcastToPeers({ 
           type: 'BOARD_STATE', 
           board: stateAfter.board,
@@ -1662,6 +1837,8 @@ export const useGameStore = create<GameStore>((set, get) => {
           cemeteryPositions: stateAfter.cemeteryPositions,
           libraryPositions: stateAfter.libraryPositions,
           exilePositions: stateAfter.exilePositions,
+          commanderPositions: stateAfter.commanderPositions,
+          tokensPositions: stateAfter.tokensPositions,
         }, shouldExclude ? excludePlayerId : undefined);
       }
     }
@@ -1799,6 +1976,9 @@ export const useGameStore = create<GameStore>((set, get) => {
           simulatedPlayers: currentState.simulatedPlayers,
           cemeteryPositions: currentState.cemeteryPositions,
           libraryPositions: currentState.libraryPositions,
+          exilePositions: currentState.exilePositions,
+          commanderPositions: currentState.commanderPositions,
+          tokensPositions: currentState.tokensPositions,
         });
     debugLog('host registered connection', playerId, playerName);
         // Sync contínuo vai cuidar da sincronização
@@ -1821,7 +2001,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (!message || !message.type) return;
       
       // Filtrar apenas tipos de mensagem válidos do jogo
-      const validTypes = ['ROOM_STATE', 'BOARD_STATE', 'PLAYER_STATE', 'ERROR', 'HOST_TRANSFER'];
+      const validTypes = ['ROOM_STATE', 'BOARD_STATE', 'PLAYER_STATE', 'ERROR', 'HOST_TRANSFER', 'LIBRARY_POSITION'];
       if (!validTypes.includes(message.type)) {
         return;
       }
@@ -1907,6 +2087,11 @@ export const useGameStore = create<GameStore>((set, get) => {
               counters: message.counters || [],
               players: uniquePlayers,
               simulatedPlayers: message.simulatedPlayers || [],
+              cemeteryPositions: message.cemeteryPositions || currentState?.cemeteryPositions || {},
+              libraryPositions: message.libraryPositions || currentState?.libraryPositions || {},
+              exilePositions: message.exilePositions || currentState?.exilePositions || {},
+              commanderPositions: message.commanderPositions || currentState?.commanderPositions || {},
+              tokensPositions: message.tokensPositions || currentState?.tokensPositions || {},
               status: 'connected' as RoomStatus,
             error: undefined,
               // Atualizar playerId se necessário
@@ -1955,6 +2140,9 @@ export const useGameStore = create<GameStore>((set, get) => {
               counters: message.counters || currentState?.counters || [],
               cemeteryPositions: message.cemeteryPositions || currentState?.cemeteryPositions || {},
               libraryPositions: message.libraryPositions || currentState?.libraryPositions || {},
+              exilePositions: message.exilePositions || currentState?.exilePositions || {},
+              commanderPositions: message.commanderPositions || currentState?.commanderPositions || {},
+              tokensPositions: message.tokensPositions || currentState?.tokensPositions || {},
             });
             // Sync contínuo vai cuidar da sincronização
           }
@@ -2495,6 +2683,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         cemeteryPositions: savedState?.cemeteryPositions || {},
         libraryPositions: savedState?.libraryPositions || {},
         exilePositions: savedState?.exilePositions || {},
+        commanderPositions: savedState?.commanderPositions || {},
+        tokensPositions: savedState?.tokensPositions || {},
       });
 
       savePersistedState(trimmedId, password, currentState.playerName || '', true);
@@ -2532,6 +2722,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         cemeteryPositions: savedState?.cemeteryPositions || {},
         libraryPositions: savedState?.libraryPositions || {},
         exilePositions: savedState?.exilePositions || {},
+        commanderPositions: savedState?.commanderPositions || {},
+        tokensPositions: savedState?.tokensPositions || {},
       });
 
       savePersistedState(trimmedId, password, currentState.playerName || '', false);
@@ -2590,6 +2782,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         backImageUrl: payload.backImageUrl,
         ownerId: get().playerName,
         tapped: false,
+        isCommander: false,
+        commanderDeaths: 0,
         position,
         zone: 'battlefield',
       };
@@ -2608,10 +2802,64 @@ export const useGameStore = create<GameStore>((set, get) => {
         backImageUrl: payload.backImageUrl,
         ownerId: get().playerName,
         tapped: false,
+        isCommander: false,
+        commanderDeaths: 0,
         position: { x: 0, y: 0 },
         zone: 'library',
       };
       requestAction({ kind: 'addToLibrary', card });
+    },
+    addCardToCommander: (payload: NewCardPayload) => {
+      if (!payload.name) return;
+      const playerName = get().playerName;
+      const commanderCards = get().board.filter((c) => c.zone === 'commander' && c.ownerId === playerName);
+      const maxStackIndex = commanderCards.length > 0
+        ? Math.max(...commanderCards.map((c) => c.stackIndex ?? 0))
+        : -1;
+      const card: CardOnBoard = {
+        id: randomId(),
+        name: payload.name,
+        oracleText: payload.oracleText,
+        manaCost: payload.manaCost,
+        typeLine: payload.typeLine,
+        setName: payload.setName,
+        imageUrl: payload.imageUrl,
+        backImageUrl: payload.backImageUrl,
+        ownerId: playerName,
+        tapped: false,
+        isCommander: true,
+        commanderDeaths: 0,
+        position: payload.position ?? { x: 0, y: 0 },
+        zone: 'commander',
+        stackIndex: maxStackIndex + 1,
+      };
+      requestAction({ kind: 'add', card });
+    },
+    addCardToTokens: (payload: NewCardPayload) => {
+      if (!payload.name) return;
+      const playerName = get().playerName;
+      const tokenCards = get().board.filter((c) => c.zone === 'tokens' && c.ownerId === playerName);
+      const maxStackIndex = tokenCards.length > 0
+        ? Math.max(...tokenCards.map((c) => c.stackIndex ?? 0))
+        : -1;
+      const card: CardOnBoard = {
+        id: randomId(),
+        name: payload.name,
+        oracleText: payload.oracleText,
+        manaCost: payload.manaCost,
+        typeLine: payload.typeLine,
+        setName: payload.setName,
+        imageUrl: payload.imageUrl,
+        backImageUrl: payload.backImageUrl,
+        ownerId: playerName,
+        tapped: false,
+        isCommander: false,
+        commanderDeaths: 0,
+        position: payload.position ?? { x: 0, y: 0 },
+        zone: 'tokens',
+        stackIndex: maxStackIndex + 1,
+      };
+      requestAction({ kind: 'add', card });
     },
     replaceLibrary: (cards: NewCardPayload[]) => {
       const playerName = get().playerName;
@@ -2628,6 +2876,8 @@ export const useGameStore = create<GameStore>((set, get) => {
         backImageUrl: payload.backImageUrl,
         ownerId: playerName, // Usar playerName para consistência com addCardToLibrary e renderização
         tapped: false,
+        isCommander: false,
+        commanderDeaths: 0,
         // Apenas as top 5 cartas (últimas no array, maiores índices) têm posição inicial
         // As outras têm position (0,0) mas não serão renderizadas
         position: index >= cards.length - 5 ? { x: 0, y: 0 } : { x: 0, y: 0 },
@@ -2709,14 +2959,57 @@ export const useGameStore = create<GameStore>((set, get) => {
         requestAction({ kind: 'moveExile', playerName, position }, skipEventSave);
       }
     },
+    moveCommander: (playerName: string, position: Point, skipEventSave = false) => {
+      const state = get();
+      if (!state) return;
+      
+      if (state.isHost) {
+        handleHostAction({ kind: 'moveCommander', playerName, position }, skipEventSave);
+      } else {
+        set((s) => {
+          if (!s) return s;
+          return {
+            ...s,
+            commanderPositions: {
+              ...s.commanderPositions,
+              [playerName]: position,
+            },
+          };
+        });
+        requestAction({ kind: 'moveCommander', playerName, position }, skipEventSave);
+      }
+    },
+    moveTokens: (playerName: string, position: Point, skipEventSave = false) => {
+      const state = get();
+      if (!state) return;
+      
+      if (state.isHost) {
+        handleHostAction({ kind: 'moveTokens', playerName, position }, skipEventSave);
+      } else {
+        set((s) => {
+          if (!s) return s;
+          return {
+            ...s,
+            tokensPositions: {
+              ...s.tokensPositions,
+              [playerName]: position,
+            },
+          };
+        });
+        requestAction({ kind: 'moveTokens', playerName, position }, skipEventSave);
+      }
+    },
     toggleTap: (cardId: string) => {
       requestAction({ kind: 'toggleTap', id: cardId });
     },
     removeCard: (cardId: string) => {
       requestAction({ kind: 'remove', id: cardId });
     },
-    changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => {
+    changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile' | 'commander' | 'tokens', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => {
       requestAction({ kind: 'changeZone', id: cardId, zone, position, libraryPlace });
+    },
+    setCommander: (cardId: string, position: Point) => {
+      requestAction({ kind: 'setCommander', id: cardId, position });
     },
     reorderHandCard: (cardId: string, newIndex: number) => {
       const state = get();

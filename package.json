@@ -9,7 +9,7 @@
     "preview": "vite preview",
     "backend:server": "cd backend && go run .",
     "dev:all": "concurrently \"pnpm backend:server\" \"pnpm dev\"",
-    "test": "vitest run",
+    "test": "pnpm build && vitest run",
     "test:browser": "playwright test",
     "test:browser:ui": "playwright test --ui",
     "test:watch": "vitest"

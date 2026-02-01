@@ -4,6 +4,8 @@ import Hand from './Hand';
 import Library from './Library';
 import Cemetery from './Cemetery';
 import Exile from './Exile';
+import Commander from './Commander';
+import Tokens from './Tokens';
 import type { BoardViewProps } from './BoardTypes';
 import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT, CARD_WIDTH, CARD_HEIGHT } from './BoardTypes';
 
@@ -17,6 +19,8 @@ export const BoardSeparated = (props: BoardViewProps) => {
     libraryCards,
     cemeteryCards,
     exileCards,
+    commanderCards,
+    tokensCards,
     storeLibraryPositions,
     storeCemeteryPositions,
     storeExilePositions,
@@ -25,6 +29,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
     draggingLibrary,
     draggingCemetery,
     draggingExile,
+    draggingTokens,
     ownerName,
     handleCardClick,
     handleCardContextMenu,
@@ -34,6 +39,8 @@ export const BoardSeparated = (props: BoardViewProps) => {
     zoomedCard,
     startCemeteryDrag,
     startExileDrag,
+    startTokensDrag,
+    startCommanderDrag,
     changeCardZone,
     detectZoneAtPosition,
     reorderHandCard,
@@ -48,6 +55,8 @@ export const BoardSeparated = (props: BoardViewProps) => {
     removeCounterToken,
     getCemeteryPosition,
     getLibraryPosition,
+    getTokensPosition,
+    getCommanderPosition,
     setLibraryContainerRef,
   } = props;
 
@@ -89,6 +98,8 @@ export const BoardSeparated = (props: BoardViewProps) => {
         const playerBattlefieldCards = battlefieldCards.filter(c => c.ownerId === player.name);
         const playerLibraryCards = libraryCards.filter(c => c.ownerId === player.name);
         const playerCemeteryCards = cemeteryCards.filter(c => c.ownerId === player.name);
+        const playerCommanderCards = commanderCards.filter(c => c.ownerId === player.name);
+        const playerTokensCards = tokensCards.filter(c => c.ownerId === player.name);
 
         return (
           <div
@@ -322,6 +333,59 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       />
                     );
                   })()}
+
+                  <Tokens
+                    boardRef={boardRef}
+                    playerName={playerName}
+                    tokensCards={playerTokensCards}
+                    players={[player]}
+                    getTokensPosition={(name) => {
+                      if (name !== player.name) {
+                        return null;
+                      }
+                      return getTokensPosition(name);
+                    }}
+                    ownerName={ownerName}
+                    onTokensContextMenu={(card, e) => {
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        card,
+                      });
+                    }}
+                    startTokensDrag={startTokensDrag}
+                    draggingTokens={draggingTokens}
+                    handleCardZoom={handleCardZoom}
+                    zoomedCard={zoomedCard}
+                    changeCardZone={changeCardZone}
+                    getLibraryPosition={getLibraryPosition}
+                    getCemeteryPosition={getCemeteryPosition}
+                  />
+
+                  <Commander
+                    boardRef={boardRef}
+                    playerName={playerName}
+                    commanderCards={playerCommanderCards}
+                    players={[player]}
+                    getCommanderPosition={(name) => {
+                      if (name !== player.name) {
+                        return null;
+                      }
+                      return getCommanderPosition(name);
+                    }}
+                    ownerName={ownerName}
+                    onCommanderContextMenu={(card, e) => {
+                      setContextMenu({
+                        x: e.clientX,
+                        y: e.clientY,
+                        card,
+                      });
+                    }}
+                    startCommanderDrag={startCommanderDrag}
+                    startDrag={startDrag}
+                    handleCardZoom={handleCardZoom}
+                    zoomedCard={zoomedCard}
+                  />
 
                   {playerBattlefieldCards.map((card) => {
                     const isDragging = dragStateRef.current?.cardId === card.id;

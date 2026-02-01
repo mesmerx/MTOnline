@@ -6,7 +6,27 @@ export interface DeckEntry {
   setCode?: string;
   collectorNumber?: string;
   printTag?: string;
+  section?: 'commander' | 'mainboard' | 'maybeboard' | 'tokens';
+  tags?: string[];
+  flags?: string[];
+  isCommander?: boolean;
+  isToken?: boolean;
+  noDeck?: boolean;
 }
+
+export type DeckEntryPlacement = 'library' | 'commander' | 'tokens';
+
+export const classifyDeckEntry = (entry: DeckEntry, cardTypeLine?: string): DeckEntryPlacement => {
+  const normalizedType = cardTypeLine?.toLowerCase() ?? '';
+  const inferredToken = normalizedType.includes('token');
+  if (entry.isCommander || entry.section === 'commander') {
+    return 'commander';
+  }
+  if (entry.isToken || entry.section === 'tokens' || entry.noDeck || inferredToken) {
+    return 'tokens';
+  }
+  return 'library';
+};
 
 export interface SavedDeck {
   id: string;
@@ -22,15 +42,58 @@ const STORAGE_KEY = 'mtonline.decks';
 
 export const parseDecklist = (rawList: string): DeckEntry[] => {
   const entries: DeckEntry[] = [];
+  let currentSection: DeckEntry['section'] = 'mainboard';
   rawList
     .split(/\r?\n/)
     .map((line) => line.trim())
     .forEach((line) => {
-      if (!line || line.startsWith('//') || /^sideboard/i.test(line)) {
+      if (!line || line.startsWith('//')) {
         return;
       }
 
-      const normalized = line.replace(/^SB[:\-]?\s*/i, '');
+      if (/^commander$/i.test(line)) {
+        currentSection = 'commander';
+        return;
+      }
+      if (/^(mainboard|maindeck)$/i.test(line)) {
+        currentSection = 'mainboard';
+        return;
+      }
+      if (/^maybeboard$/i.test(line)) {
+        currentSection = 'maybeboard';
+        return;
+      }
+      if (/^tokens?$/i.test(line)) {
+        currentSection = 'tokens';
+        return;
+      }
+      if (/^sideboard/i.test(line)) {
+        return;
+      }
+
+      let normalized = line.replace(/^SB[:\-]?\s*/i, '');
+      let bracketLabel: string | undefined;
+      let bracketFlags: string[] = [];
+      const bracketMatch = normalized.match(/\s*\[([^\]]+)\]\s*$/);
+      if (bracketMatch) {
+        const bracketText = bracketMatch[1]?.trim();
+        normalized = normalized.slice(0, bracketMatch.index).trim();
+        if (bracketText) {
+          const label = bracketText.split('{')[0]?.trim();
+          if (label) {
+            bracketLabel = label;
+          }
+          const flagMatches = [...bracketText.matchAll(/\{([^}]+)\}/g)];
+          bracketFlags = flagMatches
+            .flatMap((match) => match[1]?.split(/[,\s]+/) ?? [])
+            .map((flag) => flag.trim())
+            .filter((flag) => flag.length > 0);
+        }
+      }
+      
+      // Remove foil/finish markers like *F* or *Foil*
+      normalized = normalized.replace(/\s*\*[^*]+\*\s*/g, ' ').replace(/\s{2,}/g, ' ').trim();
+
       const match = normalized.match(/^(\d+)\s*x?\s+([^(]+?)(?:\s+\(([^)]+)\))?(?:\s+(\d+))?$/i);
       if (!match) {
         return;
@@ -57,6 +120,29 @@ export const parseDecklist = (rawList: string): DeckEntry[] => {
       if (!entry.collectorNumber && trailingNumber) {
         entry.collectorNumber = trailingNumber;
       }
+
+      let section = currentSection;
+      const rawLabel = bracketLabel?.trim();
+      const label = rawLabel?.toLowerCase();
+      if (label) {
+        if (label.includes('commander')) {
+          section = 'commander';
+        } else if (label.includes('token')) {
+          section = 'tokens';
+        } else if (label.includes('maybeboard')) {
+          section = 'maybeboard';
+        } else if (label.includes('main')) {
+          section = 'mainboard';
+        }
+        entry.tags = [rawLabel ?? label];
+      }
+      if (bracketFlags.length > 0) {
+        entry.flags = bracketFlags;
+      }
+      entry.section = section;
+      entry.isCommander = section === 'commander';
+      entry.isToken = section === 'tokens';
+      entry.noDeck = bracketFlags.some((flag) => flag.toLowerCase() === 'nodeck');
 
       entries.push(entry);
     });

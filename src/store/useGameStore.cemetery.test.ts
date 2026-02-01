@@ -73,7 +73,7 @@ describe('Cemetery drag functionality', () => {
       expect(updatedState.cemeteryPositions['Host Player']).toEqual(newPosition);
     });
 
-    it('should save event to backend when host moves cemetery', async () => {
+    it('should send save_event over WS when host moves cemetery', async () => {
       const store = useGameStore.getState();
       store.setPlayerName('Host Player');
       await store.createRoom('test-room', 'password');
@@ -86,16 +86,16 @@ describe('Cemetery drag functionality', () => {
       const newPosition = { x: 150, y: 250 };
       store.moveCemetery('Host Player', newPosition);
 
-      // Verificar que fetch foi chamado para salvar o evento
+      // Verificar que o evento foi enviado via WS
       await new Promise((resolve) => setTimeout(resolve, 10));
 
-      expect(global.fetch).toHaveBeenCalledWith(
-        expect.stringContaining('/api/rooms/test-room/events'),
-        expect.objectContaining({
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-        })
-      );
+      const socket = wsControl.last();
+      expect(socket.send).toHaveBeenCalled();
+      const lastCall = socket.send.mock.calls[socket.send.mock.calls.length - 1]?.[0];
+      const parsed = JSON.parse(lastCall);
+      expect(parsed.type).toBe('room:save_event');
+      expect(parsed.payload.roomId).toBe('test-room');
+      expect(parsed.payload.eventType).toBe('CARD_ACTION');
     });
 
     it('should broadcast cemetery position to peers when host moves', async () => {

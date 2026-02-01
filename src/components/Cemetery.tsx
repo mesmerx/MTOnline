@@ -22,7 +22,7 @@ interface CemeteryProps {
   draggingCemetery: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   handleCardZoom?: (card: CardOnBoard, event: ReactPointerEvent) => void;
   zoomedCard?: string | null;
-  changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile' | 'commander' | 'tokens', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   getLibraryPosition?: (playerName: string) => Point | null;
   board?: CardOnBoard[];
 }

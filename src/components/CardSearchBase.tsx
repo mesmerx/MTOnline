@@ -10,6 +10,7 @@ interface CardSearchBaseProps {
   isOpen: boolean;
   onClose: () => void;
   onMoveCard: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  onAddCard?: (card: CardOnBoard) => void;
   ownerName: (card: CardOnBoard) => string;
   title: string;
   placeholder?: string;
@@ -17,6 +18,8 @@ interface CardSearchBaseProps {
   sortCards?: (cards: CardOnBoard[]) => CardOnBoard[];
   onReorder?: (cardId: string, newIndex: number) => void;
   availableZones?: ('battlefield' | 'library' | 'hand' | 'cemetery' | 'exile')[];
+  addButtonLabel?: string;
+  showAddButton?: boolean;
   showMaxCardsInput?: boolean; // Controla se mostra o input de quantidade máxima
   defaultMaxCards?: number | null; // Valor padrão para maxCardsToShow (null = todas, 0 = nenhuma, número = esse número)
   ignoreMaxCardsLimit?: boolean; // Se true, sempre mostra todas as cartas, ignorando maxCardsToShow
@@ -28,6 +31,7 @@ const CardSearchBase = ({
   isOpen,
   onClose,
   onMoveCard,
+  onAddCard,
   ownerName,
   title,
   placeholder = 'Enter the card name...',
@@ -35,6 +39,8 @@ const CardSearchBase = ({
   sortCards,
   onReorder,
   availableZones = ['battlefield', 'hand', 'cemetery'],
+  addButtonLabel = 'Add',
+  showAddButton = false,
   showMaxCardsInput = false,
   defaultMaxCards = null,
   ignoreMaxCardsLimit = false,
@@ -448,6 +454,9 @@ const CardSearchBase = ({
                   // Só abrir menu se não estiver arrastando
                   // Se canReorder é true mas não há draggedCardId, significa que foi apenas um clique
                   if (!draggedCardId) {
+                    if (availableZones.length === 0) {
+                      return;
+                    }
                     e.stopPropagation();
                     handleCardSelect(card);
                   } else {
@@ -515,6 +524,31 @@ const CardSearchBase = ({
                   showBack={false}
                   forceShowFront={true}
                 />
+                {showAddButton && onAddCard && (
+                  <div style={{ marginTop: '6px' }}>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        e.preventDefault();
+                        onAddCard(card);
+                      }}
+                      style={{
+                        width: '100%',
+                        padding: '6px 8px',
+                        backgroundColor: '#22c55e',
+                        color: 'white',
+                        border: 'none',
+                        borderRadius: '4px',
+                        cursor: 'pointer',
+                        fontSize: '11px',
+                        fontWeight: '600',
+                      }}
+                      title={addButtonLabel}
+                    >
+                      ➕ {addButtonLabel}
+                    </button>
+                  </div>
+                )}
                 {/* Botão de transformar embaixo da carta (apenas se tiver backImageUrl) */}
                 {card.backImageUrl && (
                   <button

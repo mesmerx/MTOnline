@@ -4,6 +4,8 @@ import Hand from './Hand';
 import Library from './Library';
 import Cemetery from './Cemetery';
 import Exile from './Exile';
+import Commander from './Commander';
+import Tokens from './Tokens';
 import type { BoardViewProps } from './BoardTypes';
 import { CARD_WIDTH, CARD_HEIGHT } from './BoardTypes';
 
@@ -17,11 +19,14 @@ export const BoardUnified = (props: BoardViewProps) => {
     libraryCards,
     cemeteryCards,
     exileCards,
+    commanderCards,
+    tokensCards,
     showHand,
     dragStateRef,
     draggingLibrary,
     draggingCemetery,
     draggingExile,
+    draggingTokens,
     ownerName,
     handleCardClick,
     handleCardContextMenu,
@@ -31,6 +36,8 @@ export const BoardUnified = (props: BoardViewProps) => {
     zoomedCard,
     startCemeteryDrag,
     startExileDrag,
+    startTokensDrag,
+    startCommanderDrag,
     changeCardZone,
     detectZoneAtPosition,
     reorderHandCard,
@@ -43,6 +50,8 @@ export const BoardUnified = (props: BoardViewProps) => {
     getLibraryPosition,
     getCemeteryPosition,
     getExilePosition,
+    getCommanderPosition,
+    getTokensPosition,
     counters,
     moveCounter,
     modifyCounter,
@@ -149,6 +158,49 @@ export const BoardUnified = (props: BoardViewProps) => {
         getLibraryPosition={getLibraryPosition}
         getCemeteryPosition={getCemeteryPosition}
         board={board}
+      />
+
+      <Tokens
+        boardRef={boardRef}
+        playerName={playerName}
+        tokensCards={tokensCards}
+        players={allPlayers}
+        getTokensPosition={getTokensPosition}
+        ownerName={ownerName}
+        onTokensContextMenu={(card, e) => {
+          setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            card,
+          });
+        }}
+        startTokensDrag={startTokensDrag}
+        draggingTokens={draggingTokens}
+        handleCardZoom={handleCardZoom}
+        zoomedCard={zoomedCard}
+        changeCardZone={changeCardZone}
+        getLibraryPosition={getLibraryPosition}
+        getCemeteryPosition={getCemeteryPosition}
+      />
+
+      <Commander
+        boardRef={boardRef}
+        playerName={playerName}
+        commanderCards={commanderCards}
+        players={allPlayers}
+        getCommanderPosition={getCommanderPosition}
+        ownerName={ownerName}
+        onCommanderContextMenu={(card, e) => {
+          setContextMenu({
+            x: e.clientX,
+            y: e.clientY,
+            card,
+          });
+        }}
+        startCommanderDrag={startCommanderDrag}
+        startDrag={startDrag}
+        handleCardZoom={handleCardZoom}
+        zoomedCard={zoomedCard}
       />
 
       {battlefieldCards.map((card) => {

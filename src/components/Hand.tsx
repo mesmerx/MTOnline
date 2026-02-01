@@ -27,8 +27,8 @@ interface HandProps {
   handleCardContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   ownerName: (card: CardOnBoard) => string;
-  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
-  detectZoneAtPosition: (x: number, y: number) => { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | null; ownerId?: string };
+  changeCardZone: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile' | 'commander' | 'tokens', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  detectZoneAtPosition: (x: number, y: number) => { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | 'commander' | 'tokens' | null; ownerId?: string };
   reorderHandCard: (cardId: string, newIndex: number) => void;
   dragStartedFromHandRef: React.MutableRefObject<boolean>;
   handCardPlacedRef: React.MutableRefObject<boolean>;
@@ -677,8 +677,6 @@ const Hand = ({
         // PRIMEIRO: Verificar se houve preview de reordenação
         // Se há previewHandOrder, significa que durante o drag estava dentro da hand
         // Mas ainda precisamos verificar se soltou fora da hand
-        const hadPreviewOrder = currentPreviewHandOrder !== null;
-        
         // Verificar se a carta foi solta FORA da área da hand
         // IMPORTANTE: Sempre verificar, mesmo se há preview de reordenação
         // Se soltou fora, mudar de zona. Se não, reordenar.
@@ -767,6 +765,12 @@ const Hand = ({
               finalPosition = { x: 0, y: 0 };
             } else if (targetZone === 'library') {
               // Posição será calculada pelo store baseado no library
+              finalPosition = { x: 0, y: 0 };
+            } else if (targetZone === 'commander') {
+              // Posição será calculada pelo store baseado no commander zone
+              finalPosition = { x: 0, y: 0 };
+            } else if (targetZone === 'tokens') {
+              // Posição será calculada pelo store baseado no tokens zone
               finalPosition = { x: 0, y: 0 };
             }
             

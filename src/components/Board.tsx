@@ -57,13 +57,19 @@ const selectBoardState = createShallowCachedSelector((state: ReturnType<typeof u
   cemeteryPositions: state.cemeteryPositions,
   libraryPositions: state.libraryPositions,
   exilePositions: state.exilePositions,
+  commanderPositions: state.commanderPositions,
+  tokensPositions: state.tokensPositions,
   moveCard: state.moveCard,
   moveLibrary: state.moveLibrary,
   moveCemetery: state.moveCemetery,
   moveExile: state.moveExile,
+  moveCommander: state.moveCommander,
+  moveTokens: state.moveTokens,
   toggleTap: state.toggleTap,
   removeCard: state.removeCard,
   changeCardZone: state.changeCardZone,
+  setCommander: state.setCommander,
+  addCardToBoard: state.addCardToBoard,
   drawFromLibrary: state.drawFromLibrary,
   reorderHandCard: state.reorderHandCard,
   reorderLibraryCard: state.reorderLibraryCard,
@@ -76,7 +82,6 @@ const selectBoardState = createShallowCachedSelector((state: ReturnType<typeof u
   setZoomedCard: state.setZoomedCard,
   zoomedCard: state.zoomedCard ?? null,
   flipCard: state.flipCard,
-  resetBoard: state.resetBoard,
   changePlayerLife: state.changePlayerLife,
   changeCommanderDamage: state.changeCommanderDamage,
   status: state.status,
@@ -413,13 +418,19 @@ const Board = () => {
     cemeteryPositions: storeCemeteryPositions,
     libraryPositions: storeLibraryPositions,
     exilePositions: storeExilePositions,
+    commanderPositions: storeCommanderPositions,
+    tokensPositions: storeTokensPositions,
     moveCard,
     moveLibrary,
     moveCemetery,
     moveExile,
+    moveCommander,
+    moveTokens,
     toggleTap,
     removeCard,
     changeCardZone,
+    addCardToBoard,
+    setCommander,
     drawFromLibrary,
     reorderHandCard,
     reorderLibraryCard,
@@ -432,7 +443,6 @@ const Board = () => {
     setZoomedCard: setZoomedCardSync,
     zoomedCard: zoomedCardSync,
     flipCard,
-    resetBoard,
     changePlayerLife,
     changeCommanderDamage,
     status,
@@ -478,6 +488,8 @@ const Board = () => {
   const [cemeteryPositions, setCemeteryPositions] = useState<Record<string, Point>>({});
   const [draggingCemetery, setDraggingCemetery] = useState<{ playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
   const [draggingExile, setDraggingExile] = useState<{ playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
+  const [draggingCommander, setDraggingCommander] = useState<{ playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
+  const [draggingTokens, setDraggingTokens] = useState<{ playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null>(null);
   
   // Sincronizar posições do store com estado local
   // IMPORTANTE: Ignorar atualizações do store durante o drag para evitar que sobrescreva mudanças locais
@@ -518,6 +530,7 @@ const Board = () => {
       librarySyncRafRef.current = null;
     }
   }, [storeLibraryPositions, draggingLibrary]);
+
   const [cemeteryMoved, setCemeteryMoved] = useState(false);
   const cemeteryMovedRef = useRef<boolean>(false);
   const [showHand, setShowHand] = useState(true);
@@ -891,6 +904,8 @@ const Board = () => {
   const handCards = useMemo(() => board.filter((c) => c.zone === 'hand'), [board]);
   const cemeteryCards = useMemo(() => board.filter((c) => c.zone === 'cemetery'), [board]);
   const exileCards = useMemo(() => board.filter((c) => c.zone === 'exile'), [board]);
+  const commanderCards = useMemo(() => board.filter((c) => c.zone === 'commander'), [board]);
+  const tokensCards = useMemo(() => board.filter((c) => c.zone === 'tokens'), [board]);
 
   
   // Memoizar handCards do player atual para evitar recálculos
@@ -936,6 +951,7 @@ const Board = () => {
       }
     });
   }, [board, playerName, moveCard]);
+
 
   // Tamanho base do board em 1080p (importado de BoardTypes.ts)
   
@@ -1193,7 +1209,7 @@ const Board = () => {
   };
 
   // Função para detectar em qual zona o cursor está
-  const detectZoneAtPosition = (x: number, y: number): { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | null; ownerId?: string } => {
+  const detectZoneAtPosition = (x: number, y: number): { zone: 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | 'commander' | 'tokens' | null; ownerId?: string } => {
     if (!boardRef.current) return { zone: null };
     
     // Verificar cemitério
@@ -1231,6 +1247,40 @@ const Board = () => {
         }
       }
     }
+
+    // Verificar commander
+    const COMMANDER_STACK_WIDTH = 120;
+    const COMMANDER_STACK_HEIGHT = 160;
+    for (const player of allPlayers) {
+      const commanderPos = getCommanderPosition(player.name);
+      if (commanderPos) {
+        if (
+          x >= commanderPos.x - 10 &&
+          x <= commanderPos.x + COMMANDER_STACK_WIDTH &&
+          y >= commanderPos.y - 10 &&
+          y <= commanderPos.y + COMMANDER_STACK_HEIGHT
+        ) {
+          return { zone: 'commander', ownerId: player.name };
+        }
+      }
+    }
+
+    // Verificar tokens
+    const TOKENS_STACK_WIDTH = 120;
+    const TOKENS_STACK_HEIGHT = 160;
+    for (const player of allPlayers) {
+      const tokensPos = getTokensPosition(player.name);
+      if (tokensPos) {
+        if (
+          x >= tokensPos.x - 10 &&
+          x <= tokensPos.x + TOKENS_STACK_WIDTH &&
+          y >= tokensPos.y - 10 &&
+          y <= tokensPos.y + TOKENS_STACK_HEIGHT
+        ) {
+          return { zone: 'tokens', ownerId: player.name };
+        }
+      }
+    }
     
     // Verificar hand
     if (showHand) {
@@ -1265,7 +1315,7 @@ const Board = () => {
     }
     
     // Se não está em nenhuma zona específica, é battlefield
-    return { zone: 'battlefield'     };
+    return { zone: 'battlefield' };
   };
 
   const getExilePosition = (ownerName: string): Point | null => {
@@ -1311,6 +1361,56 @@ const Board = () => {
       y: area.y + (area.height / 2) - (EXILE_CARD_HEIGHT / 2),
     };
   };
+
+  const getCommanderPosition = (ownerName: string): Point | null => {
+    const area = getPlayerArea(ownerName);
+    if (!area) return null;
+    if (commanderPositions[ownerName]) {
+      return {
+        x: commanderPositions[ownerName].x,
+        y: commanderPositions[ownerName].y,
+      };
+    }
+    return {
+      x: area.x + 20,
+      y: area.y + 20,
+    };
+  };
+
+  const getTokensPosition = (ownerName: string): Point | null => {
+    const area = getPlayerArea(ownerName);
+    if (!area) return null;
+    if (tokensPositions[ownerName]) {
+      return {
+        x: tokensPositions[ownerName].x,
+        y: tokensPositions[ownerName].y,
+      };
+    }
+    return {
+      x: area.x + 20,
+      y: area.y + 200,
+    };
+  };
+
+  useEffect(() => {
+    const commanderPos = getCommanderPosition(playerName);
+    if (commanderPos) {
+      commanderCards
+        .filter((card) => card.ownerId === playerName && card.position.x === 0 && card.position.y === 0)
+        .forEach((card) => {
+          moveCard(card.id, { x: commanderPos.x, y: commanderPos.y }, { persist: true });
+        });
+    }
+
+    const tokensPos = getTokensPosition(playerName);
+    if (tokensPos) {
+      tokensCards
+        .filter((card) => card.ownerId === playerName && card.position.x === 0 && card.position.y === 0)
+        .forEach((card) => {
+          moveCard(card.id, { x: tokensPos.x, y: tokensPos.y }, { persist: true });
+        });
+    }
+  }, [commanderCards, tokensCards, playerName, getCommanderPosition, getTokensPosition, moveCard]);
 
   const getLibraryPosition = (ownerName: string) => {
     const area = getPlayerArea(ownerName);
@@ -1669,6 +1769,9 @@ const Board = () => {
     
     // Se a carta está na hand, não iniciar drag aqui (deixar o Hand component gerenciar)
     if (card.zone === 'hand' && showHand) {
+      return;
+    }
+    if (card.zone === 'tokens') {
       return;
     }
 
@@ -2209,8 +2312,8 @@ const Board = () => {
   };
 
   const handleContextMenuAction = (
-    action: 'cemetery' | 'remove' | 'shuffle' | 'tap' | 'draw' | 'moveZone' | 'libraryPlace' | 'flip' | 'createCounter' | 'cascade',
-    targetZone?: 'hand' | 'battlefield' | 'library' | 'cemetery' | 'exile',
+    action: 'cemetery' | 'remove' | 'shuffle' | 'tap' | 'draw' | 'moveZone' | 'libraryPlace' | 'flip' | 'createCounter' | 'cascade' | 'setCommander' | 'sendCommander' | 'createCopy',
+    targetZone?: 'hand' | 'battlefield' | 'library' | 'cemetery' | 'exile' | 'commander' | 'tokens',
     libraryPlace?: 'top' | 'bottom' | 'random',
     counterType?: 'numeral' | 'plus'
   ) => {
@@ -2243,6 +2346,26 @@ const Board = () => {
         });
         drawFromLibrary();
       }
+    } else if (action === 'setCommander') {
+      if (card.ownerId === playerName) {
+        const commanderPos = getCommanderPosition(card.ownerId);
+        const position = commanderPos || { x: 0, y: 0 };
+        addEventLog('SET_COMMANDER', `Set commander: ${card.name}`, card.id, card.name, {
+          position,
+        });
+        setCommander(card.id, position);
+      }
+    } else if (action === 'sendCommander') {
+      if (card.ownerId === playerName && card.isCommander && card.zone !== 'commander') {
+        const commanderPos = getCommanderPosition(card.ownerId);
+        const position = commanderPos || { x: 0, y: 0 };
+        addEventLog('SEND_COMMANDER', `Send to commander zone: ${card.name}`, card.id, card.name, {
+          from: card.zone,
+          to: 'commander',
+          position,
+        });
+        changeCardZone(card.id, 'commander', position);
+      }
     } else if (action === 'moveZone' && targetZone) {
       // Mover de zona (não inclui library aqui)
       if (card.ownerId === playerName && card.zone !== targetZone) {
@@ -2267,6 +2390,24 @@ const Board = () => {
             position,
           });
           changeCardZone(card.id, 'exile', position);
+        } else if (targetZone === 'commander') {
+          const commanderPos = getCommanderPosition(card.ownerId);
+          const position = commanderPos || { x: 0, y: 0 };
+          addEventLog('CHANGE_ZONE', `Mudando para commander: ${card.name}`, card.id, card.name, {
+            from: card.zone,
+            to: 'commander',
+            position,
+          });
+          changeCardZone(card.id, 'commander', position);
+        } else if (targetZone === 'tokens') {
+          const tokensPos = getTokensPosition(card.ownerId);
+          const position = tokensPos || { x: 0, y: 0 };
+          addEventLog('CHANGE_ZONE', `Mudando para tokens: ${card.name}`, card.id, card.name, {
+            from: card.zone,
+            to: 'tokens',
+            position,
+          });
+          changeCardZone(card.id, 'tokens', position);
         } else {
           // Calcular posição baseada na zona de destino
           let position: Point = { x: 0, y: 0 };
@@ -2298,6 +2439,22 @@ const Board = () => {
           libraryPlace,
         });
         changeCardZone(card.id, 'library', position, libraryPlace);
+      }
+    } else if (action === 'createCopy') {
+      if (canInteractWithCard(card.ownerId)) {
+        addEventLog('CREATE_COPY', `Creating copy: ${card.name}`, card.id, card.name, {
+          zone: card.zone,
+        });
+        addCardToBoard({
+          name: card.name,
+          oracleText: card.oracleText,
+          manaCost: card.manaCost,
+          typeLine: card.typeLine,
+          setName: card.setName,
+          imageUrl: card.imageUrl,
+          backImageUrl: card.backImageUrl,
+          position: { x: card.position.x, y: card.position.y },
+        });
       }
     } else if (action === 'flip') {
       // Transform card
@@ -2831,6 +2988,10 @@ const Board = () => {
 
   const exileMovedRef = useRef<boolean>(false);
   const [exilePositions, setExilePositions] = useState<Record<string, Point>>({});
+  const commanderMovedRef = useRef<boolean>(false);
+  const [commanderPositions, setCommanderPositions] = useState<Record<string, Point>>({});
+  const tokensMovedRef = useRef<boolean>(false);
+  const [tokensPositions, setTokensPositions] = useState<Record<string, Point>>({});
 
   useEffect(() => {
     if (draggingExile) {
@@ -2838,6 +2999,20 @@ const Board = () => {
     }
     setExilePositions(storeExilePositions);
   }, [storeExilePositions, draggingExile]);
+
+  useEffect(() => {
+    if (draggingCommander) {
+      return;
+    }
+    setCommanderPositions(storeCommanderPositions);
+  }, [storeCommanderPositions, draggingCommander]);
+
+  useEffect(() => {
+    if (draggingTokens) {
+      return;
+    }
+    setTokensPositions(storeTokensPositions);
+  }, [storeTokensPositions, draggingTokens]);
 
   // Sistema de drag para exílio
   const startExileDrag = (targetPlayerName: string, event: ReactPointerEvent) => {
@@ -2894,6 +3069,119 @@ const Board = () => {
     const offsetY = cursorY - exilePos.y;
 
     setDraggingExile({
+      playerName: targetPlayerName,
+      offsetX,
+      offsetY,
+      startX: event.clientX,
+      startY: event.clientY,
+    });
+  };
+
+  // Sistema de drag para commander
+  const startCommanderDrag = (targetPlayerName: string, event: ReactPointerEvent) => {
+    if ((event.target as HTMLElement).closest('button')) {
+      return;
+    }
+    if (event.button === 2) {
+      return;
+    }
+    event.preventDefault();
+    if (!boardRef.current) {
+      return;
+    }
+
+    commanderMovedRef.current = false;
+
+    const rect = boardRef.current.getBoundingClientRect();
+    let commanderPos = getCommanderPosition(targetPlayerName);
+    if (!commanderPos) {
+      const area = getPlayerArea(targetPlayerName);
+      commanderPos = area ? { x: area.x + 20, y: area.y + 20 } : { x: 0, y: 0 };
+    }
+
+    let cursorX: number;
+    let cursorY: number;
+    if (viewMode === 'separated') {
+      const coords = convertMouseToSeparatedCoordinates(
+        event.clientX,
+        event.clientY,
+        targetPlayerName,
+        rect
+      );
+      if (coords) {
+        cursorX = coords.x;
+        cursorY = coords.y;
+      } else {
+        const fallback = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+        cursorX = fallback.x;
+        cursorY = fallback.y;
+      }
+    } else {
+      const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+      cursorX = coords.x;
+      cursorY = coords.y;
+    }
+
+    const offsetX = cursorX - commanderPos.x;
+    const offsetY = cursorY - commanderPos.y;
+
+    setDraggingCommander({
+      playerName: targetPlayerName,
+      offsetX,
+      offsetY,
+      startX: event.clientX,
+      startY: event.clientY,
+    });
+  };
+
+  const startTokensDrag = (targetPlayerName: string, event: ReactPointerEvent) => {
+    if ((event.target as HTMLElement).closest('button')) {
+      return;
+    }
+    if (event.button === 2) {
+      return;
+    }
+    event.preventDefault();
+    if (!boardRef.current) {
+      return;
+    }
+
+    tokensMovedRef.current = false;
+
+    const rect = boardRef.current.getBoundingClientRect();
+    let tokensPos = getTokensPosition(targetPlayerName);
+    if (!tokensPos) {
+      const area = getPlayerArea(targetPlayerName);
+      tokensPos = area ? { x: area.x + 20, y: area.y + 200 } : { x: 0, y: 0 };
+    }
+
+    let cursorX: number;
+    let cursorY: number;
+    if (viewMode === 'separated') {
+      const coords = convertMouseToSeparatedCoordinates(
+        event.clientX,
+        event.clientY,
+        targetPlayerName,
+        rect
+      );
+      if (coords) {
+        cursorX = coords.x;
+        cursorY = coords.y;
+      } else {
+        const fallback = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+        cursorX = fallback.x;
+        cursorY = fallback.y;
+      }
+    } else {
+      const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+      cursorX = coords.x;
+      cursorY = coords.y;
+    }
+
+    const offsetX = cursorX - tokensPos.x;
+    const offsetY = cursorY - tokensPos.y;
+
+    setDraggingTokens({
       playerName: targetPlayerName,
       offsetX,
       offsetY,
@@ -2981,6 +3269,160 @@ const Board = () => {
     };
   }, [draggingExile, moveExile, playerName, viewMode, players, getPlayerArea, exilePositions, addEventLog, convertMouseToSeparatedCoordinates, convertMouseToUnifiedCoordinates]);
 
+  useEffect(() => {
+    if (!draggingCommander) return;
+
+    const handleMove = (event: PointerEvent) => {
+      if (!boardRef.current || !draggingCommander) return;
+      const rect = boardRef.current.getBoundingClientRect();
+      let cursorX: number;
+      let cursorY: number;
+
+      if (viewMode === 'separated') {
+        const coords = convertMouseToSeparatedCoordinates(event.clientX, event.clientY, draggingCommander.playerName, rect);
+        if (coords) {
+          cursorX = coords.x;
+          cursorY = coords.y;
+        } else {
+          const fallback = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+          cursorX = fallback.x;
+          cursorY = fallback.y;
+        }
+      } else {
+        const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+        cursorX = coords.x;
+        cursorY = coords.y;
+      }
+
+      const x = cursorX - draggingCommander.offsetX;
+      const y = cursorY - draggingCommander.offsetY;
+
+      const COMMANDER_CARD_WIDTH = 100;
+      const COMMANDER_CARD_HEIGHT = 140;
+      const playerArea = getPlayerArea(draggingCommander.playerName);
+      const maxX = playerArea ? playerArea.x + playerArea.width - COMMANDER_CARD_WIDTH : rect.width - COMMANDER_CARD_WIDTH;
+      const maxY = playerArea ? playerArea.y + playerArea.height - COMMANDER_CARD_HEIGHT : rect.height - COMMANDER_CARD_HEIGHT;
+      const minX = playerArea ? playerArea.x : 0;
+      const minY = playerArea ? playerArea.y : 0;
+
+      const clampedX = Math.max(minX, Math.min(maxX, x));
+      const clampedY = Math.max(minY, Math.min(maxY, y));
+
+      const deltaX = Math.abs(event.clientX - draggingCommander.startX);
+      const deltaY = Math.abs(event.clientY - draggingCommander.startY);
+      if (deltaX > DRAG_THRESHOLD || deltaY > DRAG_THRESHOLD) {
+        commanderMovedRef.current = true;
+      }
+
+      setCommanderPositions((prev) => ({
+        ...prev,
+        [draggingCommander.playerName]: { x: clampedX, y: clampedY },
+      }));
+      moveCommander(draggingCommander.playerName, { x: clampedX, y: clampedY }, true);
+    };
+
+    const stopDrag = () => {
+      if (commanderMovedRef.current && draggingCommander) {
+        const finalPosition = commanderPositions[draggingCommander.playerName];
+        if (finalPosition) {
+          moveCommander(draggingCommander.playerName, finalPosition, false);
+          addEventLog('MOVE_COMMANDER', `Moving commander: ${draggingCommander.playerName}`, undefined, undefined, {
+            playerName: draggingCommander.playerName,
+            position: finalPosition,
+          });
+        }
+      }
+      setDraggingCommander(null);
+      commanderMovedRef.current = false;
+    };
+
+    const handleUp = () => stopDrag();
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    return () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    };
+  }, [draggingCommander, moveCommander, playerName, viewMode, players, getPlayerArea, commanderPositions, addEventLog, convertMouseToSeparatedCoordinates, convertMouseToUnifiedCoordinates]);
+
+  useEffect(() => {
+    if (!draggingTokens) return;
+
+    const handleMove = (event: PointerEvent) => {
+      if (!boardRef.current || !draggingTokens) return;
+      const rect = boardRef.current.getBoundingClientRect();
+      let cursorX: number;
+      let cursorY: number;
+
+      if (viewMode === 'separated') {
+        const coords = convertMouseToSeparatedCoordinates(event.clientX, event.clientY, draggingTokens.playerName, rect);
+        if (coords) {
+          cursorX = coords.x;
+          cursorY = coords.y;
+        } else {
+          const fallback = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+          cursorX = fallback.x;
+          cursorY = fallback.y;
+        }
+      } else {
+        const coords = convertMouseToUnifiedCoordinates(event.clientX, event.clientY, rect);
+        cursorX = coords.x;
+        cursorY = coords.y;
+      }
+
+      const x = cursorX - draggingTokens.offsetX;
+      const y = cursorY - draggingTokens.offsetY;
+
+      const TOKENS_CARD_WIDTH = 100;
+      const TOKENS_CARD_HEIGHT = 140;
+      const playerArea = getPlayerArea(draggingTokens.playerName);
+      const maxX = playerArea ? playerArea.x + playerArea.width - TOKENS_CARD_WIDTH : rect.width - TOKENS_CARD_WIDTH;
+      const maxY = playerArea ? playerArea.y + playerArea.height - TOKENS_CARD_HEIGHT : rect.height - TOKENS_CARD_HEIGHT;
+      const minX = playerArea ? playerArea.x : 0;
+      const minY = playerArea ? playerArea.y : 0;
+
+      const clampedX = Math.max(minX, Math.min(maxX, x));
+      const clampedY = Math.max(minY, Math.min(maxY, y));
+
+      const deltaX = Math.abs(event.clientX - draggingTokens.startX);
+      const deltaY = Math.abs(event.clientY - draggingTokens.startY);
+      if (deltaX > DRAG_THRESHOLD || deltaY > DRAG_THRESHOLD) {
+        tokensMovedRef.current = true;
+      }
+
+      setTokensPositions((prev) => ({
+        ...prev,
+        [draggingTokens.playerName]: { x: clampedX, y: clampedY },
+      }));
+      moveTokens(draggingTokens.playerName, { x: clampedX, y: clampedY }, true);
+    };
+
+    const stopDrag = () => {
+      if (tokensMovedRef.current && draggingTokens) {
+        const finalPosition = tokensPositions[draggingTokens.playerName];
+        if (finalPosition) {
+          moveTokens(draggingTokens.playerName, finalPosition, false);
+          addEventLog('MOVE_TOKENS', `Moving tokens: ${draggingTokens.playerName}`, undefined, undefined, {
+            playerName: draggingTokens.playerName,
+            position: finalPosition,
+          });
+        }
+      }
+      setDraggingTokens(null);
+      tokensMovedRef.current = false;
+    };
+
+    const handleUp = () => stopDrag();
+
+    window.addEventListener('pointermove', handleMove);
+    window.addEventListener('pointerup', handleUp);
+    return () => {
+      window.removeEventListener('pointermove', handleMove);
+      window.removeEventListener('pointerup', handleUp);
+    };
+  }, [draggingTokens, moveTokens, playerName, viewMode, players, getPlayerArea, tokensPositions, addEventLog, convertMouseToSeparatedCoordinates, convertMouseToUnifiedCoordinates]);
+
   // Rastrear posição do mouse para debug
   useEffect(() => {
     const handleMouseMove = (event: MouseEvent) => {
@@ -3012,14 +3454,20 @@ const Board = () => {
       libraryCards,
       cemeteryCards,
       exileCards,
+      commanderCards,
+      tokensCards,
       storeLibraryPositions,
       storeCemeteryPositions,
       storeExilePositions,
+      storeCommanderPositions,
+      storeTokensPositions,
       showHand,
       dragStateRef,
       draggingLibrary,
       draggingCemetery,
       draggingExile,
+      draggingCommander,
+      draggingTokens,
       ownerName,
       handleCardClick,
       handleCardContextMenu,
@@ -3031,6 +3479,8 @@ const Board = () => {
       startLibraryDrag,
       startCemeteryDrag,
       startExileDrag,
+      startCommanderDrag,
+      startTokensDrag,
       changeCardZone,
       detectZoneAtPosition,
       reorderHandCard,
@@ -3043,6 +3493,8 @@ const Board = () => {
       getLibraryPosition,
       getCemeteryPosition,
       getExilePosition,
+      getCommanderPosition,
+      getTokensPosition,
       handDragStateRef,
       addEventLog,
       viewMode,
@@ -3070,12 +3522,21 @@ const Board = () => {
     battlefieldCards,
     libraryCards,
     cemeteryCards,
+    exileCards,
+    commanderCards,
+    tokensCards,
     storeLibraryPositions,
     storeCemeteryPositions,
+    storeExilePositions,
+    storeCommanderPositions,
+    storeTokensPositions,
     showHand,
     dragStateRef,
     draggingLibrary,
     draggingCemetery,
+    draggingExile,
+    draggingCommander,
+    draggingTokens,
     ownerName,
     handleCardClick,
     handleCardContextMenu,
@@ -3086,7 +3547,11 @@ const Board = () => {
     setLibraryContainerRef,
     startLibraryDrag,
     startCemeteryDrag,
+    startExileDrag,
+    startCommanderDrag,
+    startTokensDrag,
     changeCardZone,
+    addCardToBoard,
     detectZoneAtPosition,
     reorderHandCard,
     reorderLibraryCard,
@@ -3097,6 +3562,9 @@ const Board = () => {
     getPlayerArea,
     getLibraryPosition,
     getCemeteryPosition,
+    getExilePosition,
+    getCommanderPosition,
+    getTokensPosition,
     handDragStateRef,
     addEventLog,
     viewMode,
@@ -3997,6 +4465,29 @@ const Board = () => {
 
               {canInteractWithCard(contextMenu.card.ownerId) && (
                 <>
+                  <button
+                    onClick={() => handleContextMenuAction('createCopy')}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#f8fafc',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    📄 Create Copy
+                  </button>
+                  <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
                   {/* Tap/Untap - apenas para battlefield */}
                   {contextMenu.card.zone === 'battlefield' && (
                     <button
@@ -4245,6 +4736,63 @@ const Board = () => {
                       >
                         🔄 Mulligan
                       </button>
+                    </>
+                  )}
+
+                  {/* Commander actions */}
+                  {contextMenu.card.ownerId === playerName && (
+                    <>
+                      {!contextMenu.card.isCommander && (
+                        <>
+                          <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
+                          <button
+                            onClick={() => handleContextMenuAction('setCommander')}
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              textAlign: 'left',
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#f8fafc',
+                              cursor: 'pointer',
+                              borderRadius: '4px',
+                              fontSize: '14px',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                          >
+                            ⭐ Set Commander
+                          </button>
+                        </>
+                      )}
+                      {contextMenu.card.isCommander && contextMenu.card.zone !== 'commander' && (
+                        <button
+                          onClick={() => handleContextMenuAction('sendCommander')}
+                          style={{
+                            width: '100%',
+                            padding: '8px 12px',
+                            textAlign: 'left',
+                            background: 'transparent',
+                            border: 'none',
+                            color: '#f8fafc',
+                            cursor: 'pointer',
+                            borderRadius: '4px',
+                            fontSize: '14px',
+                          }}
+                          onMouseEnter={(e) => {
+                            e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                          }}
+                          onMouseLeave={(e) => {
+                            e.currentTarget.style.backgroundColor = 'transparent';
+                          }}
+                        >
+                          👑 Send to Commander Zone
+                        </button>
+                      )}
                     </>
                   )}
                   
@@ -4534,6 +5082,60 @@ const Board = () => {
                             }}
                           >
                             🚫 Exile
+                          </button>
+                        )}
+                        {contextMenu.card.zone !== 'commander' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleContextMenuAction('moveZone', 'commander');
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              textAlign: 'left',
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#f8fafc',
+                              cursor: 'pointer',
+                              borderRadius: '4px',
+                              fontSize: '14px',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                          >
+                            ⭐ Commander
+                          </button>
+                        )}
+                        {contextMenu.card.zone !== 'tokens' && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              handleContextMenuAction('moveZone', 'tokens');
+                            }}
+                            style={{
+                              width: '100%',
+                              padding: '8px 12px',
+                              textAlign: 'left',
+                              background: 'transparent',
+                              border: 'none',
+                              color: '#f8fafc',
+                              cursor: 'pointer',
+                              borderRadius: '4px',
+                              fontSize: '14px',
+                            }}
+                            onMouseEnter={(e) => {
+                              e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                            }}
+                            onMouseLeave={(e) => {
+                              e.currentTarget.style.backgroundColor = 'transparent';
+                            }}
+                          >
+                            🎟️ Tokens
                           </button>
                         )}
                       </div>

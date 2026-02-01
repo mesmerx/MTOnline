@@ -23,7 +23,7 @@ interface LibraryProps {
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   handleCardZoom?: (card: CardOnBoard, event: ReactPointerEvent) => void;
   zoomedCard?: string | null;
-  changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
+  changeCardZone?: (cardId: string, zone: 'battlefield' | 'library' | 'hand' | 'cemetery' | 'exile' | 'commander' | 'tokens', position: Point, libraryPlace?: 'top' | 'bottom' | 'random') => void;
   getCemeteryPosition?: (playerName: string) => Point | null;
   board?: CardOnBoard[];
   reorderLibraryCard?: (cardId: string, newIndex: number) => void;
