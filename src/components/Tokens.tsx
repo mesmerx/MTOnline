@@ -161,9 +161,7 @@ const Tokens = ({
                         handleCardZoom(card, e);
                         return;
                       }
-                      if (e.button === 0) {
-                        e.stopPropagation();
-                      }
+                      // For left-click, allow bubbling so the stack drag works.
                     }}
                     onContextMenu={(e) => {
                       e.preventDefault();
