@@ -14,6 +14,7 @@ interface CommanderProps {
   players: Array<{ id: string; name: string }>;
   getCommanderPosition: (playerName: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
+  selectedCardId?: string | null;
   onCommanderContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startCommanderDrag: (targetPlayerName: string, event: ReactPointerEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
@@ -28,6 +29,7 @@ const Commander = ({
   players,
   getCommanderPosition,
   ownerName,
+  selectedCardId,
   onCommanderContextMenu,
   startCommanderDrag,
   startDrag,
@@ -143,6 +145,7 @@ const Commander = ({
                         width={COMMANDER_CARD_WIDTH}
                         height={COMMANDER_CARD_HEIGHT}
                         showBack={false}
+                        isSelected={selectedCardId === card.id}
                       />
                     </div>
                   ))}

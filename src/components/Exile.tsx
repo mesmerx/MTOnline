@@ -16,6 +16,8 @@ interface ExileProps {
   players: Array<{ id: string; name: string }>;
   getExilePosition: (playerName: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
+  selectedCardId?: string | null;
+  handleCardDoubleClick?: (card: CardOnBoard, event: React.MouseEvent) => void;
   onExileContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   startExileDrag: (playerName: string, event: ReactPointerEvent) => void;
@@ -35,6 +37,8 @@ const Exile = ({
   players,
   getExilePosition,
   ownerName,
+  selectedCardId,
+  handleCardDoubleClick,
   onExileContextMenu,
   startDrag,
   startExileDrag,
@@ -204,11 +208,17 @@ const Exile = ({
                       <CardToken
                         card={card}
                         onPointerDown={() => {}}
-                        onDoubleClick={() => {}}
+                        onDoubleClick={(event) => {
+                          if (!handleCardDoubleClick) return;
+                          event.stopPropagation();
+                          event.preventDefault();
+                          handleCardDoubleClick(card, event);
+                        }}
                         ownerName={ownerName(card)}
                         width={EXILE_CARD_WIDTH}
                         height={EXILE_CARD_HEIGHT}
                         showBack={false}
+                        isSelected={selectedCardId === card.id}
                       />
                     </div>
                   ))}

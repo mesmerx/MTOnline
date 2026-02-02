@@ -17,6 +17,11 @@ interface LibraryProps {
   getPlayerArea: (ownerId: string) => { x: number; y: number; width: number; height: number } | null;
   getLibraryPosition: (ownerId: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
+  selectedCardId?: string | null;
+  handleCardClick?: (card: CardOnBoard, event: React.MouseEvent) => void;
+  handleCardDoubleClick?: (card: CardOnBoard, event: React.MouseEvent) => void;
+  setLastTouchedCard?: (card: CardOnBoard | null) => void;
+  setLibrarySelection?: (ownerId: string) => void;
   onLibraryContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startLibraryDrag: (playerName: string, event: ReactPointerEvent) => void;
   draggingLibrary: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
@@ -38,6 +43,11 @@ const Library = ({
   getPlayerArea,
   getLibraryPosition,
   ownerName,
+  selectedCardId,
+  handleCardClick,
+  handleCardDoubleClick,
+  setLastTouchedCard,
+  setLibrarySelection,
   onLibraryContextMenu,
   startLibraryDrag,
   draggingLibrary,
@@ -111,12 +121,27 @@ const Library = ({
                 cursor: isCurrentPlayer ? (draggingLibrary?.playerName === player.name ? 'grabbing' : 'grab') : 'pointer',
                 pointerEvents: 'auto',
               }}
+              onDoubleClick={(event) => {
+                if (!canInteract || !handleCardDoubleClick || sortedLibraryCards.length === 0) return;
+                event.preventDefault();
+                event.stopPropagation();
+                const topCard = sortedLibraryCards[0];
+                setLastTouchedCard?.(topCard);
+                setLibrarySelection?.(player.name);
+                handleCardDoubleClick(topCard, event);
+              }}
               onPointerDown={(e) => {
                 if (canInteract) {
+                  if (sortedLibraryCards.length > 0) {
+                    setLastTouchedCard?.(sortedLibraryCards[0]);
+                  }
+                  setLibrarySelection?.(player.name);
                   // Se for botão direito, não fazer nada (abre menu de contexto)
                   if (e.button === 2) return;
                   // Se for botão do meio, não fazer nada
                   if (e.button === 1) return;
+                  // Double click não deve iniciar drag (permite comprar)
+                  if (e.detail > 1) return;
                   // Se segurar Shift, arrastar carta individual para mudar de zona
                   if (e.shiftKey && sortedLibraryCards.length > 0) {
                     e.stopPropagation();
@@ -135,6 +160,7 @@ const Library = ({
                 if (isCurrentPlayer && sortedLibraryCards.length > 0) {
                   e.preventDefault();
                   e.stopPropagation();
+                  setLibrarySelection?.(player.name);
                   // Usar a primeira carta do stack para representar a library no menu
                   const topCard = sortedLibraryCards[0];
                   onLibraryContextMenu(topCard, e);
@@ -148,7 +174,7 @@ const Library = ({
                     position: 'absolute',
                     left: `${index * 3}px`,
                     top: `${index * 3}px`,
-                    pointerEvents: index === 0 && isCurrentPlayer ? 'auto' : 'none',
+                    pointerEvents: index === 0 ? 'auto' : 'none',
                     zIndex: 5 - index,
                   }}
                   onPointerDown={(e) => {
@@ -168,6 +194,7 @@ const Library = ({
                         startDrag(card, e);
                         return; // IMPORTANTE: retornar para não propagar
                       }
+                      setLastTouchedCard?.(card);
                       // Caso contrário, deixar o evento propagar para o container (para arrastar o stack)
                       // Não chamar stopPropagation nem preventDefault aqui
                     } else {
@@ -175,15 +202,35 @@ const Library = ({
                       e.stopPropagation();
                     }
                   }}
+                  onClick={(event) => {
+                    if (index === 0) {
+                      setLastTouchedCard?.(card);
+                      handleCardClick?.(card, event);
+                    }
+                  }}
+                  onDoubleClick={(event) => {
+                    if (index !== 0 || !handleCardDoubleClick) return;
+                    setLastTouchedCard?.(card);
+                    event.stopPropagation();
+                    event.preventDefault();
+                    handleCardDoubleClick(card, event);
+                  }}
                 >
                   <CardToken
                     card={card}
                     onPointerDown={() => {}}
-                    onDoubleClick={() => {}}
+                    onDoubleClick={(event) => {
+                      if (index !== 0 || !handleCardDoubleClick) return;
+                      setLastTouchedCard?.(card);
+                      event.stopPropagation();
+                      event.preventDefault();
+                      handleCardDoubleClick(card, event);
+                    }}
                     ownerName={ownerName(card)}
                     width={LIBRARY_CARD_WIDTH}
                     height={LIBRARY_CARD_HEIGHT}
                     showBack={true}
+                    isSelected={selectedCardId === card.id}
                   />
                 </div>
               ))}

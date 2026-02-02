@@ -28,11 +28,13 @@ export interface BoardViewProps {
   draggingTokens: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
   ownerName: (card: CardOnBoard) => string;
   handleCardClick: (card: CardOnBoard, event: React.MouseEvent) => void;
+  handleCardDoubleClick: (card: CardOnBoard, event: React.MouseEvent) => void;
   handleCardContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   handleCardZoom: (card: CardOnBoard, event: React.PointerEvent) => void;
   startDrag: (card: CardOnBoard, event: React.PointerEvent) => void;
   zoomedCard: string | null;
   setZoomedCard: (cardId: string | null) => void;
+  selectedCardId: string | null;
   setLibraryContainerRef?: (playerName: string, element: HTMLDivElement | null) => void;
   startLibraryDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
   startCemeteryDrag: (targetPlayerName: string, event: React.PointerEvent) => void;
@@ -45,8 +47,9 @@ export interface BoardViewProps {
   reorderLibraryCard: (cardId: string, newIndex: number) => void;
   dragStartedFromHandRef: RefObject<boolean>;
   handCardPlacedRef: RefObject<boolean>;
-  setContextMenu: (menu: { x: number; y: number; card: CardOnBoard } | null) => void;
+  setContextMenu: (menu: { x: number; y: number; card: CardOnBoard; kind?: 'card' | 'library' } | null) => void;
   setLastTouchedCard: (card: CardOnBoard | null) => void;
+  setLibrarySelection?: (ownerId: string) => void;
   getPlayerArea: (ownerId: string) => { x: number; y: number; width: number; height: number } | null;
   getLibraryPosition: (playerName: string) => Point | null;
   getCemeteryPosition: (playerName: string) => Point | null;

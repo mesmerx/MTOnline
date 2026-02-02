@@ -3045,7 +3045,20 @@ export const useGameStore = create<GameStore>((set, get) => {
       }
     },
     toggleTap: (cardId: string) => {
-      requestAction({ kind: 'toggleTap', id: cardId });
+      const state = get();
+      if (!state) return;
+      if (state.isHost) {
+        handleHostAction({ kind: 'toggleTap', id: cardId });
+      } else {
+        set((s) => {
+          if (!s) return s;
+          return {
+            ...s,
+            board: s.board.map((card) => (card.id === cardId ? { ...card, tapped: !card.tapped } : card)),
+          };
+        });
+        requestAction({ kind: 'toggleTap', id: cardId });
+      }
     },
     removeCard: (cardId: string) => {
       requestAction({ kind: 'remove', id: cardId });

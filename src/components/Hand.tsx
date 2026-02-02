@@ -24,6 +24,7 @@ interface HandProps {
   players: Array<{ id: string; name: string }>;
   getPlayerArea: (ownerId: string) => { x: number; y: number; width: number; height: number } | null;
   handleCardClick: (card: CardOnBoard, event: React.MouseEvent) => void;
+  handleCardDoubleClick: (card: CardOnBoard, event: React.MouseEvent) => void;
   handleCardContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   ownerName: (card: CardOnBoard) => string;
@@ -35,6 +36,7 @@ interface HandProps {
   setDragStartedFromHand: (value: boolean) => void;
   clearBoardDrag?: () => void;
   setLastTouchedCard: (card: CardOnBoard | null) => void;
+  selectedCardId?: string | null;
   handDragStateRef: React.MutableRefObject<{
     draggingHandCard: string | null;
     handCardMoved: boolean;
@@ -72,6 +74,7 @@ const Hand = ({
   players,
   getPlayerArea,
   handleCardClick,
+  handleCardDoubleClick,
   handleCardContextMenu,
   startDrag,
   ownerName,
@@ -83,6 +86,7 @@ const Hand = ({
   setDragStartedFromHand,
   clearBoardDrag,
   setLastTouchedCard,
+  selectedCardId,
   handDragStateRef,
   addEventLog,
   showDebugMode = false,
@@ -1408,10 +1412,12 @@ const Hand = ({
                             onPointerDown={() => {}}
                             onClick={() => {}}
                             onContextMenu={() => {}}
+                            onDoubleClick={(event) => handleCardDoubleClick(card, event)}
                             ownerName={ownerName(card)}
                             width={HAND_CARD_WIDTH}
                             height={HAND_CARD_HEIGHT}
                             showBack={isReadOnlyHand}
+                            isSelected={selectedCardId === card.id}
                           />
                           {/* Botão de flip embaixo da carta (apenas se tiver backImageUrl) */}
                           {card.backImageUrl && !isReadOnlyHand && (
@@ -1684,10 +1690,12 @@ const Hand = ({
               onPointerDown={() => {}}
               onClick={() => {}}
               onContextMenu={() => {}}
+              onDoubleClick={() => {}}
               ownerName={ownerName(draggedCard)}
               width={HAND_CARD_WIDTH}
               height={HAND_CARD_HEIGHT}
               showBack={false}
+              isSelected={selectedCardId === draggedCard.id}
             />
           </div>
         );

@@ -84,6 +84,12 @@ func ensureSchema(db *sql.DB) error {
 
 	CREATE INDEX IF NOT EXISTS idx_cards_name_normalized ON cards(name_normalized);
 	CREATE INDEX IF NOT EXISTS idx_cards_set_collector ON cards(set_code, collector_number);
+
+	CREATE TABLE IF NOT EXISTS ui_configs (
+		name TEXT PRIMARY KEY,
+		payload TEXT NOT NULL,
+		updated_at DATETIME DEFAULT CURRENT_TIMESTAMP
+	);
 	`
 	if _, err := db.Exec(schema); err != nil {
 		return err

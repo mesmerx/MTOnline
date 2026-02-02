@@ -29,6 +29,7 @@ export const BoardUnified = (props: BoardViewProps) => {
     draggingTokens,
     ownerName,
     handleCardClick,
+    handleCardDoubleClick,
     handleCardContextMenu,
     handleCardZoom,
     startDrag,
@@ -58,6 +59,7 @@ export const BoardUnified = (props: BoardViewProps) => {
     removeCounterToken,
     flipCard,
     setLibraryContainerRef,
+    selectedCardId,
   } = props;
 
   return (
@@ -92,11 +94,17 @@ export const BoardUnified = (props: BoardViewProps) => {
         getPlayerArea={getPlayerArea}
         getLibraryPosition={getLibraryPosition}
         ownerName={ownerName}
+        selectedCardId={selectedCardId}
+        handleCardClick={handleCardClick}
+        handleCardDoubleClick={handleCardDoubleClick}
+        setLastTouchedCard={setLastTouchedCard}
+        setLibrarySelection={props.setLibrarySelection}
         onLibraryContextMenu={(card, e) => {
           setContextMenu({
             x: e.clientX,
             y: e.clientY,
             card,
+            kind: 'library',
           });
         }}
         startLibraryDrag={startLibraryDrag}
@@ -130,6 +138,8 @@ export const BoardUnified = (props: BoardViewProps) => {
         draggingCemetery={draggingCemetery}
         handleCardZoom={handleCardZoom}
         zoomedCard={zoomedCard}
+        selectedCardId={selectedCardId}
+        handleCardDoubleClick={handleCardDoubleClick}
         changeCardZone={changeCardZone}
         getLibraryPosition={getLibraryPosition}
         board={board}
@@ -154,6 +164,8 @@ export const BoardUnified = (props: BoardViewProps) => {
         draggingExile={draggingExile}
         handleCardZoom={handleCardZoom}
         zoomedCard={zoomedCard}
+        selectedCardId={selectedCardId}
+        handleCardDoubleClick={handleCardDoubleClick}
         changeCardZone={changeCardZone}
         getLibraryPosition={getLibraryPosition}
         getCemeteryPosition={getCemeteryPosition}
@@ -178,6 +190,7 @@ export const BoardUnified = (props: BoardViewProps) => {
         draggingTokens={draggingTokens}
         handleCardZoom={handleCardZoom}
         zoomedCard={zoomedCard}
+        selectedCardId={selectedCardId}
         changeCardZone={changeCardZone}
         getLibraryPosition={getLibraryPosition}
         getCemeteryPosition={getCemeteryPosition}
@@ -201,6 +214,7 @@ export const BoardUnified = (props: BoardViewProps) => {
         startDrag={startDrag}
         handleCardZoom={handleCardZoom}
         zoomedCard={zoomedCard}
+        selectedCardId={selectedCardId}
       />
 
       {battlefieldCards.map((card) => {
@@ -218,16 +232,23 @@ export const BoardUnified = (props: BoardViewProps) => {
               top: `${posY}px`,
               zIndex: isDragging ? 1000 : 1,
             }}
+            onDoubleClick={(event) => handleCardDoubleClick(card, event)}
           >
             <CardToken
               card={card}
               onPointerDown={(event) => {
+                if (event.detail > 1) {
+                  handleCardDoubleClick(card, event as unknown as React.MouseEvent);
+                  return;
+                }
                 setLastTouchedCard(card);
                 handleCardZoom(card, event);
                 startDrag(card, event);
               }}
               onClick={(event) => handleCardClick(card, event)}
+              onDoubleClick={(event) => handleCardDoubleClick(card, event)}
               onContextMenu={(event) => handleCardContextMenu(card, event)}
+              isSelected={selectedCardId === card.id}
               ownerName={ownerName(card)}
               width={CARD_WIDTH}
               height={CARD_HEIGHT}
@@ -299,6 +320,7 @@ export const BoardUnified = (props: BoardViewProps) => {
           players={allPlayers}
           getPlayerArea={getPlayerArea}
           handleCardClick={handleCardClick}
+          handleCardDoubleClick={handleCardDoubleClick}
           handleCardContextMenu={handleCardContextMenu}
           startDrag={startDrag}
           ownerName={ownerName}
@@ -315,6 +337,7 @@ export const BoardUnified = (props: BoardViewProps) => {
             // setIsDragging é gerenciado no Board.tsx principal
           }}
           setLastTouchedCard={setLastTouchedCard}
+          selectedCardId={selectedCardId}
           handDragStateRef={props.handDragStateRef}
           addEventLog={props.addEventLog}
           viewMode={props.viewMode}

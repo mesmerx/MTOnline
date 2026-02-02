@@ -163,6 +163,17 @@ const MenuBar = () => {
           >
             <span className="menu-icon">⬇️</span>
           </button>
+          <button
+            type="button"
+            className="menu-button"
+            onClick={() => {
+              window.history.pushState({}, '', '/admin/ui-config');
+              window.dispatchEvent(new PopStateEvent('popstate'));
+            }}
+            title="UI config"
+          >
+            <span className="menu-icon">🛠️</span>
+          </button>
         </div>
       </div>
 

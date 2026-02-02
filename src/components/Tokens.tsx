@@ -17,6 +17,7 @@ interface TokensProps {
   players: Array<{ id: string; name: string }>;
   getTokensPosition: (playerName: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
+  selectedCardId?: string | null;
   onTokensContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startTokensDrag: (playerName: string, event: ReactPointerEvent) => void;
   draggingTokens: { playerName: string; offsetX: number; offsetY: number; startX: number; startY: number } | null;
@@ -34,6 +35,7 @@ const Tokens = ({
   players,
   getTokensPosition,
   ownerName,
+  selectedCardId,
   onTokensContextMenu,
   startTokensDrag,
   draggingTokens,
@@ -177,6 +179,7 @@ const Tokens = ({
                       width={TOKENS_CARD_WIDTH}
                       height={TOKENS_CARD_HEIGHT}
                       showBack={false}
+                        isSelected={selectedCardId === card.id}
                     />
                   </div>
                 ))

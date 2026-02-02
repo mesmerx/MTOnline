@@ -33,6 +33,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     draggingTokens,
     ownerName,
     handleCardClick,
+    handleCardDoubleClick,
     handleCardContextMenu,
     handleCardZoom,
     startDrag,
@@ -60,6 +61,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
     moveCounter,
     modifyCounter,
     removeCounterToken,
+    selectedCardId,
   } = props;
 
   const selectedPlayer = allPlayers[selectedPlayerIndex];
@@ -107,11 +109,17 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         }}
         getLibraryPosition={getLibraryPosition}
         ownerName={ownerName}
+        selectedCardId={selectedCardId}
+        handleCardClick={handleCardClick}
+        handleCardDoubleClick={handleCardDoubleClick}
+        setLastTouchedCard={setLastTouchedCard}
+        setLibrarySelection={props.setLibrarySelection}
         onLibraryContextMenu={(card, e) => {
           setContextMenu({
             x: e.clientX,
             y: e.clientY,
             card,
+            kind: 'library',
           });
         }}
         startLibraryDrag={startLibraryDrag}
@@ -133,6 +141,8 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         players={filteredPlayers}
         getCemeteryPosition={getCemeteryPosition}
         ownerName={ownerName}
+        selectedCardId={selectedCardId}
+        handleCardDoubleClick={handleCardDoubleClick}
         onCemeteryContextMenu={(card, e) => {
           setContextMenu({
             x: e.clientX,
@@ -157,6 +167,8 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         players={filteredPlayers}
         getExilePosition={getExilePosition}
         ownerName={ownerName}
+        selectedCardId={selectedCardId}
+        handleCardDoubleClick={handleCardDoubleClick}
         onExileContextMenu={(card, e) => {
           setContextMenu({
             x: e.clientX,
@@ -182,6 +194,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         players={filteredPlayers}
         getTokensPosition={getTokensPosition}
         ownerName={ownerName}
+        selectedCardId={selectedCardId}
         onTokensContextMenu={(card, e) => {
           setContextMenu({
             x: e.clientX,
@@ -205,6 +218,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
         players={filteredPlayers}
         getCommanderPosition={getCommanderPosition}
         ownerName={ownerName}
+        selectedCardId={selectedCardId}
         onCommanderContextMenu={(card, e) => {
           setContextMenu({
             x: e.clientX,
@@ -233,16 +247,23 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
               top: `${posY}px`,
               zIndex: isDragging ? 1000 : 1,
             }}
+            onDoubleClick={(event) => handleCardDoubleClick(card, event)}
           >
             <CardToken
               card={card}
               onPointerDown={(event) => {
+                if (event.detail > 1) {
+                  handleCardDoubleClick(card, event as unknown as React.MouseEvent);
+                  return;
+                }
                 setLastTouchedCard(card);
                 handleCardZoom(card, event);
                 startDrag(card, event);
               }}
               onClick={(event) => handleCardClick(card, event)}
+              onDoubleClick={(event) => handleCardDoubleClick(card, event)}
               onContextMenu={(event) => handleCardContextMenu(card, event)}
+              isSelected={selectedCardId === card.id}
               ownerName={ownerName(card)}
               width={CARD_WIDTH}
               height={CARD_HEIGHT}
@@ -324,6 +345,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
             return null;
           }}
           handleCardClick={handleCardClick}
+          handleCardDoubleClick={handleCardDoubleClick}
           handleCardContextMenu={handleCardContextMenu}
           startDrag={startDrag}
           ownerName={ownerName}
@@ -340,6 +362,7 @@ export const BoardIndividual = (props: BoardIndividualProps) => {
             // setIsDragging é gerenciado no Board.tsx principal
           }}
           setLastTouchedCard={setLastTouchedCard}
+          selectedCardId={selectedCardId}
           handDragStateRef={props.handDragStateRef}
           addEventLog={props.addEventLog}
           viewMode={props.viewMode}

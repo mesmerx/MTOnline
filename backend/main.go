@@ -9,6 +9,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"os"
@@ -237,6 +238,9 @@ func main() {
 	defer db.Close()
 	if err := ensureSchema(db); err != nil {
 		log.Fatalf("failed to ensure schema: %v", err)
+	}
+	if err := ensureUIConfig(db); err != nil {
+		log.Fatalf("failed to ensure ui config: %v", err)
 	}
 	if err := ensureCardsLoaded(db); err != nil {
 		log.Printf("cards load skipped: %v", err)
@@ -527,6 +531,9 @@ func (a *App) registerRoutes() {
 	r.Get("/cards/{setCode}/{collectorNumber}", a.handleCardCollector)
 	r.Post("/cards/batch", a.handleCardsBatch)
 
+	r.Get("/config/ui", a.handleGetUIConfig)
+	r.Post("/config/ui", a.requireAuth(a.handleUpdateUIConfig))
+
 	r.Post("/api/rooms/{roomId}/state", a.handleSaveRoomState)
 	r.Get("/api/rooms/{roomId}/state", a.handleLoadRoomState)
 	r.Post("/api/rooms/{roomId}/events", a.handleSaveRoomEvent)
@@ -538,6 +545,40 @@ func (a *App) handleHealth(w http.ResponseWriter, r *http.Request) {
 		"status":    "ok",
 		"timestamp": time.Now().UTC().Format(time.RFC3339),
 	})
+}
+
+func (a *App) handleGetUIConfig(w http.ResponseWriter, r *http.Request) {
+	row := a.db.QueryRow(`SELECT payload FROM ui_configs WHERE name = 'default'`)
+	var payload string
+	if err := row.Scan(&payload); err != nil {
+		writeJSON(w, http.StatusNotFound, map[string]string{"error": "ui config not found"})
+		return
+	}
+	w.Header().Set("Content-Type", "application/json")
+	_, _ = w.Write([]byte(payload))
+}
+
+func (a *App) handleUpdateUIConfig(w http.ResponseWriter, r *http.Request) {
+	body, err := io.ReadAll(r.Body)
+	if err != nil {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid body"})
+		return
+	}
+	if !json.Valid(body) {
+		writeJSON(w, http.StatusBadRequest, map[string]string{"error": "invalid json"})
+		return
+	}
+	if _, err := a.db.Exec(`
+		INSERT INTO ui_configs (name, payload, updated_at)
+		VALUES ('default', ?, CURRENT_TIMESTAMP)
+		ON CONFLICT(name) DO UPDATE SET
+			payload = excluded.payload,
+			updated_at = CURRENT_TIMESTAMP
+	`, string(body)); err != nil {
+		writeJSON(w, http.StatusInternalServerError, map[string]string{"error": "failed to save ui config"})
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]bool{"success": true})
 }
 
 type authContextKey struct{}

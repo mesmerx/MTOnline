@@ -1,6 +1,7 @@
-import { useEffect, useRef } from 'react';
+import { useEffect, useRef, useState } from 'react';
 import Board from './components/Board';
 import MenuBar from './components/MenuBar';
+import UIConfigAdmin from './components/UIConfigAdmin';
 import { useGameStore } from './store/useGameStore';
 
 const App = () => {
@@ -16,12 +17,19 @@ const App = () => {
   const joinRoom = useGameStore((state) => state?.joinRoom);
   const hasReconnected = useRef(false);
   const hasProcessedQueryParams = useRef(false);
+  const [path, setPath] = useState(() => window.location.pathname);
 
   useEffect(() => {
     if (checkAuth) {
       checkAuth();
     }
   }, [checkAuth]);
+
+  useEffect(() => {
+    const handlePop = () => setPath(window.location.pathname);
+    window.addEventListener('popstate', handlePop);
+    return () => window.removeEventListener('popstate', handlePop);
+  }, []);
 
   // Processar query parameters da URL
   useEffect(() => {
@@ -123,6 +131,39 @@ const App = () => {
       hasReconnected.current = false;
     }
   }, [roomId, status, isHost, playerName, roomPassword, createRoom, joinRoom]);
+
+  if (path.startsWith('/admin/ui-config')) {
+    return (
+      <div className="app-shell">
+        {error && <div className="error-banner">{error}</div>}
+        <main className="board-fullscreen">
+          <div style={{ padding: '16px', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+            <div style={{ fontWeight: 600 }}>UI Config</div>
+            <button
+              type="button"
+              onClick={() => {
+                window.history.pushState({}, '', '/');
+                window.dispatchEvent(new PopStateEvent('popstate'));
+              }}
+              style={{
+                padding: '6px 12px',
+                borderRadius: '6px',
+                border: '1px solid rgba(148, 163, 184, 0.4)',
+                background: 'transparent',
+                color: '#f8fafc',
+                cursor: 'pointer',
+              }}
+            >
+              Back to game
+            </button>
+          </div>
+          <div style={{ padding: '16px' }}>
+            <UIConfigAdmin />
+          </div>
+        </main>
+      </div>
+    );
+  }
 
   return (
     <div className="app-shell">

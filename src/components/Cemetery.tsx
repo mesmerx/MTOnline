@@ -16,6 +16,8 @@ interface CemeteryProps {
   players: Array<{ id: string; name: string }>;
   getCemeteryPosition: (playerName: string) => Point | null;
   ownerName: (card: CardOnBoard) => string;
+  selectedCardId?: string | null;
+  handleCardDoubleClick?: (card: CardOnBoard, event: React.MouseEvent) => void;
   onCemeteryContextMenu: (card: CardOnBoard, event: React.MouseEvent) => void;
   startDrag: (card: CardOnBoard, event: ReactPointerEvent) => void;
   startCemeteryDrag: (playerName: string, event: ReactPointerEvent) => void;
@@ -34,6 +36,8 @@ const Cemetery = ({
   players,
   getCemeteryPosition,
   ownerName,
+  selectedCardId,
+  handleCardDoubleClick,
   onCemeteryContextMenu,
   startDrag,
   startCemeteryDrag,
@@ -206,11 +210,17 @@ const Cemetery = ({
                       <CardToken
                         card={card}
                         onPointerDown={() => {}}
-                        onDoubleClick={() => {}}
+                        onDoubleClick={(event) => {
+                          if (!handleCardDoubleClick) return;
+                          event.stopPropagation();
+                          event.preventDefault();
+                          handleCardDoubleClick(card, event);
+                        }}
                         ownerName={ownerName(card)}
                         width={CEMETERY_CARD_WIDTH}
                         height={CEMETERY_CARD_HEIGHT}
                         showBack={false}
+                        isSelected={selectedCardId === card.id}
                       />
                     </div>
                   ))}

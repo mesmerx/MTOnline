@@ -13,6 +13,31 @@ import { BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT, CARD_WIDTH, CARD_HEIGHT } from './
 
 type Point = { x: number; y: number };
 
+type TopMenuItem = {
+  text: string;
+  command?: string;
+  submenu?: TopMenuItem[];
+};
+
+type EntityActionMap = {
+  leftClick?: string[];
+  rightClick?: string[];
+  doubleClick?: string[];
+  click?: string[];
+};
+
+type EntityConfig = {
+  selectable?: boolean;
+  showSelection?: boolean;
+  actions?: EntityActionMap;
+};
+
+type UIConfig = {
+  aliases?: Record<string, string>;
+  entities?: Record<string, EntityConfig>;
+  ['top menu']?: Record<string, TopMenuItem[]>;
+};
+
 // Constantes importadas de BoardTypes.ts
 // CARD_WIDTH, CARD_HEIGHT, BASE_BOARD_WIDTH, BASE_BOARD_HEIGHT já estão importados
 const LIBRARY_CARD_WIDTH = 100;
@@ -559,6 +584,7 @@ const Board = () => {
     x: number;
     y: number;
     card: CardOnBoard;
+    kind?: 'card' | 'library';
   } | null>(null);
   const [showPrintsMenu, setShowPrintsMenu] = useState(false);
   const [printsLoading, setPrintsLoading] = useState(false);
@@ -567,6 +593,12 @@ const Board = () => {
   const [printsSelection, setPrintsSelection] = useState<string | null>(null);
   const [printsCardId, setPrintsCardId] = useState<string | null>(null);
   const [printsMetaById, setPrintsMetaById] = useState<Record<string, { setCode?: string; collectorNumber?: string }>>({});
+  const [topMenuOpen, setTopMenuOpen] = useState<string | null>(null);
+  const [topMenuSubmenuOpen, setTopMenuSubmenuOpen] = useState<string | null>(null);
+  const [uiConfig, setUiConfig] = useState<UIConfig>({});
+  const actionAliases = uiConfig?.aliases ?? {};
+  const entityConfigs = uiConfig?.entities ?? {};
+  const topMenuConfig = uiConfig?.['top menu'] ?? {};
 
   const applyPrintSelection = useCallback(
     (selectionId?: string | null) => {
@@ -616,7 +648,28 @@ const Board = () => {
   
   // Estados para debug
   const [lastTouchedCard, setLastTouchedCard] = useState<CardOnBoard | null>(null);
+  const [lastTouchedZone, setLastTouchedZone] = useState<'library' | null>(null);
+  const [lastTouchedLibraryOwner, setLastTouchedLibraryOwner] = useState<string | null>(null);
   const [mousePosition, setMousePosition] = useState<{ x: number; y: number; boardX: number; boardY: number } | null>(null);
+  const lastDoubleClickRef = useRef<number>(0);
+  const clickEntityRef = useRef<{ cardId: string; time: number } | null>(null);
+  const hasLibrarySelection = lastTouchedZone === 'library';
+  const libraryMenuOwner = hasLibrarySelection
+    ? lastTouchedLibraryOwner
+    : lastTouchedCard?.zone === 'library'
+      ? lastTouchedCard.ownerId
+      : null;
+
+  const selectCard = useCallback((card: CardOnBoard | null) => {
+    setLastTouchedCard(card);
+    setLastTouchedZone(null);
+    setLastTouchedLibraryOwner(null);
+  }, []);
+
+  const selectLibrary = useCallback((ownerId: string) => {
+    setLastTouchedZone('library');
+    setLastTouchedLibraryOwner(ownerId);
+  }, []);
   
   // Sistema de log de eventos
   interface EventLog {
@@ -1748,17 +1801,38 @@ const Board = () => {
       dragStateRef.current = null;
       setIsDragging(false);
       
-      // Se não moveu, processar como clique (tap/untap)
+      // Se não moveu, tratar como click/double click baseado em pointerup
       if (!hadMoved) {
-        // Obter a carta atualizada do store
         const currentBoard = useGameStore.getState().board;
         const card = currentBoard.find((c) => c.id === cardId);
-        
-        if (card && card.zone === 'battlefield' && card.ownerId === playerName) {
-          toggleTap(cardId);
-        } else {
+        if (card) {
+          const now = Date.now();
+          const doubleClickActions = getEntityActions(card.zone, 'doubleClick');
+          const leftClickActions = getEntityActions(card.zone, 'leftClick');
+          if (doubleClickActions.length > 0) {
+            const lastClick = clickEntityRef.current;
+            if (lastClick && lastClick.cardId === card.id && now - lastClick.time <= 300) {
+              clickEntityRef.current = null;
+              if (now - lastDoubleClickRef.current >= 250) {
+                lastDoubleClickRef.current = now;
+                executeEntityActions(doubleClickActions, card);
+              }
+              if (clickBlockTimeoutRef.current) {
+                clearTimeout(clickBlockTimeoutRef.current.timeoutId);
+                clickBlockTimeoutRef.current = null;
+              }
+              return;
+            }
+          }
+
+          if (leftClickActions.length > 0) {
+            executeEntityActions(leftClickActions, card);
+          }
+
+          if (doubleClickActions.length > 0) {
+            clickEntityRef.current = { cardId: card.id, time: now };
+          }
         }
-        
         if (clickBlockTimeoutRef.current) {
           clearTimeout(clickBlockTimeoutRef.current.timeoutId);
           clickBlockTimeoutRef.current = null;
@@ -1787,11 +1861,12 @@ const Board = () => {
   const startDrag = (card: CardOnBoard, event: ReactPointerEvent) => {
     // Ignorar botão direito e botão do meio
     if (event.button === 1 || event.button === 2) return;
+    // Não iniciar drag em double click (permite ações de double click)
+    if (event.detail > 1) return;
     
     // Só pode mover suas próprias cards
     if (card.ownerId !== playerName) return;
     if ((event.target as HTMLElement).closest('button')) return;
-    event.preventDefault();
     if (!boardRef.current) return;
     
     // Se a carta está na hand, não iniciar drag aqui (deixar o Hand component gerenciar)
@@ -1904,43 +1979,39 @@ const Board = () => {
 
   const ownerName = (card: CardOnBoard) => allPlayers.find((player) => player.name === card.ownerId)?.name ?? 'Unknown';
 
-  const handleLibraryClick = (targetPlayerName: string) => {
-    // targetPlayerName é o nome do player (não o ID)
-    if (targetPlayerName === playerName) {
-      addEventLog('DRAW_FROM_LIBRARY', 'Comprando carta da library', undefined, undefined, {
-        playerName: targetPlayerName,
-      });
-      drawFromLibrary();
-    }
+  const handleCardClick = (card: CardOnBoard, event: React.MouseEvent) => {
+    // Single click should only select a card (no actions).
+    event.preventDefault();
+    event.stopPropagation();
+    const actions = getEntityActions(card.zone, 'leftClick');
+    if (actions.length === 0) return;
+    executeEntityActions(actions, card);
   };
 
-  const handleCardClick = (card: CardOnBoard, event: React.MouseEvent) => {
-    // Registrar última carta tocada para debug
-    setLastTouchedCard(card);
-    
-    addEventLog('CLICK', `Click em carta: ${card.name}`, card.id, card.name, {
+  const handleCardDoubleClick = (card: CardOnBoard, event: React.MouseEvent) => {
+    const now = Date.now();
+    if (event.type === 'dblclick' && now - lastDoubleClickRef.current < 250) {
+      return;
+    }
+    lastDoubleClickRef.current = now;
+
+    addEventLog('DOUBLE_CLICK', `Double click em carta: ${card.name}`, card.id, card.name, {
       zone: card.zone,
       ownerId: card.ownerId,
       position: card.position,
       tapped: card.tapped,
     });
 
-    // Bloquear clique apenas se há um drag realmente ativo
-    if (isDragging) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
+    // Double click should always trigger actions, even if a drag started.
+    dragStateRef.current = null;
+    setIsDragging(false);
 
-    // Bloquear clique apenas se acabou de fazer drag com movimento na mesma carta
-    // (o timeout só é definido se houve movimento real)
     if (clickBlockTimeoutRef.current && clickBlockTimeoutRef.current.cardId === card.id) {
       event.preventDefault();
       event.stopPropagation();
       return;
     }
 
-    // Bloquear se há drag da hand ativo
     if (showHand && dragStartedFromHandRef.current) {
       event.preventDefault();
       event.stopPropagation();
@@ -1949,58 +2020,11 @@ const Board = () => {
       return;
     }
 
-    // O menu de contexto é tratado pelo onContextMenu, não pelo onClick
-    // O clique normal na hand vai direto para o board (ver código abaixo)
-
-    // Verificar se a carta mudou de zona
-    const currentBoard = useGameStore.getState().board;
-    const currentCard = currentBoard.find((c) => c.id === card.id);
-    if (currentCard && currentCard.zone !== card.zone) {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-
-    // Bloquear clique se clicou na área da mão
-    const target = event.target as HTMLElement;
-    const clickedOnHandArea = target.closest('.hand-area, .hand-cards, .hand-card-wrapper');
-    if (clickedOnHandArea && card.zone === 'battlefield') {
-      event.preventDefault();
-      event.stopPropagation();
-      return;
-    }
-
     event.preventDefault();
     event.stopPropagation();
-
-    // Se a carta está no board, fazer tap/untap
-    if (card.zone === 'battlefield' && canInteractWithCard(card.ownerId)) {
-      addEventLog('TOGGLE_TAP', `Toggle tap: ${card.name} (${card.tapped ? 'tapped' : 'untapped'} → ${!card.tapped ? 'tapped' : 'untapped'})`, card.id, card.name, {
-        from: card.tapped,
-        to: !card.tapped,
-      });
-      toggleTap(card.id);
-      return;
-    }
-
-    // Se está na mão, colocar no board
-    if (card.zone === 'hand' && canInteractWithCard(card.ownerId) && showHand) {
-      const playerArea = getPlayerArea(playerName);
-      if (playerArea) {
-        const position = {
-          x: playerArea.x + playerArea.width / 2 - CARD_WIDTH / 2,
-          y: playerArea.y + playerArea.height / 2 - CARD_HEIGHT / 2,
-        };
-        addEventLog('CHANGE_ZONE', `Mudando zona: ${card.name} (hand → battlefield)`, card.id, card.name, {
-          from: 'hand',
-          to: 'battlefield',
-          position,
-        });
-        changeCardZone(card.id, 'battlefield', position);
-      }
-      return;
-    }
-
+    const actions = getEntityActions(card.zone, 'doubleClick');
+    if (actions.length === 0) return;
+    executeEntityActions(actions, card);
   };
 
   const handleCardZoom = (card: CardOnBoard, event: React.PointerEvent) => {
@@ -2174,6 +2198,15 @@ const Board = () => {
   const handleCardContextMenu = (card: CardOnBoard, event: React.MouseEvent) => {
     event.preventDefault();
     event.stopPropagation();
+
+    const rightClickActions = getEntityActions(card.zone, 'rightClick');
+    if (!rightClickActions.includes('openContextMenu')) {
+      return;
+    }
+    const rightClickSideEffects = rightClickActions.filter((action) => action !== 'openContextMenu');
+    if (rightClickSideEffects.length > 0) {
+      executeEntityActions(rightClickSideEffects, card);
+    }
     
     // Registrar última carta tocada para debug
     setLastTouchedCard(card);
@@ -2199,6 +2232,7 @@ const Board = () => {
       x: event.clientX,
       y: event.clientY,
       card,
+      kind: 'card',
     });
   };
   
@@ -2229,12 +2263,8 @@ const Board = () => {
     return total;
   };
 
-  // Função para executar cascade
-  const handleCascade = async (showEachCard: boolean) => {
-    if (!contextMenu) return;
-    
-    const { card } = contextMenu;
-    if (card.zone !== 'library' || !canInteractWithCard(card.ownerId)) return;
+  const runCascade = async (ownerId: string, showEachCard: boolean, closeContextMenu: boolean) => {
+    if (!canInteractWithCard(ownerId)) return;
     
     // Fechar submenu
     setContextSubmenu(null);
@@ -2242,28 +2272,34 @@ const Board = () => {
     // Perguntar o valor do CMC maximo
     const cascadeValueStr = window.prompt('Enter the max CMC value:');
     if (!cascadeValueStr) {
-      setContextMenu(null);
-      setShowPrintsMenu(false);
-      setShowPrintsMenu(false);
+      if (closeContextMenu) {
+        setContextMenu(null);
+        setShowPrintsMenu(false);
+        setShowPrintsMenu(false);
+      }
       return;
     }
     
     const cascadeValue = parseInt(cascadeValueStr, 10);
     if (isNaN(cascadeValue) || cascadeValue < 0) {
       alert('Invalid value. Enter a number greater than or equal to 0.');
-      setContextMenu(null);
-      setShowPrintsMenu(false);
+      if (closeContextMenu) {
+        setContextMenu(null);
+        setShowPrintsMenu(false);
+      }
       return;
     }
     
-    setContextMenu(null);
-    setShowPrintsMenu(false);
-    setShowPrintsMenu(false);
+    if (closeContextMenu) {
+      setContextMenu(null);
+      setShowPrintsMenu(false);
+      setShowPrintsMenu(false);
+    }
     
     // Obter cards do library do jogador, ordenadas por stackIndex (descendente - topo primeiro)
     const currentBoard = useGameStore.getState().board;
     const libraryCards = currentBoard
-      .filter((c) => c.zone === 'library' && c.ownerId === card.ownerId)
+      .filter((c) => c.zone === 'library' && c.ownerId === ownerId)
       .sort((a, b) => (b.stackIndex ?? 0) - (a.stackIndex ?? 0));
     
     if (libraryCards.length === 0) {
@@ -2333,7 +2369,7 @@ const Board = () => {
     
     // Mover outras cards para o fundo do deck
     for (const otherCard of otherCards) {
-      const libraryPos = getLibraryPosition(card.ownerId);
+      const libraryPos = getLibraryPosition(ownerId);
       const libraryPosition = libraryPos || { x: 0, y: 0 };
       addEventLog('CASCADE_BOTTOM', `Cascade: ${otherCard.name} vai para o fundo do deck`, otherCard.id, otherCard.name);
       changeCardZone(otherCard.id, 'library', libraryPosition, 'bottom');
@@ -2341,6 +2377,16 @@ const Board = () => {
     
     // Pequena pausa antes de finalizar
     await new Promise((resolve) => setTimeout(resolve, 500));
+  };
+
+  // Função para executar cascade
+  const handleCascade = async (showEachCard: boolean) => {
+    if (!contextMenu) return;
+    
+    const { card } = contextMenu;
+    if (card.zone !== 'library') return;
+    
+    await runCascade(card.ownerId, showEachCard, true);
   };
 
   const handleShowToOthers = () => {
@@ -2581,6 +2627,578 @@ const Board = () => {
     setContextSubmenu(null);
     setContextMenuPosition(null);
   };
+
+  const handleTopMenuAction = async (
+    action: 'remove' | 'tap' | 'draw' | 'shuffle' | 'flip' | 'setCommander' | 'sendCommander' | 'createCopy' | 'changePrint' | 'moveZone' | 'libraryPlace',
+    targetZone?: 'hand' | 'battlefield' | 'library' | 'cemetery' | 'exile' | 'commander' | 'tokens',
+    libraryPlace?: 'top' | 'bottom' | 'random',
+  ) => {
+    const libraryOwner = hasLibrarySelection
+      ? lastTouchedLibraryOwner
+      : lastTouchedCard?.zone === 'library'
+        ? lastTouchedCard.ownerId
+        : null;
+
+    if (action === 'shuffle') {
+      if (libraryOwner && canInteractWithCard(libraryOwner)) {
+        addEventLog('SHUFFLE_LIBRARY', `Embaralhando library`, undefined, undefined, {
+          playerName: libraryOwner,
+        });
+        shuffleLibrary(libraryOwner);
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (action === 'tap') {
+      if (!lastTouchedCard || hasLibrarySelection) return;
+      if (canInteractWithCard(lastTouchedCard.ownerId)) {
+        addEventLog('TOGGLE_TAP', `${lastTouchedCard.tapped ? 'Untap' : 'Tap'}: ${lastTouchedCard.name}`, lastTouchedCard.id, lastTouchedCard.name, {
+          from: lastTouchedCard.tapped ? 'tapped' : 'untapped',
+          to: lastTouchedCard.tapped ? 'untapped' : 'tapped',
+        });
+        toggleTap(lastTouchedCard.id);
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (action === 'draw') {
+      if (libraryOwner && canInteractWithCard(libraryOwner)) {
+        addEventLog('DRAW_FROM_LIBRARY', 'Comprando carta da library', undefined, undefined, {
+          playerName: libraryOwner,
+        });
+        drawFromLibrary();
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (!lastTouchedCard || hasLibrarySelection) return;
+    const card = lastTouchedCard;
+
+    if (action === 'setCommander') {
+      if (card.ownerId === playerName) {
+        const commanderPos = getCommanderPosition(card.ownerId);
+        const position = commanderPos || { x: 0, y: 0 };
+        addEventLog('SET_COMMANDER', `Set commander: ${card.name}`, card.id, card.name, {
+          position,
+        });
+        setCommander(card.id, position);
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (action === 'sendCommander') {
+      if (card.ownerId === playerName && card.isCommander && card.zone !== 'commander') {
+        const commanderPos = getCommanderPosition(card.ownerId);
+        const position = commanderPos || { x: 0, y: 0 };
+        addEventLog('SEND_COMMANDER', `Send to commander zone: ${card.name}`, card.id, card.name, {
+          from: card.zone,
+          to: 'commander',
+          position,
+        });
+        changeCardZone(card.id, 'commander', position);
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (action === 'moveZone' && targetZone) {
+      if (card.ownerId === playerName && card.zone !== targetZone) {
+        if (targetZone === 'cemetery') {
+          const cemeteryPos = getCemeteryPosition(card.ownerId);
+          const position = cemeteryPos || { x: 0, y: 0 };
+          addEventLog('CHANGE_ZONE', `Mudando para cemitério: ${card.name}`, card.id, card.name, {
+            from: card.zone,
+            to: 'cemetery',
+            position,
+          });
+          changeCardZone(card.id, 'cemetery', position);
+        } else if (targetZone === 'exile') {
+          const exilePos = getExilePosition(card.ownerId);
+          const position = exilePos || { x: 0, y: 0 };
+          addEventLog('CHANGE_ZONE', `Mudando para exílio: ${card.name}`, card.id, card.name, {
+            from: card.zone,
+            to: 'exile',
+            position,
+          });
+          changeCardZone(card.id, 'exile', position);
+        } else if (targetZone === 'commander') {
+          const commanderPos = getCommanderPosition(card.ownerId);
+          const position = commanderPos || { x: 0, y: 0 };
+          addEventLog('CHANGE_ZONE', `Mudando para commander: ${card.name}`, card.id, card.name, {
+            from: card.zone,
+            to: 'commander',
+            position,
+          });
+          changeCardZone(card.id, 'commander', position);
+        } else if (targetZone === 'tokens') {
+          const tokensPos = getTokensPosition(card.ownerId);
+          const position = tokensPos || { x: 0, y: 0 };
+          addEventLog('CHANGE_ZONE', `Mudando para tokens: ${card.name}`, card.id, card.name, {
+            from: card.zone,
+            to: 'tokens',
+            position,
+          });
+          changeCardZone(card.id, 'tokens', position);
+        } else {
+          let position: Point = { x: 0, y: 0 };
+          if (targetZone === 'battlefield' && boardRef.current) {
+            const rect = boardRef.current.getBoundingClientRect();
+            position = {
+              x: rect.width / 2 - CARD_WIDTH / 2,
+              y: rect.height / 2 - CARD_HEIGHT / 2,
+            };
+          }
+          addEventLog('CHANGE_ZONE', `Mudando zona: ${card.name} (${card.zone} → ${targetZone})`, card.id, card.name, {
+            from: card.zone,
+            to: targetZone,
+            position,
+          });
+          changeCardZone(card.id, targetZone, position);
+        }
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (action === 'libraryPlace' && libraryPlace) {
+      if (canInteractWithCard(card.ownerId)) {
+        const libraryPos = getLibraryPosition(card.ownerId);
+        const position = libraryPos || { x: 0, y: 0 };
+        addEventLog('CHANGE_ZONE', `Mudando para library (${libraryPlace}): ${card.name}`, card.id, card.name, {
+          from: card.zone,
+          to: 'library',
+          libraryPlace,
+        });
+        changeCardZone(card.id, 'library', position, libraryPlace);
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (action === 'createCopy') {
+      if (canInteractWithCard(card.ownerId)) {
+        addEventLog('CREATE_COPY', `Creating copy: ${card.name}`, card.id, card.name, {
+          zone: card.zone,
+        });
+        addCardToBoard({
+          name: card.name,
+          oracleText: card.oracleText,
+          manaCost: card.manaCost,
+          typeLine: card.typeLine,
+          setName: card.setName,
+          setCode: card.setCode,
+          collectorNumber: card.collectorNumber,
+          deckSection: card.deckSection,
+          deckTag: card.deckTag,
+          deckFlags: card.deckFlags,
+          finishTags: card.finishTags,
+          imageUrl: card.imageUrl,
+          backImageUrl: card.backImageUrl,
+          position: { x: card.position.x, y: card.position.y },
+        });
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (action === 'changePrint') {
+      if (!canInteractWithCard(card.ownerId)) return;
+      setPrintsLoading(true);
+      setPrintsError(null);
+      setShowPrintsMenu(true);
+      setPrintsCardId(card.id);
+      try {
+        const prints = await fetchCardPrints(card.name);
+        const metaById: Record<string, { setCode?: string; collectorNumber?: string }> = {};
+        const mapped = prints.map((print) => {
+          const setCode = print.setCode?.toUpperCase() ?? '??';
+          const collector = print.collectorNumber ?? '';
+          const label = `${print.setName ?? setCode} ${collector ? `#${collector}` : ''}`.trim();
+          const id = `${print.setCode ?? ''}:${print.collectorNumber ?? ''}:${print.setName ?? ''}:${print.imageUrl ?? ''}`;
+          metaById[id] = { setCode: print.setCode, collectorNumber: print.collectorNumber };
+          return {
+            id,
+            label,
+            imageUrl: print.imageUrl,
+            backImageUrl: print.backImageUrl,
+            setName: print.setName,
+          };
+        });
+        setPrintsOptions(mapped);
+        setPrintsMetaById(metaById);
+        setPrintsSelection(mapped[0]?.id ?? null);
+      } catch (err) {
+        setPrintsError(err instanceof Error ? err.message : 'Failed to load prints');
+      } finally {
+        setPrintsLoading(false);
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (action === 'flip') {
+      if (canInteractWithCard(card.ownerId)) {
+        const newFlipped = !card.flipped;
+        addEventLog('FLIP_CARD', `Transform card: ${card.name}`, card.id, card.name, {
+          flipped: newFlipped,
+        });
+        flipCard(card.id);
+      }
+      setTopMenuOpen(null);
+      return;
+    }
+
+    if (canInteractWithCard(card.ownerId)) {
+      addEventLog('REMOVE_CARD', `Remove: ${card.name}`, card.id, card.name, {
+        zone: card.zone,
+        ownerId: card.ownerId,
+        action: 'remove',
+      });
+      removeCard(card.id);
+    }
+    setTopMenuOpen(null);
+  };
+
+  const handleLibraryCascade = async (showEachCard: boolean) => {
+    if (!libraryMenuOwner) return;
+    await runCascade(libraryMenuOwner, showEachCard, false);
+    setTopMenuOpen(null);
+  };
+
+  const handleLibraryMulligan = () => {
+    if (playerHandCards.length === 0) return;
+    addEventLog('MULLIGAN', `Mulligan: ${playerHandCards.length} cards from hand to the library`, undefined, undefined, {
+      playerId,
+      cardsCount: playerHandCards.length,
+    });
+    mulligan(playerName);
+    setTopMenuOpen(null);
+  };
+
+  const resolveActionAlias = useCallback(
+    (action?: string) => {
+      if (!action) return '';
+      return actionAliases[action] ?? action;
+    },
+    [actionAliases]
+  );
+
+  const getEntityConfig = useCallback(
+    (zone?: string | null) => {
+      if (!zone) return undefined;
+      return entityConfigs[zone];
+    },
+    [entityConfigs]
+  );
+
+  const getEntityActions = useCallback(
+    (zone: string | null | undefined, actionType: keyof EntityActionMap) => {
+      const config = getEntityConfig(zone);
+      const actions = config?.actions?.[actionType] ?? config?.actions?.click ?? [];
+      return actions.map(resolveActionAlias).filter(Boolean);
+    },
+    [getEntityConfig, resolveActionAlias]
+  );
+
+  const moveCardToBattlefield = useCallback(
+    (card: CardOnBoard) => {
+      if (!canInteractWithCard(card.ownerId)) return;
+      const ownerArea = getPlayerArea(card.ownerId);
+      const position = ownerArea
+        ? {
+            x: ownerArea.x + ownerArea.width / 2 - CARD_WIDTH / 2,
+            y: ownerArea.y + ownerArea.height / 2 - CARD_HEIGHT / 2,
+          }
+        : { x: 0, y: 0 };
+      addEventLog('CHANGE_ZONE', `Mudando zona: ${card.name} (${card.zone} → battlefield)`, card.id, card.name, {
+        from: card.zone,
+        to: 'battlefield',
+        position,
+      });
+      changeCardZone(card.id, 'battlefield', position);
+    },
+    [addEventLog, canInteractWithCard, changeCardZone, getPlayerArea]
+  );
+
+  const playCardFromHand = useCallback(
+    (card: CardOnBoard) => {
+      if (!canInteractWithCard(card.ownerId) || !showHand) return;
+      const playerArea = getPlayerArea(playerName);
+      if (!playerArea) return;
+      const position = {
+        x: playerArea.x + playerArea.width / 2 - CARD_WIDTH / 2,
+        y: playerArea.y + playerArea.height / 2 - CARD_HEIGHT / 2,
+      };
+      addEventLog('CHANGE_ZONE', `Mudando zona: ${card.name} (hand → battlefield)`, card.id, card.name, {
+        from: 'hand',
+        to: 'battlefield',
+        position,
+      });
+      changeCardZone(card.id, 'battlefield', position);
+    },
+    [addEventLog, canInteractWithCard, changeCardZone, getPlayerArea, playerName, showHand]
+  );
+
+  const executeEntityActions = useCallback(
+    (actions: string[], card: CardOnBoard) => {
+      for (const action of actions) {
+        if (!action) continue;
+        if (action.startsWith('moveZone:')) {
+          const zone = action.split(':')[1] as 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | 'commander' | 'tokens';
+          handleTopMenuAction('moveZone', zone);
+          continue;
+        }
+        if (action.startsWith('libraryPlace:')) {
+          const place = action.split(':')[1] as 'top' | 'bottom' | 'random';
+          handleTopMenuAction('libraryPlace', undefined, place);
+          continue;
+        }
+        switch (action) {
+          case 'select':
+            if (getEntityConfig(card.zone)?.selectable === false) break;
+            selectCard(card);
+            break;
+          case 'tap':
+            if (card.zone === 'battlefield' && canInteractWithCard(card.ownerId)) {
+              addEventLog('TOGGLE_TAP', `Toggle tap: ${card.name} (${card.tapped ? 'tapped' : 'untapped'} → ${!card.tapped ? 'tapped' : 'untapped'})`, card.id, card.name, {
+                from: card.tapped,
+                to: !card.tapped,
+              });
+              toggleTap(card.id);
+            }
+            break;
+          case 'draw':
+            if (card.zone === 'library' && canInteractWithCard(card.ownerId)) {
+              addEventLog('DRAW_FROM_LIBRARY', 'Comprando carta da library', undefined, undefined, {
+                playerName: card.ownerId,
+              });
+              drawFromLibrary();
+            }
+            break;
+          case 'shuffle':
+            if (card.zone === 'library' && canInteractWithCard(card.ownerId)) {
+              addEventLog('SHUFFLE_LIBRARY', `Embaralhando library`, undefined, undefined, {
+                playerName: card.ownerId,
+              });
+              shuffleLibrary(card.ownerId);
+            }
+            break;
+          case 'mulligan':
+            if (playerHandCards.length > 0) {
+              addEventLog('MULLIGAN', `Mulligan: ${playerHandCards.length} cards from hand to the library`, undefined, undefined, {
+                playerId,
+                cardsCount: playerHandCards.length,
+              });
+              mulligan(playerName);
+            }
+            break;
+          case 'cascadeShow':
+            if (card.zone === 'library') {
+              runCascade(card.ownerId, true, false);
+            }
+            break;
+          case 'cascadeFast':
+            if (card.zone === 'library') {
+              runCascade(card.ownerId, false, false);
+            }
+            break;
+          case 'playFromHand':
+            playCardFromHand(card);
+            break;
+          case 'moveToBattlefield':
+            moveCardToBattlefield(card);
+            break;
+          case 'changePrint':
+            handleTopMenuAction('changePrint');
+            break;
+          case 'createCopy':
+            handleTopMenuAction('createCopy');
+            break;
+          case 'setCommander':
+            handleTopMenuAction('setCommander');
+            break;
+          case 'sendCommander':
+            handleTopMenuAction('sendCommander');
+            break;
+          case 'remove':
+            handleTopMenuAction('remove');
+            break;
+          default:
+            break;
+        }
+      }
+    },
+    [
+      addEventLog,
+      canInteractWithCard,
+      drawFromLibrary,
+      getEntityConfig,
+      handleTopMenuAction,
+      moveCardToBattlefield,
+      playCardFromHand,
+      playerHandCards.length,
+      playerId,
+      playerName,
+      mulligan,
+      runCascade,
+      selectCard,
+      shuffleLibrary,
+      toggleTap,
+    ]
+  );
+
+  const isTopMenuCommandDisabled = useCallback(
+    (command?: string) => {
+      if (!command) return false;
+      const resolved = resolveActionAlias(command);
+      if (resolved.startsWith('moveZone:')) {
+        if (!lastTouchedCard || lastTouchedCard.ownerId !== playerName) return true;
+        const zone = resolved.split(':')[1] as CardOnBoard['zone'];
+        return lastTouchedCard.zone === zone;
+      }
+      if (resolved.startsWith('libraryPlace:')) {
+        if (!lastTouchedCard) return true;
+        return !canInteractWithCard(lastTouchedCard.ownerId);
+      }
+      switch (resolved) {
+        case 'tap':
+        case 'flip':
+        case 'changePrint':
+        case 'createCopy':
+          return !lastTouchedCard || !canInteractWithCard(lastTouchedCard.ownerId);
+        case 'setCommander':
+          return !lastTouchedCard || lastTouchedCard.ownerId !== playerName;
+        case 'sendCommander':
+          return !lastTouchedCard || lastTouchedCard.ownerId !== playerName || !lastTouchedCard.isCommander || lastTouchedCard.zone === 'commander';
+        case 'remove':
+          return !lastTouchedCard || !canInteractWithCard(lastTouchedCard.ownerId);
+        case 'draw':
+        case 'shuffle':
+          return !libraryMenuOwner || !canInteractWithCard(libraryMenuOwner);
+        case 'mulligan':
+          return playerHandCards.length === 0;
+        case 'cascadeShow':
+        case 'cascadeFast':
+          return !libraryMenuOwner || !canInteractWithCard(libraryMenuOwner);
+        default:
+          return false;
+      }
+    },
+    [lastTouchedCard, playerName, canInteractWithCard, libraryMenuOwner, playerHandCards.length, resolveActionAlias]
+  );
+
+  const handleTopMenuCommand = useCallback(
+    (command?: string) => {
+      if (!command) return;
+      const resolved = resolveActionAlias(command);
+      if (resolved.startsWith('moveZone:')) {
+        const zone = resolved.split(':')[1] as 'battlefield' | 'hand' | 'library' | 'cemetery' | 'exile' | 'commander' | 'tokens';
+        handleTopMenuAction('moveZone', zone);
+        return;
+      }
+      if (resolved.startsWith('libraryPlace:')) {
+        const place = resolved.split(':')[1] as 'top' | 'bottom' | 'random';
+        handleTopMenuAction('libraryPlace', undefined, place);
+        return;
+      }
+      switch (resolved) {
+        case 'tap':
+        case 'flip':
+        case 'changePrint':
+        case 'createCopy':
+        case 'setCommander':
+        case 'sendCommander':
+        case 'remove':
+        case 'draw':
+        case 'shuffle':
+          handleTopMenuAction(resolved as any);
+          return;
+        case 'mulligan':
+          handleLibraryMulligan();
+          return;
+        case 'cascadeShow':
+          handleLibraryCascade(true);
+          return;
+        case 'cascadeFast':
+          handleLibraryCascade(false);
+          return;
+        default:
+          return;
+      }
+    },
+    [handleTopMenuAction, handleLibraryCascade, handleLibraryMulligan, resolveActionAlias]
+  );
+
+  const renderTopMenuItems = useCallback(
+    function renderTopMenuItemsInner(items: TopMenuItem[], level: number, parentKey: string) {
+      return items.map((item, index) => {
+        const key = `${parentKey}-${index}-${item.text}`;
+        const hasSubmenu = !!item.submenu && item.submenu.length > 0;
+        const isOpen = topMenuOpen === key;
+        const isSubOpen = topMenuSubmenuOpen === key;
+        const disabled = isTopMenuCommandDisabled(item.command);
+        const triggerClass = level === 0 ? 'mac-menu-trigger' : undefined;
+        return (
+          <div key={key} className={`mac-menu-item ${isOpen || isSubOpen ? 'active' : ''}`} data-top-menu>
+            <button
+              type="button"
+              className={triggerClass}
+              disabled={disabled}
+              onClick={(event) => {
+                event.stopPropagation();
+                if (hasSubmenu) {
+                  if (level === 0) {
+                    setTopMenuOpen(isOpen ? null : key);
+                    setTopMenuSubmenuOpen(null);
+                  } else {
+                    setTopMenuSubmenuOpen(isSubOpen ? null : key);
+                  }
+                  return;
+                }
+                handleTopMenuCommand(item.command);
+                setTopMenuOpen(null);
+                setTopMenuSubmenuOpen(null);
+              }}
+              style={hasSubmenu ? { display: 'flex', justifyContent: 'space-between', alignItems: 'center', width: '100%' } : undefined}
+            >
+              <span>{item.text}</span>
+              {hasSubmenu && <span style={{ fontSize: '12px', opacity: 0.7 }}>▶</span>}
+            </button>
+            {hasSubmenu && ((level === 0 && isOpen) || (level > 0 && isSubOpen)) && (
+              <div
+                data-top-menu
+                onClick={(event) => event.stopPropagation()}
+                style={{
+                  position: 'absolute',
+                  left: level === 0 ? 0 : '100%',
+                  top: level === 0 ? '32px' : 0,
+                  marginTop: level === 0 ? '4px' : undefined,
+                  marginLeft: level === 0 ? undefined : '6px',
+                  minWidth: '200px',
+                  background: 'rgba(15, 23, 42, 0.98)',
+                  border: '1px solid rgba(148, 163, 184, 0.25)',
+                  borderRadius: '10px',
+                  padding: '6px',
+                  display: 'flex',
+                  flexDirection: 'column',
+                  gap: '4px',
+                  boxShadow: '0 8px 18px rgba(0, 0, 0, 0.35)',
+                  zIndex: 1100,
+                }}
+              >
+                {renderTopMenuItemsInner(item.submenu ?? [], level + 1, key)}
+              </div>
+            )}
+          </div>
+        );
+      });
+    },
+    [handleTopMenuCommand, isTopMenuCommandDisabled, topMenuOpen, topMenuSubmenuOpen]
+  );
   
   // Fechar menu ao clicar fora
   useEffect(() => {
@@ -2637,6 +3255,50 @@ const Board = () => {
       };
     }
   }, [contextMenu, boardContextMenu, contextSubmenu, contextSubmenuLibrary]);
+
+  useEffect(() => {
+    if (!topMenuOpen) return;
+    const handleTopMenuClick = (event: MouseEvent) => {
+      const target = event.target as HTMLElement;
+      const isInsideTopMenu = target.closest('[data-top-menu]');
+      if (isInsideTopMenu) return;
+      setTopMenuOpen(null);
+      setTopMenuSubmenuOpen(null);
+    };
+    document.addEventListener('click', handleTopMenuClick, false);
+    return () => {
+      document.removeEventListener('click', handleTopMenuClick, false);
+    };
+  }, [topMenuOpen]);
+
+  useEffect(() => {
+    const apiUrl = import.meta.env.VITE_API_URL || 'http://localhost:3000';
+    let isActive = true;
+    const load = () => {
+      fetch(`${apiUrl}/config/ui`)
+        .then((response) => (response.ok ? response.json() : null))
+        .then((data: UIConfig | null) => {
+          if (!data || !isActive) return;
+          setUiConfig(data);
+        })
+        .catch(() => null);
+    };
+    load();
+    const handleUpdate = () => load();
+    window.addEventListener('ui-config-updated', handleUpdate);
+    return () => {
+      isActive = false;
+      window.removeEventListener('ui-config-updated', handleUpdate);
+    };
+  }, []);
+
+  useEffect(() => {
+    if (!topMenuOpen) {
+      setTopMenuSubmenuOpen(null);
+      return;
+    }
+    setTopMenuSubmenuOpen(null);
+  }, [topMenuOpen]);
 
   const startLibraryDrag = (targetPlayerName: string, event: ReactPointerEvent) => {
     if (targetPlayerName !== playerName) return;
@@ -2791,7 +3453,7 @@ const Board = () => {
       );
     };
 
-    const stopDrag = (event?: PointerEvent) => {
+    const stopDrag = () => {
       // CRÍTICO: Só fazer draw se NÃO moveu (foi apenas um clique)
       // Usar tanto o estado quanto a ref para garantir que detecta movimento
       const actuallyMoved = libraryMoved || libraryMovedRef.current;
@@ -2832,26 +3494,7 @@ const Board = () => {
         }
       }
       
-      // Só fazer draw se NÃO moveu e não foi um clique executado anteriormente
-      if (!actuallyMoved && !libraryClickExecutedRef.current && event && event.button !== 2 && !contextMenu) {
-        const target = event.target as HTMLElement;
-        const isInteractive = target.closest('button, .library-count');
-        const isLibraryStack = target.closest('.library-stack');
-        
-        // Só fazer draw se:
-        // - Clicou diretamente no library-stack
-        // - Não foi em elementos interativos
-        // - O draggingLibrary está setado (garantir que iniciou o drag no library)
-        // - NÃO moveu (verificado com estado e ref)
-        if (isLibraryStack && !isInteractive && draggingLibrary) {
-          libraryClickExecutedRef.current = true;
-        handleLibraryClick(draggingLibrary.playerName);
-          // Resetar flag após um pequeno delay
-          setTimeout(() => {
-            libraryClickExecutedRef.current = false;
-          }, 100);
-      }
-      }
+      // Clique simples no stack não compra mais carta (double click agora)
       
       // Limpar estado de drag
       // Se não moveu, ainda precisamos limpar o rastreamento no store
@@ -2875,7 +3518,7 @@ const Board = () => {
       libraryMovedRef.current = false;
     };
 
-    const handleUp = (e: PointerEvent) => stopDrag(e);
+    const handleUp = () => stopDrag();
 
     window.addEventListener('pointermove', handleMove);
     window.addEventListener('pointerup', handleUp);
@@ -3523,6 +4166,12 @@ const Board = () => {
   }, []);
 
   // Função para renderizar o conteúdo do board baseado no modo de visualização
+  const selectionEnabled = useMemo(() => {
+    if (!lastTouchedCard) return false;
+    const config = getEntityConfig(lastTouchedCard.zone);
+    return config?.showSelection !== false;
+  }, [getEntityConfig, lastTouchedCard]);
+
   const renderBoardContent = useCallback(() => {
     const boardViewProps: BoardViewProps = {
       boardRef,
@@ -3550,6 +4199,7 @@ const Board = () => {
       draggingTokens,
       ownerName,
       handleCardClick,
+      handleCardDoubleClick,
       handleCardContextMenu,
       handleCardZoom,
       startDrag,
@@ -3568,7 +4218,8 @@ const Board = () => {
       dragStartedFromHandRef,
       handCardPlacedRef,
       setContextMenu,
-      setLastTouchedCard,
+      setLastTouchedCard: selectCard,
+      setLibrarySelection: selectLibrary,
       getPlayerArea,
       getLibraryPosition,
       getCemeteryPosition,
@@ -3585,6 +4236,7 @@ const Board = () => {
       modifyCounter,
       removeCounterToken,
       flipCard,
+      selectedCardId: selectionEnabled ? lastTouchedCard?.id ?? null : null,
     };
 
     if (viewMode === 'individual') {
@@ -3619,6 +4271,7 @@ const Board = () => {
     draggingTokens,
     ownerName,
     handleCardClick,
+    handleCardDoubleClick,
     handleCardContextMenu,
     handleCardZoom,
     startDrag,
@@ -3650,16 +4303,37 @@ const Board = () => {
     viewMode,
     convertMouseToSeparatedCoordinates,
     convertMouseToUnifiedCoordinates,
+    selectCard,
+    selectLibrary,
     selectedPlayerIndex,
+    lastTouchedCard,
+    selectionEnabled,
   ]);
+
+  const topMenuOffset = 36;
+  const isLibraryContext = contextMenu?.kind === 'library';
+
+  const currentTopMenuItems: TopMenuItem[] = useMemo(() => {
+    const items = hasLibrarySelection ? topMenuConfig.library : topMenuConfig.card;
+    return Array.isArray(items) ? items : [];
+  }, [hasLibrarySelection, topMenuConfig]);
 
   return (
     <div className="board-container">
+      <div className="mac-menu-bar" data-top-menu>
+        {renderTopMenuItems(currentTopMenuItems, 0, hasLibrarySelection ? 'library' : 'card')}
+
+        <div className="mac-menu-spacer" />
+        <div className="mac-menu-status">
+          {hasLibrarySelection ? 'Library' : lastTouchedCard ? `${lastTouchedCard.name} (${lastTouchedCard.zone})` : 'No card selected'}
+        </div>
+      </div>
+
       {/* Contador de vida dos jogadores no topo */}
       <div
         style={{
           position: 'fixed',
-          top: '16px',
+          top: `${topMenuOffset + 16}px`,
           left: '50%',
           transform: 'translateX(-50%)',
           zIndex: 1000,
@@ -3691,7 +4365,7 @@ const Board = () => {
       <div
         style={{
           position: 'fixed',
-          top: '16px',
+          top: `${topMenuOffset + 16}px`,
           right: '16px',
           zIndex: 1000,
           display: 'flex',
@@ -4518,33 +5192,91 @@ const Board = () => {
               data-context-menu
               onClick={(e) => e.stopPropagation()}
             >
-              <button
-                onClick={handleShowToOthers}
-                style={{
-                  width: '100%',
-                  padding: '8px 12px',
-                  textAlign: 'left',
-                  background: 'transparent',
-                  border: 'none',
-                  color: '#f8fafc',
-                  cursor: 'pointer',
-                  borderRadius: '4px',
-                  fontSize: '14px',
-                }}
-                onMouseEnter={(e) => {
-                  e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.backgroundColor = 'transparent';
-                }}
-              >
-                👁️ Show to other players
-              </button>
-
-              <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
-
-              {canInteractWithCard(contextMenu.card.ownerId) && (
+              {isLibraryContext ? (
                 <>
+                  <div style={{ fontSize: '12px', color: '#94a3b8', padding: '4px 8px' }}>
+                    Library
+                  </div>
+                  <button
+                    onClick={() => handleContextMenuAction('draw')}
+                    disabled={!canInteractWithCard(contextMenu.card.ownerId)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#f8fafc',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                      opacity: canInteractWithCard(contextMenu.card.ownerId) ? 1 : 0.5,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!canInteractWithCard(contextMenu.card.ownerId)) return;
+                      e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    📥 Draw
+                  </button>
+                  <button
+                    onClick={() => handleContextMenuAction('shuffle')}
+                    disabled={!canInteractWithCard(contextMenu.card.ownerId)}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#f8fafc',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                      opacity: canInteractWithCard(contextMenu.card.ownerId) ? 1 : 0.5,
+                    }}
+                    onMouseEnter={(e) => {
+                      if (!canInteractWithCard(contextMenu.card.ownerId)) return;
+                      e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    🔀 Shuffle
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={handleShowToOthers}
+                    style={{
+                      width: '100%',
+                      padding: '8px 12px',
+                      textAlign: 'left',
+                      background: 'transparent',
+                      border: 'none',
+                      color: '#f8fafc',
+                      cursor: 'pointer',
+                      borderRadius: '4px',
+                      fontSize: '14px',
+                    }}
+                    onMouseEnter={(e) => {
+                      e.currentTarget.style.backgroundColor = 'rgba(148, 163, 184, 0.2)';
+                    }}
+                    onMouseLeave={(e) => {
+                      e.currentTarget.style.backgroundColor = 'transparent';
+                    }}
+                  >
+                    👁️ Show to other players
+                  </button>
+
+                  <div style={{ borderTop: '1px solid rgba(148, 163, 184, 0.2)', margin: '4px 0' }} />
+
+                  {canInteractWithCard(contextMenu.card.ownerId) && (
+                    <>
                   <button
                     onClick={() => handleContextMenuAction('createCopy')}
                     style={{
@@ -5406,6 +6138,8 @@ const Board = () => {
                   </button>
                 </>
               )}
+            </>
+          )}
             </div>
           </>
         )}

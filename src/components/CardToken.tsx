@@ -10,6 +10,7 @@ interface CardTokenProps {
   onDoubleClick?: (event: React.MouseEvent) => void;
   onClick?: (event: React.MouseEvent) => void;
   onContextMenu?: (event: React.MouseEvent) => void;
+  isSelected?: boolean;
   ownerName?: string;
   width?: number;
   height?: number;
@@ -28,6 +29,7 @@ const CardToken = ({
   onDoubleClick,
   onClick,
   onContextMenu,
+  isSelected = false,
   ownerName: _ownerName,
   width = 150,
   height = 210,
@@ -81,7 +83,7 @@ const CardToken = ({
   if (isLibrary && !forceShowFront) {
     return (
       <div
-        className={classNames('card-token', 'card-back')}
+        className={classNames('card-token', 'card-back', { selected: isSelected })}
         style={{ width, height, touchAction: 'none', position: 'relative' }}
         onPointerDown={onPointerDown}
         onMouseDown={onMouseDown}
@@ -100,7 +102,7 @@ const CardToken = ({
   if (showBack && !imageToShow) {
     return (
       <div
-        className={classNames('card-token', 'card-back')}
+        className={classNames('card-token', 'card-back', { selected: isSelected })}
         style={{ width, height, touchAction: 'none', position: 'relative' }}
         onPointerDown={onPointerDown}
         onMouseDown={onMouseDown}
@@ -117,7 +119,7 @@ const CardToken = ({
 
   return (
     <div
-      className={classNames('card-token', { tapped: card.tapped })}
+      className={classNames('card-token', { tapped: card.tapped, selected: isSelected })}
       style={{ width, height, touchAction: 'none', position: 'relative' }}
       onPointerDown={onPointerDown}
       onMouseDown={onMouseDown}

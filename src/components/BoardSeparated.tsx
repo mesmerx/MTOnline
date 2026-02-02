@@ -32,6 +32,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
     draggingTokens,
     ownerName,
     handleCardClick,
+    handleCardDoubleClick,
     handleCardContextMenu,
     handleCardZoom,
     startDrag,
@@ -58,6 +59,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
     getTokensPosition,
     getCommanderPosition,
     setLibraryContainerRef,
+    selectedCardId,
   } = props;
 
   if (!boardRef.current) return null;
@@ -214,11 +216,17 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       };
                     }}
                     ownerName={ownerName}
+                    selectedCardId={selectedCardId}
+                    handleCardClick={handleCardClick}
+                    handleCardDoubleClick={handleCardDoubleClick}
+                    setLastTouchedCard={setLastTouchedCard}
+                    setLibrarySelection={props.setLibrarySelection}
                     onLibraryContextMenu={(card, e) => {
                       setContextMenu({
                         x: e.clientX,
                         y: e.clientY,
                         card,
+                          kind: 'library',
                       });
                     }}
                     startLibraryDrag={startLibraryDrag}
@@ -272,6 +280,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       };
                     }}
                     ownerName={ownerName}
+                    selectedCardId={selectedCardId}
                     changeCardZone={changeCardZone}
                     getLibraryPosition={getLibraryPosition}
                     board={board}
@@ -287,6 +296,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
                     draggingCemetery={draggingCemetery}
                     handleCardZoom={handleCardZoom}
                     zoomedCard={zoomedCard}
+                    handleCardDoubleClick={handleCardDoubleClick}
                   />
 
                   {(() => {
@@ -314,6 +324,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
                           };
                         }}
                         ownerName={ownerName}
+                        selectedCardId={selectedCardId}
                         onExileContextMenu={(card, e) => {
                           setContextMenu({
                             x: e.clientX,
@@ -326,6 +337,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
                         draggingExile={draggingExile}
                         handleCardZoom={handleCardZoom}
                         zoomedCard={zoomedCard}
+                        handleCardDoubleClick={handleCardDoubleClick}
                         changeCardZone={changeCardZone}
                         getLibraryPosition={getLibraryPosition}
                         getCemeteryPosition={getCemeteryPosition}
@@ -346,6 +358,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       return getTokensPosition(name);
                     }}
                     ownerName={ownerName}
+                    selectedCardId={selectedCardId}
                     onTokensContextMenu={(card, e) => {
                       setContextMenu({
                         x: e.clientX,
@@ -374,6 +387,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
                       return getCommanderPosition(name);
                     }}
                     ownerName={ownerName}
+                    selectedCardId={selectedCardId}
                     onCommanderContextMenu={(card, e) => {
                       setContextMenu({
                         x: e.clientX,
@@ -402,16 +416,23 @@ export const BoardSeparated = (props: BoardViewProps) => {
                           top: `${posY}px`,
                           zIndex: isDragging ? 1000 : 1,
                         }}
+                        onDoubleClick={(event) => handleCardDoubleClick(card, event)}
                       >
                         <CardToken
                           card={card}
                           onPointerDown={(event) => {
+                              if (event.detail > 1) {
+                                handleCardDoubleClick(card, event as unknown as React.MouseEvent);
+                                return;
+                              }
                             setLastTouchedCard(card);
                             handleCardZoom(card, event);
                             startDrag(card, event);
                           }}
                           onClick={(event) => handleCardClick(card, event)}
+                          onDoubleClick={(event) => handleCardDoubleClick(card, event)}
                           onContextMenu={(event) => handleCardContextMenu(card, event)}
+                          isSelected={selectedCardId === card.id}
                           ownerName={ownerName(card)}
                           width={CARD_WIDTH}
                           height={CARD_HEIGHT}
@@ -495,6 +516,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
                         return null;
                       }}
                       handleCardClick={handleCardClick}
+                      handleCardDoubleClick={handleCardDoubleClick}
                       handleCardContextMenu={handleCardContextMenu}
                       startDrag={startDrag}
                       ownerName={ownerName}
@@ -511,6 +533,7 @@ export const BoardSeparated = (props: BoardViewProps) => {
                         // setIsDragging é gerenciado no Board.tsx principal
                       }}
                       setLastTouchedCard={setLastTouchedCard}
+                      selectedCardId={selectedCardId}
                       handDragStateRef={props.handDragStateRef}
                       addEventLog={props.addEventLog}
                       viewMode={props.viewMode}
