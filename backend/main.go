@@ -896,14 +896,14 @@ type cardRow struct {
 }
 
 type cardResponse struct {
-	Name         string  `json:"name"`
-	OracleText   *string `json:"oracleText"`
-	ManaCost     *string `json:"manaCost"`
-	TypeLine     *string `json:"typeLine"`
-	ImageURL     *string `json:"imageUrl,omitempty"`
-	BackImageURL *string `json:"backImageUrl,omitempty"`
-	SetName      *string `json:"setName,omitempty"`
-	SetCode      *string `json:"setCode,omitempty"`
+	Name            string  `json:"name"`
+	OracleText      *string `json:"oracleText"`
+	ManaCost        *string `json:"manaCost"`
+	TypeLine        *string `json:"typeLine"`
+	ImageURL        *string `json:"imageUrl,omitempty"`
+	BackImageURL    *string `json:"backImageUrl,omitempty"`
+	SetName         *string `json:"setName,omitempty"`
+	SetCode         *string `json:"setCode,omitempty"`
 	CollectorNumber *string `json:"collectorNumber,omitempty"`
 	PrintsSearchURI *string `json:"printsSearchUri,omitempty"`
 }
@@ -937,7 +937,7 @@ func (a *App) handleCardSearch(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	setCode := strings.TrimSpace(r.URL.Query().Get("set"))
-	queryLower := strings.ToLower(name)
+	queryLower := normalizeCardName(name)
 	setLower := ""
 	if setCode != "" {
 		setLower = strings.ToLower(setCode)
@@ -1053,7 +1053,7 @@ func (a *App) handleCardsBatch(w http.ResponseWriter, r *http.Request) {
 			card, err = a.selectBySetCollector(strings.ToLower(request.SetCode), request.CollectorNumber)
 		}
 		if (card == nil || err != nil) && request.Name != "" {
-			card, err = a.findCardByName(strings.ToLower(strings.TrimSpace(request.Name)), strings.ToLower(request.SetCode))
+			card, err = a.findCardByName(normalizeCardName(request.Name), strings.ToLower(request.SetCode))
 		}
 		if err != nil || card == nil {
 			results = append(results, map[string]interface{}{
@@ -1222,6 +1222,23 @@ func (a *App) ensureCardsAvailable() bool {
 		return false
 	}
 	return true
+}
+
+func normalizeCardName(input string) string {
+	if input == "" {
+		return ""
+	}
+	replacer := strings.NewReplacer(
+		"\u2019", "'",
+		"\u2018", "'",
+		"\u0060", "'",
+		"\u00b4", "'",
+		"\u2014", "-",
+		"\u2013", "-",
+		"\u00a0", " ",
+	)
+	normalized := replacer.Replace(strings.ToLower(strings.TrimSpace(input)))
+	return strings.Join(strings.Fields(normalized), " ")
 }
 
 func (a *App) findCardByName(queryLower string, setLower string) (*cardRow, error) {
@@ -1516,7 +1533,7 @@ func fuzzyMatch(query string, target string) float64 {
 }
 
 func ensureJSONDefault(value json.RawMessage, fallback []byte) json.RawMessage {
-	if value == nil || len(value) == 0 {
+	if len(value) == 0 {
 		return fallback
 	}
 	return value
