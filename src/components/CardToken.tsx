@@ -1,4 +1,5 @@
 import classNames from 'classnames';
+import { memo } from 'react';
 import type { CardOnBoard } from '../store/useGameStore';
 
 interface CardTokenProps {
@@ -140,5 +141,5 @@ const CardToken = ({
   );
 };
 
-export default CardToken;
+export default memo(CardToken);
 

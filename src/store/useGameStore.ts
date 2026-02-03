@@ -1983,7 +1983,7 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (!message || !message.type) return;
       
       // Filtrar apenas tipos de mensagem válidos do jogo
-      const validTypes = ['ROOM_STATE', 'BOARD_STATE', 'PLAYER_STATE', 'ERROR', 'HOST_TRANSFER', 'LIBRARY_POSITION'];
+      const validTypes = ['ROOM_STATE', 'BOARD_STATE', 'BOARD_ACTION', 'BOARD_PATCH', 'PLAYER_STATE', 'ERROR', 'HOST_TRANSFER', 'LIBRARY_POSITION'];
       if (!validTypes.includes(message.type)) {
         return;
       }
@@ -2409,11 +2409,13 @@ export const useGameStore = create<GameStore>((set, get) => {
   const applyLocalMove = (cardId: string, position: Point) => {
     set((state) => {
       if (!state) return state;
-  return {
+      const index = state.board.findIndex((card) => card.id === cardId);
+      if (index === -1) return state;
+      const nextBoard = state.board.slice();
+      nextBoard[index] = { ...nextBoard[index], position };
+      return {
         ...state,
-        board: state.board.map((card) =>
-          card.id === cardId ? { ...card, position } : card
-        ),
+        board: nextBoard,
       };
     });
   };
@@ -2431,6 +2433,7 @@ export const useGameStore = create<GameStore>((set, get) => {
   const queueBoardPatch = (cards: Array<{ id: string; position: Point }>) => {
     const state = get();
     if (!state) return;
+    const boardById = new Map(state.board.map((card) => [card.id, card]));
     
     // Capturar o estado atual de pendingMoveActions de forma síncrona
     // Isso garante que não há race conditions quando verificamos dentro do set()
@@ -2453,15 +2456,15 @@ export const useGameStore = create<GameStore>((set, get) => {
       // Verificar se a posição recebida é significativamente diferente da atual
       // Se for muito diferente, pode ser um patch antigo (devido ao delay de rede)
       // Aplicar apenas se a diferença for pequena (movimento suave) ou se não houver posição atual
-      const currentCard = state.board.find((c) => c.id === card.id);
+      const currentCard = boardById.get(card.id);
       if (currentCard) {
         const dx = Math.abs(currentCard.position.x - card.position.x);
         const dy = Math.abs(currentCard.position.y - card.position.y);
         const distance = Math.sqrt(dx * dx + dy * dy);
         
-        // Se a diferença for muito grande (>100px), pode ser um patch antigo - ignorar
+      // Se a diferença for muito grande (>400px), pode ser um patch antigo - ignorar
         // Isso evita pulos causados por patches desatualizados devido ao delay de rede
-        if (distance > 100) {
+        if (distance > 400) {
           return false;
         }
       }

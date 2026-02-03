@@ -54,6 +54,9 @@ interface DragState {
   startX: number;
   startY: number;
   hasMoved: boolean;
+  ownerId: string;
+  boardRect: DOMRect;
+  lastPosition?: Point;
 }
 
 interface ClickBlockState {
@@ -705,6 +708,16 @@ const Board = () => {
     frames: 0,
     rafId: null,
   });
+  const boardByIdRef = useRef<Map<string, CardOnBoard>>(new Map());
+  const dragMoveFrameRef = useRef<number | null>(null);
+  const dragMovePendingRef = useRef<{ cardId: string; position: Point } | null>(null);
+  useEffect(() => {
+    const next = new Map<string, CardOnBoard>();
+    board.forEach((card) => {
+      next.set(card.id, card);
+    });
+    boardByIdRef.current = next;
+  }, [board]);
   
   const schedulePeerLogUpdate = useRef<null | ((updater: () => void) => void)>(null);
   if (!schedulePeerLogUpdate.current) {
@@ -1585,8 +1598,7 @@ const Board = () => {
       // Durante o drag, pointermove acontece → envia cada posição
 
       // Verificar se a carta ainda existe
-      const currentBoard = useGameStore.getState().board;
-      const card = currentBoard.find((c) => c.id === dragState.cardId);
+      const card = boardByIdRef.current.get(dragState.cardId);
       if (!card) {
         dragStateRef.current = null;
         setIsDragging(false);
@@ -1603,7 +1615,7 @@ const Board = () => {
       }
 
       // Calcular nova posição
-      const rect = boardRef.current!.getBoundingClientRect();
+      const rect = dragState.boardRect;
       let cursorX = event.clientX - rect.left;
       let cursorY = event.clientY - rect.top;
       
@@ -1615,7 +1627,7 @@ const Board = () => {
       const coords = convertMouseToSeparatedCoordinates(
         event.clientX,
         event.clientY,
-        card.ownerId,
+        dragState.ownerId,
         rect
       );
       if (!coords) {
@@ -1676,7 +1688,18 @@ const Board = () => {
 
       // Mover a carta apenas se realmente moveu
       if (dragState.hasMoved) {
-        moveCard(dragState.cardId, { x: clampedX, y: clampedY });
+        dragState.lastPosition = { x: clampedX, y: clampedY };
+        dragMovePendingRef.current = { cardId: dragState.cardId, position: { x: clampedX, y: clampedY } };
+        if (dragMoveFrameRef.current === null) {
+          dragMoveFrameRef.current = window.requestAnimationFrame(() => {
+            const pending = dragMovePendingRef.current;
+            dragMovePendingRef.current = null;
+            dragMoveFrameRef.current = null;
+            if (pending) {
+              moveCard(pending.cardId, pending.position);
+            }
+          });
+        }
       }
     };
 
@@ -1777,6 +1800,10 @@ const Board = () => {
             resetAllDragStates();
               
               return;
+          }
+          if (!detectedZone.zone || detectedZone.zone === card.zone) {
+            const finalPosition = dragState.lastPosition ?? card.position;
+            moveCard(card.id, finalPosition, { persist: true });
           }
         }
       }
@@ -1898,6 +1925,11 @@ const Board = () => {
     return () => {
       window.removeEventListener('pointermove', handleMove);
       window.removeEventListener('pointerup', handleUp);
+      if (dragMoveFrameRef.current !== null) {
+        cancelAnimationFrame(dragMoveFrameRef.current);
+        dragMoveFrameRef.current = null;
+      }
+      dragMovePendingRef.current = null;
     };
   }, [isDragging, showHand, playerName, moveCard, changeCardZone, getPlayerArea, getHandArea, viewMode, players]);
 
@@ -1921,8 +1953,7 @@ const Board = () => {
     }
 
     // Verificar se a carta ainda existe no board atualizado
-    const currentBoard = useGameStore.getState().board;
-    const currentCard = currentBoard.find((c) => c.id === card.id);
+    const currentCard = boardByIdRef.current.get(card.id);
     if (!currentCard) {
       return;
     }
@@ -1989,6 +2020,8 @@ const Board = () => {
       startX: event.clientX,
       startY: event.clientY,
       hasMoved: false,
+      ownerId: currentCard.ownerId,
+      boardRect: rect,
     };
     setIsDragging(true); // Forçar re-render para ativar o useEffect
   };

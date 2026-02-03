@@ -114,6 +114,7 @@ const Hand = ({
   const dragUpdateRef = useRef<number>(0);
   const stopDragExecutedRef = useRef<boolean>(false); // Flag para evitar múltiplas execuções
   const activeDragCardIdRef = useRef<string | null>(null); // Ref para rastrear qual carta está sendo arrastada atualmente
+  const handDragCardsRef = useRef<CardOnBoard[] | null>(null);
 
   const handCards = useMemo(() => board.filter((c) => c.zone === 'hand'), [board]);
   const handCardsByOwner = useMemo(() => {
@@ -194,7 +195,7 @@ const Hand = ({
     // Resetar flag de execução quando iniciar um novo drag
     stopDragExecutedRef.current = false;
     
-    const sortedCards = playerHandCards;
+    const sortedCards = handCardsByOwner.get(playerName) ?? [];
     const originalOrder: Record<string, number> = {};
     sortedCards.forEach((c, idx) => {
       originalOrder[c.id] = c.handIndex ?? idx;
@@ -270,6 +271,14 @@ const Hand = ({
       dragStartPosition: { x: startX, y: startY },
       dragOffset: dragOffsetValue,
     };
+
+    const playerHandCards = handCardsByOwner.get(playerName) ?? [];
+    const sortedHandCards = [...playerHandCards].sort((a, b) => {
+      const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
+      const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
+      return indexA - indexB;
+    });
+    handDragCardsRef.current = sortedHandCards;
     
     addEventLog('DRAG_START', `Iniciando drag da hand: ${card.name}`, card.id, card.name, {
       zone: 'hand',
@@ -374,16 +383,20 @@ const Hand = ({
       const handArea = getHandArea(playerName);
       if (!handArea) return;
       
-      // Usar board atualizado do store para garantir que temos a versão mais recente
-      const currentBoard = useGameStore.getState().board;
-      const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
-      const allCards = [...playerHandCards].sort((a, b) => {
-        const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
-        const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
-        return indexA - indexB;
-      });
+      const allCards = handDragCardsRef.current ?? [];
+      if (allCards.length === 0) {
+        const currentBoard = useGameStore.getState().board;
+        const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
+        const sortedHandCards = [...playerHandCards].sort((a, b) => {
+          const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
+          const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
+          return indexA - indexB;
+        });
+        handDragCardsRef.current = sortedHandCards;
+      }
+      const resolvedCards = handDragCardsRef.current ?? [];
       
-      const totalCards = allCards.length;
+      const totalCards = resolvedCards.length;
       const maxScroll = Math.max(0, totalCards - maxRenderCards);
       const currentScrollIndex = Math.min(handScrollIndex, maxScroll);
       const renderStartIndex = currentScrollIndex;
@@ -400,7 +413,7 @@ const Hand = ({
         const newIndex = renderStartIndex;
         const clampedNewIndex = Math.max(0, Math.min(totalCards - 1, newIndex));
         const originalIndex = originalHandOrder?.[currentDraggingCardId] ?? 
-          allCards.findIndex((c) => c.id === currentDraggingCardId);
+          resolvedCards.findIndex((c) => c.id === currentDraggingCardId);
         if (originalIndex >= 0 && clampedNewIndex !== originalIndex) {
           setPreviewHandOrder(clampedNewIndex);
           handDragStateRef.current.previewHandOrder = clampedNewIndex;
@@ -419,7 +432,7 @@ const Hand = ({
       const clampedNewIndex = Math.max(0, Math.min(totalCards - 1, newIndex));
       
       const originalIndex = originalHandOrder?.[currentDraggingCardId] ?? 
-        allCards.findIndex((c) => c.id === currentDraggingCardId);
+        resolvedCards.findIndex((c) => c.id === currentDraggingCardId);
       
       if (originalIndex >= 0 && clampedNewIndex !== originalIndex) {
         setPreviewHandOrder(clampedNewIndex);
@@ -467,13 +480,17 @@ const Hand = ({
           // handArea está em coordenadas relativas ao board, usar coordenadas relativas também
           let relativeX = event.clientX - rect.left;
           
-          const currentBoard = useGameStore.getState().board;
-          const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
-          const allCards = [...playerHandCards].sort((a, b) => {
-            const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
-            const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
-            return indexA - indexB;
-          });
+          let allCards = handDragCardsRef.current ?? [];
+          if (allCards.length === 0) {
+            const currentBoard = useGameStore.getState().board;
+            const playerHandCards = currentBoard.filter((c) => c.zone === 'hand' && c.ownerId === playerName);
+            allCards = [...playerHandCards].sort((a, b) => {
+              const indexA = originalHandOrder?.[a.id] ?? a.handIndex ?? 0;
+              const indexB = originalHandOrder?.[b.id] ?? b.handIndex ?? 0;
+              return indexA - indexB;
+            });
+            handDragCardsRef.current = allCards;
+          }
           
           const totalCards = allCards.length;
           const maxScroll = Math.max(0, totalCards - maxRenderCards);
@@ -513,6 +530,7 @@ const Hand = ({
         setHandCardMoved(false);
         setDragStartedFromHand(false);
         handCardPlacedRef.current = false;
+        handDragCardsRef.current = null;
         
         // Limpar ref para debug
         handDragStateRef.current = {
@@ -545,6 +563,7 @@ const Hand = ({
         setHandCardMoved(false);
         setDragStartedFromHand(false);
         handCardPlacedRef.current = false;
+        handDragCardsRef.current = null;
         
         // Limpar ref para debug
         handDragStateRef.current = {

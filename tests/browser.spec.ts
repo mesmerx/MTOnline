@@ -416,6 +416,33 @@ test.describe('Board (playwright)', () => {
         ...state,
         board: [
           {
+            id: 'lib-1',
+            name: 'Library Top',
+            ownerId: 't',
+            position: { x: 0, y: 0 },
+            tapped: false,
+            zone: 'library',
+            stackIndex: 2,
+          },
+          {
+            id: 'lib-2',
+            name: 'Library Second',
+            ownerId: 't',
+            position: { x: 0, y: 0 },
+            tapped: false,
+            zone: 'library',
+            stackIndex: 1,
+          },
+          {
+            id: 'lib-3',
+            name: 'Library Third',
+            ownerId: 't',
+            position: { x: 0, y: 0 },
+            tapped: false,
+            zone: 'library',
+            stackIndex: 0,
+          },
+          {
             id: 'token-1',
             name: 'Treasure',
             ownerId: 't',
@@ -425,6 +452,9 @@ test.describe('Board (playwright)', () => {
             stackIndex: 0,
           },
         ],
+        libraryPositions: {
+          t: { x: 40, y: 40 },
+        },
         tokensPositions: {
           t: { x: 20, y: 200 },
         },
@@ -888,6 +918,85 @@ test.describe('Board multiplayer (playwright)', () => {
 
     await expect.poll(() => server.getHostMessages().some((entry) => entry.payload?.type === 'BOARD_ACTION')).toBeTruthy();
     expect(server.getHostMessages().some((entry) => entry.payload?.type === 'BOARD_STATE')).toBeFalsy();
+  });
+
+  test('syncs drag movement to peers', async ({ browser }) => {
+    const server = createMockRoomServer();
+    const context = await browser.newContext();
+    const hostPage = await context.newPage();
+    const clientPage = await context.newPage();
+
+    await setupPage(hostPage, server);
+    await setupPage(clientPage, server);
+
+    await hostPage.evaluate(() => {
+      const store = (window as unknown as { __GAME_STORE__?: { getState?: () => any } }).__GAME_STORE__;
+      const state = store?.getState?.();
+      state?.setPlayerName?.('Host');
+      state?.createRoom?.('room-drag', '');
+    });
+    await waitForConnected(hostPage);
+
+    await clientPage.evaluate(() => {
+      const store = (window as unknown as { __GAME_STORE__?: { getState?: () => any } }).__GAME_STORE__;
+      const state = store?.getState?.();
+      state?.setPlayerName?.('Peer');
+      state?.joinRoom?.('room-drag', '');
+    });
+
+    await hostPage.waitForFunction(() => {
+      const store = (window as unknown as { __GAME_STORE__?: { getState?: () => any } }).__GAME_STORE__;
+      return Object.keys(store?.getState?.().connections ?? {}).length === 1;
+    });
+
+    await clientPage.waitForFunction(() => {
+      const store = (window as unknown as { __GAME_STORE__?: { getState?: () => any } }).__GAME_STORE__;
+      return store?.getState?.().status === 'connected';
+    });
+
+    await clientPage.waitForFunction(() => {
+      const store = (window as unknown as { __GAME_STORE__?: { getState?: () => any } }).__GAME_STORE__;
+      return !!store?.getState?.().hostConnection?.open;
+    });
+
+    const seedCard = {
+      id: 'sync-card-1',
+      name: 'Sync Card',
+      ownerId: 'Host',
+      position: { x: 120, y: 120 },
+      tapped: false,
+      zone: 'battlefield',
+      isCommander: false,
+      commanderDeaths: 0,
+    };
+
+    await hostPage.evaluate((card) => {
+      const store = (window as unknown as { __GAME_STORE__?: { setState?: (fn: any) => void } }).__GAME_STORE__;
+      store?.setState?.((state: any) => ({
+        ...state,
+        board: [card],
+      }));
+    }, seedCard);
+
+    await clientPage.evaluate((card) => {
+      const store = (window as unknown as { __GAME_STORE__?: { setState?: (fn: any) => void } }).__GAME_STORE__;
+      store?.setState?.((state: any) => ({
+        ...state,
+        board: [card],
+      }));
+    }, seedCard);
+
+    await hostPage.evaluate(() => {
+      const store = (window as unknown as { __GAME_STORE__?: { getState?: () => any } }).__GAME_STORE__;
+      store?.getState?.().moveCard?.('sync-card-1', { x: 260, y: 260 }, { persist: true });
+    });
+
+    await clientPage.waitForFunction(() => {
+      const store = (window as unknown as { __GAME_STORE__?: { getState?: () => any } }).__GAME_STORE__;
+      const state = store?.getState?.();
+      const card = state?.board?.find?.((c: any) => c.name === 'Sync Card');
+      return card && (card.position.x === 260 && card.position.y === 260);
+    });
   });
 
   test('handles mixed latency clients', async ({ browser }) => {
