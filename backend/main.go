@@ -943,6 +943,9 @@ func (a *App) handleCardSearch(w http.ResponseWriter, r *http.Request) {
 		setLower = strings.ToLower(setCode)
 	}
 	card, err := a.findCardByName(queryLower, setLower)
+	if err != nil && setLower != "" {
+		card, err = a.findCardByName(queryLower, "")
+	}
 	if err != nil {
 		writeJSON(w, http.StatusNotFound, map[string]string{"error": "Card not found"})
 		return
@@ -1053,7 +1056,12 @@ func (a *App) handleCardsBatch(w http.ResponseWriter, r *http.Request) {
 			card, err = a.selectBySetCollector(strings.ToLower(request.SetCode), request.CollectorNumber)
 		}
 		if (card == nil || err != nil) && request.Name != "" {
-			card, err = a.findCardByName(normalizeCardName(request.Name), strings.ToLower(request.SetCode))
+			queryName := normalizeCardName(request.Name)
+			setLower := strings.ToLower(request.SetCode)
+			card, err = a.findCardByName(queryName, setLower)
+			if (card == nil || err != nil) && setLower != "" {
+				card, err = a.findCardByName(queryName, "")
+			}
 		}
 		if err != nil || card == nil {
 			results = append(results, map[string]interface{}{
