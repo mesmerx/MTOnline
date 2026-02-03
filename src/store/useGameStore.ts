@@ -2683,9 +2683,10 @@ export const useGameStore = create<GameStore>((set, get) => {
         const response = await fetch(`${API_URL}/decks/public`);
         if (response.ok) {
           const decks = await response.json();
-          set({ publicDecks: decks });
+          set({ publicDecks: Array.isArray(decks) ? decks : [] });
         }
       } catch (error) {
+        set({ publicDecks: [] });
       }
     },
     createRoom: async (roomId: string, password: string) => {
