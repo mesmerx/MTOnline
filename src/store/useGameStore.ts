@@ -2646,6 +2646,9 @@ export const useGameStore = create<GameStore>((set, get) => {
         set((s) => ({
           savedDecks: [newDeck, ...(s.savedDecks ?? [])],
         }));
+        if (isPublic || newDeck?.isPublic) {
+          get().loadPublicDecks();
+        }
       } catch (error) {
         throw error;
       }

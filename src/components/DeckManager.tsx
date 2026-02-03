@@ -18,6 +18,7 @@ const DeckManager = () => {
   const deleteDeckDefinition = useGameStore((state) => state.deleteDeckDefinition);
   const hydrateDecks = useGameStore((state) => state.hydrateDecks);
   const savedDecks = useGameStore((state) => state.savedDecks);
+  const user = useGameStore((state) => state.user);
   const addCardToCommander = useGameStore((state) => state.addCardToCommander);
   const addCardToTokens = useGameStore((state) => state.addCardToTokens);
   const replaceLibrary = useGameStore((state) => state.replaceLibrary);
@@ -47,6 +48,10 @@ const DeckManager = () => {
   const saveDeck = () => {
     if (!deckText.trim()) {
       setError('Add a deck list before saving.');
+      return;
+    }
+    if (isPublic && !user) {
+      setError('You must be logged in to save public decks.');
       return;
     }
     const nextEntries = entries.length > 0 ? entries : ensureEntries(deckText);
