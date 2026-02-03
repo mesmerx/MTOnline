@@ -21,6 +21,7 @@ const DeckManager = () => {
   const addCardToCommander = useGameStore((state) => state.addCardToCommander);
   const addCardToTokens = useGameStore((state) => state.addCardToTokens);
   const replaceLibrary = useGameStore((state) => state.replaceLibrary);
+  const resetBoard = useGameStore((state) => state.resetBoard);
   const loadPublicDecks = useGameStore((state) => state.loadPublicDecks);
   const publicDecks = useGameStore((state) => state.publicDecks);
 
@@ -80,6 +81,7 @@ const DeckManager = () => {
     setBusyLibrary(true);
     setError(undefined);
     try {
+      resetBoard();
       const expandedEntries = nextEntries.flatMap((entry) =>
         Array.from({ length: entry.quantity }).map(() => entry),
       );
