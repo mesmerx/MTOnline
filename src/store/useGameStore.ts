@@ -175,6 +175,7 @@ type CardAction =
 
 type IncomingMessage =
   | { type: 'REQUEST_ACTION'; action: CardAction; actorId: string; skipEventSave?: boolean }
+  | { type: 'BOARD_ACTION'; action: CardAction }
   | { type: 'BOARD_STATE'; board: CardOnBoard[]; counters?: Counter[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point>; commanderPositions?: Record<string, Point>; tokensPositions?: Record<string, Point> }
   | { type: 'ROOM_STATE'; board: CardOnBoard[]; counters?: Counter[]; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; cemeteryPositions?: Record<string, Point>; libraryPositions?: Record<string, Point>; exilePositions?: Record<string, Point>; commanderPositions?: Record<string, Point>; tokensPositions?: Record<string, Point> }
   | { type: 'PLAYER_STATE'; players: PlayerSummary[]; simulatedPlayers?: PlayerSummary[]; zoomedCard?: string | null }
@@ -1616,6 +1617,149 @@ export const useGameStore = create<GameStore>((set, get) => {
     }
   };
 
+  const applyActionToState = (state: GameStore, action: CardAction, skipEventSave = false): Partial<GameStore> | null => {
+    if (action.kind === 'moveLibrary' && skipEventSave) {
+      return {
+        libraryPositions: {
+          ...state.libraryPositions,
+          [action.playerName]: action.position,
+        },
+      };
+    }
+
+    if (action.kind === 'setPlayerLife') {
+      let updated = false;
+      const updatedPlayers = state.players.map((p) => {
+        if (p.id === action.playerId) {
+          updated = true;
+          return { ...p, life: action.life };
+        }
+        return p;
+      });
+      if (updated) {
+        return { players: updatedPlayers };
+      }
+      const updatedSimulatedPlayers = state.simulatedPlayers.map((p) => {
+        if (p.id === action.playerId) {
+          return { ...p, life: action.life };
+        }
+        return p;
+      });
+      return { simulatedPlayers: updatedSimulatedPlayers };
+    }
+
+    if (action.kind === 'setCommanderDamage') {
+      let updated = false;
+      const updatedPlayers = state.players.map((p) => {
+        if (p.id === action.targetPlayerId) {
+          updated = true;
+          const commanderDamage = { ...(p.commanderDamage || {}), [action.attackerPlayerId]: action.damage };
+          return { ...p, commanderDamage };
+        }
+        return p;
+      });
+      if (updated) {
+        return { players: updatedPlayers };
+      }
+      const updatedSimulatedPlayers = state.simulatedPlayers.map((p) => {
+        if (p.id === action.targetPlayerId) {
+          const commanderDamage = { ...(p.commanderDamage || {}), [action.attackerPlayerId]: action.damage };
+          return { ...p, commanderDamage };
+        }
+        return p;
+      });
+      return { simulatedPlayers: updatedSimulatedPlayers };
+    }
+
+    if (action.kind === 'adjustCommanderDamage') {
+      const applyUpdate = (playersList: PlayerSummary[]) => {
+        let updated = false;
+        const updatedList = playersList.map((p) => {
+          if (p.id !== action.targetPlayerId) {
+            return p;
+          }
+          updated = true;
+          const currentLife = p.life ?? 40;
+          const newLife = Math.max(0, currentLife - action.delta);
+          const currentDamage = p.commanderDamage?.[action.attackerPlayerId] ?? 0;
+          const newDamage = Math.max(0, currentDamage + action.delta);
+          const commanderDamage = {
+            ...(p.commanderDamage || {}),
+            [action.attackerPlayerId]: newDamage,
+          };
+          return { ...p, life: newLife, commanderDamage };
+        });
+        return { updatedList, updated };
+      };
+
+      const realPlayersUpdate = applyUpdate(state.players);
+      if (realPlayersUpdate.updated) {
+        return { players: realPlayersUpdate.updatedList };
+      }
+
+      const simulatedUpdate = applyUpdate(state.simulatedPlayers);
+      return { simulatedPlayers: simulatedUpdate.updatedList };
+    }
+
+    if (action.kind === 'setSimulatedPlayers') {
+      const simulatedPlayers: PlayerSummary[] = Array.from({ length: action.count }, (_, i) => ({
+        id: `simulated-${i + 1}`,
+        name: `Player ${i + 1}`,
+        life: 40,
+      }));
+      return { simulatedPlayers };
+    }
+
+    if (action.kind === 'setZoomedCard') {
+      return { zoomedCard: action.cardId };
+    }
+
+    let newCemeteryPositions = state.cemeteryPositions;
+    let newLibraryPositions = state.libraryPositions;
+    let newExilePositions = state.exilePositions;
+    let newCommanderPositions = state.commanderPositions;
+    let newTokensPositions = state.tokensPositions;
+
+    if (action.kind === 'moveCemetery' && 'playerName' in action && 'position' in action) {
+      newCemeteryPositions = {
+        ...state.cemeteryPositions,
+        [action.playerName]: action.position,
+      };
+    } else if (action.kind === 'moveLibrary' && 'playerName' in action && 'position' in action) {
+      newLibraryPositions = {
+        ...state.libraryPositions,
+        [action.playerName]: action.position,
+      };
+    } else if (action.kind === 'moveExile' && 'playerName' in action && 'position' in action) {
+      newExilePositions = {
+        ...state.exilePositions,
+        [action.playerName]: action.position,
+      };
+    } else if (action.kind === 'moveCommander' && 'playerName' in action && 'position' in action) {
+      newCommanderPositions = {
+        ...state.commanderPositions,
+        [action.playerName]: action.position,
+      };
+    } else if (action.kind === 'moveTokens' && 'playerName' in action && 'position' in action) {
+      newTokensPositions = {
+        ...state.tokensPositions,
+        [action.playerName]: action.position,
+      };
+    }
+
+    const newCounters = applyCounterAction(state.counters, action);
+
+    return {
+      board: applyCardAction(state.board, action),
+      counters: newCounters,
+      cemeteryPositions: newCemeteryPositions,
+      libraryPositions: newLibraryPositions,
+      exilePositions: newExilePositions,
+      commanderPositions: newCommanderPositions,
+      tokensPositions: newTokensPositions,
+    };
+  };
+
 
   const handleHostAction = (action: CardAction, skipEventSave = false, excludePlayerId?: string) => {
     // Se for uma ação de move e a carta está sendo arrastada localmente (já foi aplicada),
@@ -1643,179 +1787,8 @@ export const useGameStore = create<GameStore>((set, get) => {
     
     set((state) => {
       if (!state) return state;
-      if (action.kind === 'moveLibrary' && skipEventSave) {
-        return {
-          ...state,
-          libraryPositions: {
-            ...state.libraryPositions,
-            [action.playerName]: action.position,
-          },
-        };
-      }
-      
-      // Tratar setPlayerLife separadamente (não afeta o board)
-      if (action.kind === 'setPlayerLife') {
-        let updated = false;
-        const updatedPlayers = state.players.map((p) => {
-          if (p.id === action.playerId) {
-            updated = true;
-            return { ...p, life: action.life };
-          }
-          return p;
-        });
-        if (updated) {
-          return {
-            ...state,
-            players: updatedPlayers,
-          };
-        }
-        const updatedSimulatedPlayers = state.simulatedPlayers.map((p) => {
-          if (p.id === action.playerId) {
-            return { ...p, life: action.life };
-          }
-          return p;
-        });
-        return {
-          ...state,
-          simulatedPlayers: updatedSimulatedPlayers,
-        };
-      }
-      
-      // Tratar setCommanderDamage separadamente
-      if (action.kind === 'setCommanderDamage') {
-        let updated = false;
-        const updatedPlayers = state.players.map((p) => {
-          if (p.id === action.targetPlayerId) {
-            updated = true;
-            const commanderDamage = { ...(p.commanderDamage || {}), [action.attackerPlayerId]: action.damage };
-            return { ...p, commanderDamage };
-          }
-          return p;
-        });
-        if (updated) {
-          return {
-            ...state,
-            players: updatedPlayers,
-          };
-        }
-        const updatedSimulatedPlayers = state.simulatedPlayers.map((p) => {
-          if (p.id === action.targetPlayerId) {
-            const commanderDamage = { ...(p.commanderDamage || {}), [action.attackerPlayerId]: action.damage };
-            return { ...p, commanderDamage };
-          }
-          return p;
-        });
-        return {
-          ...state,
-          simulatedPlayers: updatedSimulatedPlayers,
-        };
-      }
-      
-      if (action.kind === 'adjustCommanderDamage') {
-        const applyUpdate = (playersList: PlayerSummary[]) => {
-          let updated = false;
-          const updatedList = playersList.map((p) => {
-            if (p.id !== action.targetPlayerId) {
-              return p;
-            }
-            updated = true;
-            const currentLife = p.life ?? 40;
-            const newLife = Math.max(0, currentLife - action.delta);
-            const currentDamage = p.commanderDamage?.[action.attackerPlayerId] ?? 0;
-            const newDamage = Math.max(0, currentDamage + action.delta);
-            const commanderDamage = {
-              ...(p.commanderDamage || {}),
-              [action.attackerPlayerId]: newDamage,
-            };
-            return { ...p, life: newLife, commanderDamage };
-          });
-          return { updatedList, updated };
-        };
-        
-        const realPlayersUpdate = applyUpdate(state.players);
-        if (realPlayersUpdate.updated) {
-          return {
-            ...state,
-            players: realPlayersUpdate.updatedList,
-          };
-        }
-        
-        const simulatedUpdate = applyUpdate(state.simulatedPlayers);
-        return {
-          ...state,
-          simulatedPlayers: simulatedUpdate.updatedList,
-        };
-      }
-      
-      // Tratar setSimulatedPlayers separadamente
-      if (action.kind === 'setSimulatedPlayers') {
-        const simulatedPlayers: PlayerSummary[] = Array.from({ length: action.count }, (_, i) => ({
-          id: `simulated-${i + 1}`,
-          name: `Player ${i + 1}`,
-          life: 40,
-        }));
-        return {
-          ...state,
-          simulatedPlayers,
-        };
-      }
-      
-      // Tratar setZoomedCard separadamente (não afeta o board)
-      if (action.kind === 'setZoomedCard') {
-        return {
-          ...state,
-          zoomedCard: action.cardId,
-        };
-      }
-      
-      // Atualizar posições se for moveLibrary, moveCemetery, moveExile ou moveCommander
-      let newCemeteryPositions = state.cemeteryPositions;
-      let newLibraryPositions = state.libraryPositions;
-      let newExilePositions = state.exilePositions;
-      let newCommanderPositions = state.commanderPositions;
-      let newTokensPositions = state.tokensPositions;
-      
-      if (action.kind === 'moveCemetery' && 'playerName' in action && 'position' in action) {
-        newCemeteryPositions = {
-          ...state.cemeteryPositions,
-          [action.playerName]: action.position,
-        };
-      } else if (action.kind === 'moveLibrary' && 'playerName' in action && 'position' in action) {
-        // Para library, a posição vem absoluta, mas precisamos armazenar relativa
-        // Por enquanto, vamos armazenar a absoluta e calcular a relativa no Board
-        newLibraryPositions = {
-          ...state.libraryPositions,
-          [action.playerName]: action.position,
-        };
-      } else if (action.kind === 'moveExile' && 'playerName' in action && 'position' in action) {
-        newExilePositions = {
-          ...state.exilePositions,
-          [action.playerName]: action.position,
-        };
-      } else if (action.kind === 'moveCommander' && 'playerName' in action && 'position' in action) {
-        newCommanderPositions = {
-          ...state.commanderPositions,
-          [action.playerName]: action.position,
-        };
-      } else if (action.kind === 'moveTokens' && 'playerName' in action && 'position' in action) {
-        newTokensPositions = {
-          ...state.tokensPositions,
-          [action.playerName]: action.position,
-        };
-      }
-      
-      // Aplicar ações de contadores
-      const newCounters = applyCounterAction(state.counters, action);
-      
-      return {
-        board: applyCardAction(state.board, action),
-        counters: newCounters,
-        cemeteryPositions: newCemeteryPositions,
-        libraryPositions: newLibraryPositions,
-        exilePositions: newExilePositions,
-        commanderPositions: newCommanderPositions,
-        tokensPositions: newTokensPositions,
-      };
+      const updates = applyActionToState(state, action, skipEventSave);
+      return updates ? { ...state, ...updates } : state;
     });
     
     // Fazer broadcast para peers após aplicar a ação
@@ -1848,16 +1821,7 @@ export const useGameStore = create<GameStore>((set, get) => {
           excludePlayerId &&
           skipEventSave &&
           (action.kind === 'moveLibrary' || action.kind === 'moveCemetery' || action.kind === 'moveExile' || action.kind === 'moveCommander' || action.kind === 'moveTokens');
-        broadcastToPeers({ 
-          type: 'BOARD_STATE', 
-          board: stateAfter.board,
-          counters: stateAfter.counters,
-          cemeteryPositions: stateAfter.cemeteryPositions,
-          libraryPositions: stateAfter.libraryPositions,
-          exilePositions: stateAfter.exilePositions,
-          commanderPositions: stateAfter.commanderPositions,
-          tokensPositions: stateAfter.tokensPositions,
-        }, shouldExclude ? excludePlayerId : undefined);
+        broadcastToPeers({ type: 'BOARD_ACTION', action }, shouldExclude ? excludePlayerId : undefined);
       }
     }
     
@@ -2148,6 +2112,15 @@ export const useGameStore = create<GameStore>((set, get) => {
             simulatedPlayers: updatedSimulated,
             zoomedCard: updatedZoomed,
           });
+          break;
+        }
+        case 'BOARD_ACTION': {
+          const current = get();
+          if (!current) break;
+          const updates = applyActionToState(current, message.action, false);
+          if (updates) {
+            set({ ...current, ...updates });
+          }
           break;
         }
         case 'BOARD_STATE':
