@@ -699,6 +699,12 @@ const Board = () => {
   }
   const [peerEventLogs, setPeerEventLogs] = useState<PeerEventLog[]>([]);
   const maxPeerLogs = 30;
+  const [fps, setFps] = useState(0);
+  const fpsRef = useRef<{ lastTime: number; frames: number; rafId: number | null }>({
+    lastTime: 0,
+    frames: 0,
+    rafId: null,
+  });
   
   const schedulePeerLogUpdate = useRef<null | ((updater: () => void) => void)>(null);
   if (!schedulePeerLogUpdate.current) {
@@ -753,6 +759,43 @@ const Board = () => {
       setPeerEventLogger(null);
     };
   }, [setPeerEventLogger]);
+
+  useEffect(() => {
+    if (!showDebugMode) {
+      if (fpsRef.current.rafId !== null) {
+        cancelAnimationFrame(fpsRef.current.rafId);
+        fpsRef.current.rafId = null;
+      }
+      fpsRef.current.lastTime = 0;
+      fpsRef.current.frames = 0;
+      setFps(0);
+      return;
+    }
+
+    const tick = (timestamp: number) => {
+      const ref = fpsRef.current;
+      if (!ref.lastTime) {
+        ref.lastTime = timestamp;
+      }
+      ref.frames += 1;
+      const elapsed = timestamp - ref.lastTime;
+      if (elapsed >= 1000) {
+        const nextFps = Math.round((ref.frames * 1000) / elapsed);
+        setFps(nextFps);
+        ref.frames = 0;
+        ref.lastTime = timestamp;
+      }
+      ref.rafId = requestAnimationFrame(tick);
+    };
+
+    fpsRef.current.rafId = requestAnimationFrame(tick);
+    return () => {
+      if (fpsRef.current.rafId !== null) {
+        cancelAnimationFrame(fpsRef.current.rafId);
+        fpsRef.current.rafId = null;
+      }
+    };
+  }, [showDebugMode]);
   
   const addEventLog = (type: string, message: string, cardId?: string, cardName?: string, details?: Record<string, unknown>) => {
     const log: EventLog = {
@@ -4839,6 +4882,7 @@ const Board = () => {
                   <div>Is Host: <span style={{ color: isHost ? '#10b981' : '#94a3b8' }}>{isHost ? 'Yes' : 'No'}</span></div>
                   <div>Room ID: <span style={{ opacity: 0.7 }}>{roomId || 'N/A'}</span></div>
                   <div>Player ID: <span style={{ opacity: 0.7 }}>{playerId.slice(0, 8)}...</span></div>
+                  <div>FPS: <span style={{ color: fps >= 50 ? '#10b981' : fps >= 30 ? '#f59e0b' : '#ef4444' }}>{fps}</span></div>
                 </div>
               </div>
 

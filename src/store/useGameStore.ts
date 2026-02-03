@@ -2444,6 +2444,15 @@ export const useGameStore = create<GameStore>((set, get) => {
       };
     });
   };
+  const queueMoveAction = (cardId: string, position: Point) => {
+    const entry = pendingMoveActions.get(cardId);
+    if (entry) {
+      entry.position = position;
+    } else {
+      pendingMoveActions.set(cardId, { position, lastPersist: 0, lastSent: 0 });
+    }
+    scheduleAnimationFrame();
+  };
 
   // Função para receiver: enfileirar patches recebidos para processamento via requestAnimationFrame
   const queueBoardPatch = (cards: Array<{ id: string; position: Point }>) => {
@@ -2528,6 +2537,7 @@ export const useGameStore = create<GameStore>((set, get) => {
     const state = get();
     if (!state) return;
     if (!cardId || !position) return;
+    pendingMoveActions.delete(cardId);
     requestAction({ kind: 'move', id: cardId, position });
   };
 
@@ -2594,7 +2604,7 @@ export const useGameStore = create<GameStore>((set, get) => {
         });
         if (response.ok) {
           const decks = await response.json();
-          set({ savedDecks: decks });
+          set({ savedDecks: Array.isArray(decks) ? decks : [] });
         } else if (response.status === 401) {
           // Não autenticado, voltar para modo local
           set({ user: null, savedDecks: loadLocalDecks() });
@@ -2634,7 +2644,7 @@ export const useGameStore = create<GameStore>((set, get) => {
 
         const newDeck = await response.json();
         set((s) => ({
-          savedDecks: [newDeck, ...s.savedDecks],
+          savedDecks: [newDeck, ...(s.savedDecks ?? [])],
         }));
       } catch (error) {
         throw error;
@@ -2661,7 +2671,7 @@ export const useGameStore = create<GameStore>((set, get) => {
         }
 
         set((s) => ({
-          savedDecks: s.savedDecks.filter((deck) => deck.id !== deckId),
+          savedDecks: (s.savedDecks ?? []).filter((deck) => deck.id !== deckId),
         }));
       } catch (error) {
         throw error;
@@ -2942,7 +2952,7 @@ export const useGameStore = create<GameStore>((set, get) => {
         return;
       }
       applyLocalMove(cardId, position);
-      requestAction({ kind: 'move', id: cardId, position }, true);
+      queueMoveAction(cardId, position);
     },
     moveLibrary: (playerName: string, _relativePosition: Point, absolutePosition: Point, skipEventSave = false) => {
       const state = get();

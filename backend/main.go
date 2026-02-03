@@ -756,7 +756,7 @@ func (a *App) handleDecks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	var decks []map[string]interface{}
+	decks := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var row deckRow
 		if err := rows.Scan(&row.ID, &row.Name, &row.RawText, &row.Entries, &row.IsPublic, &row.CreatedAt); err != nil {
@@ -794,7 +794,7 @@ func (a *App) handlePublicDecks(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	defer rows.Close()
-	var decks []map[string]interface{}
+	decks := make([]map[string]interface{}, 0)
 	for rows.Next() {
 		var id, name, rawText, entries, createdAt, author string
 		if err := rows.Scan(&id, &name, &rawText, &entries, &createdAt, &author); err != nil {
