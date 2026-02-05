@@ -428,6 +428,9 @@ const UIConfigAdmin = () => {
   };
 
   const renderActionList = (entity: string, actionKey: keyof EntityActionMap, label: string) => {
+    if (!config) {
+      return null;
+    }
     const items = getActionList(config, entity, actionKey);
     return (
       <div style={{ display: 'flex', flexDirection: 'column', gap: '6px' }}>

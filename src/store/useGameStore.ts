@@ -3040,13 +3040,6 @@ export const useGameStore = create<GameStore>((set, get) => {
       if (state.isHost) {
         handleHostAction({ kind: 'toggleTap', id: cardId });
       } else {
-        set((s) => {
-          if (!s) return s;
-          return {
-            ...s,
-            board: s.board.map((card) => (card.id === cardId ? { ...card, tapped: !card.tapped } : card)),
-          };
-        });
         requestAction({ kind: 'toggleTap', id: cardId });
       }
     },
